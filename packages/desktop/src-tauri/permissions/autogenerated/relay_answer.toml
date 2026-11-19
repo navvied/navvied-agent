@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-relay-answer"
+description = "Enables the relay_answer command without any pre-configured scope."
+commands.allow = ["relay_answer"]
+
+[[permission]]
+identifier = "deny-relay-answer"
+description = "Denies the relay_answer command without any pre-configured scope."
+commands.deny = ["relay_answer"]

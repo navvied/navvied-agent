@@ -9,7 +9,7 @@ import { join, relative, resolve, sep } from "node:path";
 const HERE = resolve(import.meta.dir, "..");
 const read = (p: string) => readFileSync(join(HERE, p), "utf8");
 const json = (p: string) => JSON.parse(read(p)) as Record<string, any>;
-const COMMANDS = ["page_action", "shell_answer", "shell_settings_get", "shell_settings_set"];
+const COMMANDS = ["page_action", "relay_answer", "relay_forget", "relay_pair", "relay_status", "shell_answer", "shell_settings_get", "shell_settings_set"];
 
 function* files(dir: string): Generator<string> {
   for (const name of readdirSync(dir)) {
@@ -31,12 +31,14 @@ test("the bundle identifier is written in one place only", () => {
   expect(holders).toEqual(["src-tauri/tauri.conf.json"]);
 });
 
-test("a page can call exactly the commands that were meant: three for the loopback page, one for the pages inside the app", () => {
+test("a page can call exactly the commands that were meant: seven for the loopback page (the three it always had, plus pairing with navvied.com over the relay), one for the pages inside the app", () => {
   const loopback = json("src-tauri/capabilities/loopback.json");
   const local = json("src-tauri/capabilities/local.json");
   expect(readdirSync(join(HERE, "src-tauri/capabilities")).sort()).toEqual(["local.json", "loopback.json"]);
   expect(loopback.remote.urls).toEqual(["http://127.0.0.1:*"]);
-  expect([...loopback.permissions].sort()).toEqual(["allow-shell-answer", "allow-shell-settings-get", "allow-shell-settings-set"]);
+  expect([...loopback.permissions].sort()).toEqual([
+    "allow-relay-answer", "allow-relay-forget", "allow-relay-pair", "allow-relay-status", "allow-shell-answer", "allow-shell-settings-get", "allow-shell-settings-set",
+  ]);
   expect(local.remote).toBeUndefined();
   expect(local.permissions).toEqual(["allow-page-action"]);
   for (const c of [loopback, local]) expect(c.windows).toEqual(["main"]);
@@ -78,7 +80,7 @@ test("the key is read in the few places that must hand it on", () => {
     for (const [i, line] of readFileSync(f, "utf8").split("\n").entries()) if (line.includes(".expose()")) hits.push(`${relative(HERE, f)}:${line.trim()}`);
   }
   expect(hits.length).toBeGreaterThan(0);
-  for (const h of hits) expect(/redactor\.add\(token\.expose\(\)\)|serde_json::to_string\(token\.expose\(\)\)|ws::connect\(port, sh\.token\.expose\(\)/.test(h)).toBe(true);
+  for (const h of hits) expect(/redactor\.add\(token\.expose\(\)\)|serde_json::to_string\(token\.expose\(\)\)|ws::connect\(port, sh\.token\.expose\(\)|http::(get|post)\(port, path, Some\(sh\.token\.expose\(\)\)/.test(h)).toBe(true);
   for (const f of files(join(HERE, "src-tauri/src"))) expect(readFileSync(f, "utf8")).not.toMatch(/println!|eprintln!|dbg!/);
 });
 

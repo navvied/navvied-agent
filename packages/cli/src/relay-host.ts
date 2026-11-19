@@ -24,8 +24,8 @@ export interface RelayHostOptions {
   site: string;
   hub: Hub;
   store: DeviceStore;
-  /** Asks the person whether a device that just joined a new link may use this computer. */
-  ask(question: { origin: string; code: string }): Promise<Decision>;
+  /** Asks the person whether a device that just joined a new link may use this computer. `id` is that device's, for a caller (such as a shell with no terminal of its own) that must later match an answer, or a `forget`, back to the question it belongs to. */
+  ask(question: { id: string; origin: string; code: string }): Promise<Decision>;
   now?: () => number;
   open?: (url: string) => SocketLike;
   /** How long a new link works before anyone joins it, in milliseconds. */
@@ -153,7 +153,7 @@ class Link {
       if (peer.asked) return;
       peer.asked = true;
       if (this.device.expires !== undefined && this.host.now() > this.device.expires) { this.host.forget(this.device.id); return; }
-      const answer = await this.host.ask({ origin: `${this.device.label} (from another device)`, code: this.code });
+      const answer = await this.host.ask({ id: this.device.id, origin: `${this.device.label} (from another device)`, code: this.code });
       if (answer === "no") {
         await this.#deliver(id, peer, JSON.stringify({ ev: "error", msg: "It was not allowed on the computer." }));
         this.host.forget(this.device.id);

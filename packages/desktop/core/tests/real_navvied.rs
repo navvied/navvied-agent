@@ -2,7 +2,7 @@
 //! so that forgetting it fails instead of skipping).
 mod common;
 use common::*;
-use navvied_desktop_core::http::get;
+use navvied_desktop_core::http::{get, post};
 use navvied_desktop_core::supervisor::Event;
 use navvied_desktop_core::ws;
 use std::time::Duration;
@@ -86,4 +86,39 @@ fn the_real_program_leaves_nothing_in_the_log_that_holds_the_key() {
     rig.stop();
     assert!(!rig.logger.recent().join("\n").contains(rig.token.expose()));
     assert!(!std::fs::read_to_string(&file).unwrap_or_default().contains(rig.token.expose()));
+}
+
+/// The HTTP half of pairing with the relay (the shell's `relay_pair`/`relay_status` eventually call exactly this):
+/// no relay needs to answer for the sidecar to make a link and report it, since connecting to it is attempted in
+/// the background and retried, never awaited by the endpoint itself.
+#[test]
+fn the_real_program_can_be_asked_over_http_to_make_a_relay_pairing_link() {
+    let Some(mut cfg) = real(&[]) else { return };
+    // Nothing answers here; proving the HTTP contract does not need a reachable relay.
+    cfg.extra_env.push(("NAVVIED_RELAY_URL".to_owned(), "ws://127.0.0.1:1/relay/ws".to_owned()));
+    let dir = temp_dir("reallog2");
+    let file = dir.join("app.log");
+    let mut rig = start_with(cfg, Some(file.clone()), |_, _| {});
+    let port = rig.running();
+    let token = rig.token.expose().to_owned();
+
+    let made = post(port, "/api/relay/pair", Some(&token), r#"{"label":"Rust test"}"#, Duration::from_secs(3)).unwrap();
+    assert_eq!(made.status, 200);
+    let body: serde_json::Value = serde_json::from_str(&made.body).unwrap();
+    let link = body["link"].as_str().expect("a link").to_owned();
+    assert!(link.starts_with("https://navvied.com/#relay="));
+    let secret = link.rsplit('=').next().unwrap().to_owned();
+
+    let status = get(port, "/api/relay/status", Some(&token), Duration::from_secs(3)).unwrap();
+    assert_eq!(status.status, 200);
+    let status: serde_json::Value = serde_json::from_str(&status.body).unwrap();
+    assert_eq!(status["devices"][0]["label"], "Rust test");
+    assert_eq!(status["devices"][0]["pending"], true);
+    // The response that hands the shell its own link is the one place the secret is meant to be; the log is not.
+    assert!(!status.to_string().contains(&secret));
+
+    rig.stop();
+    let logged = rig.logger.recent().join("\n") + &std::fs::read_to_string(&file).unwrap_or_default();
+    assert!(!logged.contains(&token));
+    assert!(!logged.contains(&secret));
 }

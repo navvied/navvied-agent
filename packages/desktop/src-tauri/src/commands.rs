@@ -46,3 +46,35 @@ pub fn page_action(app: AppHandle, webview: Webview, shell: State<Arc<Shell>>, a
     }
     shell::page_action(&app, &shell, &action)
 }
+
+#[tauri::command]
+pub fn relay_pair(app: AppHandle, webview: Webview, shell: State<Arc<Shell>>, label: Option<String>) -> Result<Value, String> {
+    if !from_loopback(&webview, &shell) {
+        return Err("not allowed".into());
+    }
+    shell::relay_pair(&app, label)
+}
+
+#[tauri::command]
+pub fn relay_status(app: AppHandle, webview: Webview, shell: State<Arc<Shell>>) -> Result<Value, String> {
+    if !from_loopback(&webview, &shell) {
+        return Err("not allowed".into());
+    }
+    shell::relay_status(&app)
+}
+
+#[tauri::command]
+pub fn relay_forget(app: AppHandle, webview: Webview, shell: State<Arc<Shell>>, id: String) -> Result<Value, String> {
+    if !from_loopback(&webview, &shell) {
+        return Err("not allowed".into());
+    }
+    shell::relay_forget(&app, id)
+}
+
+#[tauri::command]
+pub fn relay_answer(app: AppHandle, webview: Webview, shell: State<Arc<Shell>>, id: String, choice: String) -> Result<Value, String> {
+    if !from_loopback(&webview, &shell) {
+        return Err("not allowed".into());
+    }
+    shell::relay_answer(&app, id, choice)
+}

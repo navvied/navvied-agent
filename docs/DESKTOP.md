@@ -38,7 +38,7 @@ A small native window around the web UI in `packages/web`, with the `navvied` pr
 ### Security rules (checked in review, tested where a test can reach)
 
 * The window may load only `http://127.0.0.1:<port>`. Any other navigation is cancelled; a link the model wrote (http, https, mailto) opens in the system browser after the page's own allow-list.
-* The page gets almost no native power. Tauri's capability file lists exactly three commands for that origin: choose a folder, read the desktop settings, open the settings page. Everything else (notices, updates, tray, files) is called by Rust, never by page code.
+* The page gets almost no native power. Tauri's capability file lists exactly seven commands for that origin: choose a folder, read the desktop settings, open the settings page, and four for pairing with navvied.com over the relay (make a link, read the status, forget a device, answer a pending question — see "Pairing with navvied.com" below). Everything else (notices, updates, tray, files) is called by Rust, never by page code.
 * The sidecar listens on loopback only and refuses other `Host` headers (`serve-http.ts` already does). The page's content security policy comes from the sidecar's response headers, unchanged and strict; the bundled shell pages carry their own (`default-src 'self'; connect-src 'none'`).
 * The token passes through the sidecar's environment, which the same user's other programs can read. That is the same trust level as the config file; it is not stronger. A stricter hand-over (token over the pipe) needs a CLI change and is listed as optional.
 * Deep links never run anything: `navvied://chat?text=…` only fills the message box after a question (16), `navvied://open?folder=…` asks before switching folders. Unknown paths are ignored. All values are length limited and shown as plain text.
@@ -67,6 +67,33 @@ These are not in `main` today. The app cannot be finished without them.
 | `packages/web` | Test in WebKit | The UI was tested in Chrome only. WKWebView and WebKitGTK are not Chrome. |
 
 **Stopping.** The protocol has `cancel` and no pause, so the app does not pretend to have one. The menu item is "Stop the current task" (greyed out while nothing runs) and sends `cancel`.
+
+## Pairing with navvied.com
+
+Built, with no UI yet: the non-UI half of the same `/remote` relay the interactive terminal already has
+(`docs/RELAY.md`), reachable from the desktop app's own sidecar instead of only from a terminal session. No account
+is needed — this is the direct link-and-code pairing, not the account-based "My computers" (`docs/ACCOUNTS.md`),
+which is a separate, later piece.
+
+* **The sidecar** (`serve --http`) reuses `RelayHost` exactly as `/remote` does, wired to the same `hub` and the
+  same `DeviceStore` the local `connect=` pairing already uses. Four endpoints, authorised the same way as
+  `/api/devices` (the app's own bearer token, never a paired website's key): `POST /api/relay/pair` (makes a link
+  and a code), `GET /api/relay/status` (what is connected, and the one question waiting for a decision, if there
+  is one), `POST /api/relay/forget` (stops sharing with a device), `POST /api/relay/answer` (answers a pending
+  question by its id). A device paired before reconnects by itself on the next start, the same as the terminal.
+* **The pending question** ("a website wants to use navvied") has no terminal to ask in here, so it is published
+  over the sidecar's own `/ws` (the same socket the shell already keeps open for notices, via Bun's topic publish —
+  a line with a `relay` key and no `ev` key, which `events::Tracker` on the Rust side already ignores safely) and
+  also sits in `/api/relay/status` for a shell that was not listening yet. The shell's event listener
+  (`start_listener` in `shell.rs`) forwards any such line to the webview as a Tauri `relay` event, unexamined: it
+  does not know or care what a particular one means, it just delivers it.
+* **Four Rust commands** (`relay_pair`, `relay_status`, `relay_forget`, `relay_answer`), on the loopback page's
+  capability list with the three it already had. Each is a thin HTTP call into the sidecar with the app's own
+  token (`shell.rs`'s `relay_call`), guarded the same way `shell_answer` is (`from_loopback`).
+* **Not built yet, on purpose: the card itself.** "A website wants to use navvied on this computer" is a screen a
+  person sees, so it waits for its own Liquid Glass preview and approval, same as every other screen in this app.
+  Until it exists, a `relay` event with nothing listening for it is simply not shown — pairing works, but nobody
+  is asked, so nothing is approved either, which is the safe default.
 
 ## Packaging
 

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-relay-forget"
+description = "Enables the relay_forget command without any pre-configured scope."
+commands.allow = ["relay_forget"]
+
+[[permission]]
+identifier = "deny-relay-forget"
+description = "Denies the relay_forget command without any pre-configured scope."
+commands.deny = ["relay_forget"]
