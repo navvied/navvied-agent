@@ -47,6 +47,8 @@ describe("what is measured per run", () => {
     expect(r.inTokens).toBe(mock.requests.reduce((n, q) => n + q.prompt, 0));
     expect(r.outTokens).toBe(mock.requests.reduce((n, q) => n + q.completion, 0));
     expect(r.estimated).toBe(false);
+    expect(r.largest!.requestBytes).toBeGreaterThanOrEqual(r.prompt!.requestBytes);
+    expect(r.largest!.status).toBe(200);
     expect(r.misuse).toEqual({ badCalls: 0, polls: 0, cdCalls: 0 });
     expect(r.firstRequestMs).toBeGreaterThanOrEqual(0);
     expect(r.prompt!.tools).toBeGreaterThan(0);

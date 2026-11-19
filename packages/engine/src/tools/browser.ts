@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { killTree, usesProcessGroups } from "../platform.ts";
@@ -54,17 +54,24 @@ class Session {
 
   static async start(chrome: string): Promise<Session> {
     const s = new Session();
-    s.#dir = mkdtempSync(join(tmpdir(), "navvied-browser-"));
-    s.#child = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${s.#dir}`, "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync", "--mute-audio", "--hide-scrollbars", "--window-size=1280,900", ...(process.getuid?.() === 0 || process.env.NAVVIED_BROWSER_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), "about:blank"], { detached: usesProcessGroups(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+    // The long form of the folder: a short 8.3 name (RUNNER~1) in a profile path is one more thing for a browser on Windows to trip over.
+    s.#dir = realpathSync.native(mkdtempSync(join(tmpdir(), "navvied-browser-")));
+    s.#child = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${s.#dir}`, "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync", "--mute-audio", "--hide-scrollbars", "--window-size=1280,900", ...(process.platform === "win32" ? ["--disable-gpu"] : []), ...(process.getuid?.() === 0 || process.env.NAVVIED_BROWSER_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), "about:blank"], { detached: usesProcessGroups(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
     let said = "", stopped: number | null | undefined;
     s.#child.stderr?.on("data", (d: Buffer) => { said = (said + d.toString("utf8")).slice(-600); });
     s.#child.on("exit", (code) => { stopped = code; s.close(); });
     s.#child.on("error", (e) => { said += e.message; stopped = null; s.close(); });
     const portFile = join(s.#dir, "DevToolsActivePort");
-    const until = Date.now() + 15_000;
+    const wait = Number(process.env.NAVVIED_BROWSER_START_MS) || 15_000;
+    const until = Date.now() + wait;
     while (!existsSync(portFile)) {
       if (stopped !== undefined) throw new StoppedAtStart(`the browser stopped while starting (exit ${stopped})${said.trim() ? `: ${said.trim().split("\n").pop()}` : ""}`);
-      if (s.closed || Date.now() > until) { s.close(); throw new Error(`the browser did not start in 15 s${said.trim() ? `: ${said.trim().split("\n").pop()}` : ""}`); }
+      if (s.closed || Date.now() > until) {
+        // What was seen, so that a start that never ends can be told from one that never began.
+        const seen = [s.#child.pid === undefined ? "never started" : s.#child.exitCode === null ? "still running" : `exit ${s.#child.exitCode}`, `profile: ${(() => { try { return readdirSync(s.#dir).slice(0, 12).join(", ") || "empty"; } catch { return "gone"; } })()}`, said.trim() ? `said: ${said.trim().split("\n").pop()}` : "said nothing"].join("; ");
+        s.close();
+        throw new Error(`the browser did not start in ${Math.round(wait / 1000)} s (${seen})`);
+      }
       await new Promise((r) => setTimeout(r, 100));
     }
     const [port, path] = readFileSync(portFile, "utf8").trim().split("\n");

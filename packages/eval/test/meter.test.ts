@@ -95,7 +95,11 @@ describe("the counter, in general", () => {
     const res = await fetch(`${lost.url("x")}/chat/completions`, { method: "POST", body: JSON.stringify(chatRequest) });
     expect(res.status).toBe(502);
     expect(await res.text()).toContain("could not reach the model");
-    expect((await lost.take("x"))[0]).toMatchObject({ status: 502, estimated: true });
+    const [gone] = await lost.take("x");
+    expect(gone).toMatchObject({ status: 502, estimated: true });
+    // A request that was never answered is still counted by its size.
+    expect(gone!.requestBytes).toBe(JSON.stringify(chatRequest).length);
+    expect(gone!.inTokens).toBe(Math.ceil(JSON.stringify(chatRequest).length / 4));
     lost.stop();
   });
   test("the model's own refusal is passed on as it is", async () => {

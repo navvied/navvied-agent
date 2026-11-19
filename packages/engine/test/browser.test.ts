@@ -108,6 +108,15 @@ describe.skipIf(!chrome || process.platform === "win32")("a browser that stops w
     expect(Date.now() - started).toBeLessThan(10_000);
   }, 30_000);
 
+  test("one that never writes its port is said to be still running, with what its profile held and what it said", async () => {
+    const before = process.env.NAVVIED_BROWSER_START_MS;
+    process.env.NAVVIED_BROWSER_START_MS = "1500";
+    try {
+      const out = await withBrowser('echo "warming up" >&2; sleep 30', () => run({ action: "open", url: home }));
+      expect(out).toMatch(/the browser did not start in 2 s \(still running; profile: .*; said: warming up\)/);
+    } finally { if (before === undefined) delete process.env.NAVVIED_BROWSER_START_MS; else process.env.NAVVIED_BROWSER_START_MS = before; }
+  }, 30_000);
+
   test("one that stopped once is started again, and the second start is the one used", async () => {
     const marker = join(dir, `started-${Math.random().toString(36).slice(2)}`);
     const out = await withBrowser(`if [ ! -e "${marker}" ]; then : > "${marker}"; echo "crashed" >&2; exit 139; fi\nexec "${chrome}" "$@"`, () => run({ action: "open", url: home }));

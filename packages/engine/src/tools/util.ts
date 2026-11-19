@@ -33,6 +33,29 @@ export function place(ctx: { cwd: string; root?: string }, p: unknown): string {
 }
 
 export const MAX_OUTPUT = 30_000;
+
+/** How much text one tool result may bring into the conversation: a share of the model's window, so a small model is not flooded by one search and a large one is not starved. */
+export const outputBudget = (window: number | undefined): number => Math.min(MAX_OUTPUT, Math.max(6_000, Math.round((window ?? 200_000) * 0.12)));
+
+/** Where a result that is too long is cut: a file is read from its start, so most of it is kept there; elsewhere the two ends are equal. */
+const HEAD_SHARE: Record<string, number> = { Read: 0.7, Bash: 0.3 };
+
+/**
+ * The last guard on what a tool gives the model, whatever the tool: a result over the window's budget (with a little room, so a tool
+ * that has already cut to it is not cut twice) is cut in the middle, and the model is told how to ask for less.
+ */
+export function withinBudget(tool: string, text: string, window: number | undefined): string {
+  const budget = outputBudget(window);
+  if (text.length <= Math.ceil(budget * 1.25)) return text;
+  return `${clip(text, budget, HEAD_SHARE[tool] ?? 0.5)}\n[the result was cut to fit: ask for less (a narrower pattern, a path or glob, offset and limit)]`;
+}
+
+/** At most `most` lines, and a sentence about the rest when there are more: how the lists a tool returns (matches, files) are kept short. */
+export function firstLines(text: string, most: number, what: string, hint: string): string {
+  const lines = text.split("\n");
+  if (lines.length <= most) return text;
+  return `${lines.slice(0, most).join("\n")}\n[${lines.length} ${what}, ${most} shown: ${hint}]`;
+}
 /** How long to wait for a killed command to let go of its output before reporting without it, in milliseconds. */
 const STOP_GRACE_MS = 1500;
 /** How long to wait, after the command itself has ended, for what it left running behind it to let go of the output. */
@@ -41,9 +64,9 @@ const EXIT_GRACE_MS = 400;
 export const QUIET_ENV = { TERM: "dumb", PAGER: "cat", GIT_PAGER: "cat", GIT_EDITOR: "true", GIT_TERMINAL_PROMPT: "0" } as const;
 
 /** Keep the start and the end of long output — failures and summaries are usually at the end. */
-export function clip(text: string, max = MAX_OUTPUT): string {
+export function clip(text: string, max = MAX_OUTPUT, headShare = 0.6): string {
   if (text.length <= max) return text;
-  const head = Math.floor(max * 0.6), tail = max - head;
+  const head = Math.floor(max * headShare), tail = max - head;
   return `${text.slice(0, head)}\n… [${text.length - max} characters omitted] …\n${text.slice(text.length - tail)}`;
 }
 

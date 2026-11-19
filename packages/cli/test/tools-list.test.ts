@@ -53,16 +53,25 @@ describe("the tools of the agent", () => {
   test("the places commands can run say whether they can be used, and what to do when not", () => {
     const dir = tempDir(); dirs.push(dir);
     const state = new TerminalState(join(dir, "terminal.json"));
-    const none = listBackends(state, undefined);
+    // What the computer has is told to the code, not asked of it: starting Docker can take seconds on some systems.
+    const nothing = (): boolean => false;
+    const none = listBackends(state, undefined, nothing);
     expect(none.map((b) => b.id)).toEqual(["local", "docker", "ssh"]);
     expect(none[0]).toMatchObject({ ready: true, using: true });
+    expect(none[1]).toMatchObject({ ready: false });
     expect(none[2]).toMatchObject({ ready: false, using: false });
     expect(none[2]!.hint).toContain("config.json");
+    expect(listBackends(state, { ssh: { host: "example.test" } }, nothing)[2]!.hint).toContain("ssh program");
+    expect(listBackends(state, undefined, (p) => p === "podman")[1]).toMatchObject({ ready: true });
+    expect(listBackends(state, { ssh: { host: "example.test" } }, (p) => p === "ssh")[2]).toMatchObject({ ready: true });
     // Choosing a place that cannot be used falls back to this computer.
     state.set("ssh");
-    expect(backendFor(state, undefined).id).toBe("local");
-    expect(backendFor(state, { ssh: { host: "example.test" } }).id).toBe("ssh");
-    expect(backendFor(state, { ssh: { host: "example.test", user: "me", dir: "/srv/app" } }).prepare("ls", "/w").argv.slice(-2)).toEqual(["me@example.test", "cd '/srv/app' && ls"]);
+    expect(backendFor(state, undefined, nothing).id).toBe("local");
+    expect(backendFor(state, { ssh: { host: "example.test" } }, nothing).id).toBe("ssh");
+    expect(backendFor(state, { ssh: { host: "example.test", user: "me", dir: "/srv/app" } }, nothing).prepare("ls", "/w").argv.slice(-2)).toEqual(["me@example.test", "cd '/srv/app' && ls"]);
+    state.set("docker");
+    expect(backendFor(state, undefined, nothing).id).toBe("local");
+    expect(backendFor(state, undefined, (p) => p === "docker").id).toBe("docker");
   });
 
   test("the hub lists tools, sets and places, switches a tool or a whole set, and says no to what it does not have", async () => {

@@ -70,6 +70,8 @@ export interface TaskResult {
   misuse?: Misuse;
   /** How many requests the model answered with a server error or not at all. */
   modelErrors?: number;
+  /** The biggest request of the run, whatever became of it (a request that was never answered is counted by its size, estimated): a run that stalls is often one whose request grew. */
+  largest?: { requestBytes: number; inTokens: number; status: number };
   /** The first request: characters of the system prompt, tools offered, characters of their definitions, bytes sent. */
   prompt?: { systemChars: number; tools: number; toolChars: number; requestBytes: number };
   /** The highest memory of the agent alone and of the agent with everything it started (not measured on Windows). */
@@ -156,6 +158,7 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
     modelCalls: hits.length || metrics.modelCalls, toolCalls: metrics.toolCalls, outTokens: hits.length ? hits.reduce((n, h) => n + h.outTokens, 0) : metrics.outTokens, peakContext: metrics.peakContext, exitCode,
     ...(hits.length ? {
       modelErrors: hits.filter((h) => h.status >= 500).length, inTokens: hits.reduce((n, h) => n + h.inTokens, 0), estimated: hits.some((h) => h.estimated), firstRequestMs: Math.max(0, hits[0]!.at - started),
+      largest: ((big) => ({ requestBytes: big.requestBytes, inTokens: big.inTokens, status: big.status }))(hits.reduce((a, h) => (h.requestBytes > a.requestBytes ? h : a), hits[0]!)),
       prompt: { systemChars: hits[0]!.systemChars, tools: hits[0]!.tools, toolChars: hits[0]!.toolChars, requestBytes: hits[0]!.requestBytes },
     } : {}),
     ...(metrics.misuse ? { misuse: metrics.misuse } : {}),
