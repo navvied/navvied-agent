@@ -187,6 +187,10 @@ export interface ModelInfo {
   current?: boolean;
   /** Whether this model takes file attachments from whoever is asking. Left out means yes. */
   files?: boolean;
+  /** An administrator has turned this model off. Shown to everyone, dimmed and not clickable, except to an administrator, who may still pick it. Left out means on. */
+  enabled?: boolean;
+  /** Who reaches it: a short id the models file gives each backend (the local computer is one), so the picker can group models into sections. Never a vendor's own name: that only ever lives in the deployed, never-committed models file. */
+  provider?: string;
 }
 
 export type ToolStatus = "running" | "done" | "error";

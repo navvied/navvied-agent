@@ -37,6 +37,17 @@ interface Pending { resolve(v: unknown): void; reject(e: Error): void; timer: Re
 class StoppedAtStart extends Error {}
 
 /** One browser, one page, spoken to over the DevTools protocol. */
+/**
+ * Where the browser listens, once it has said so: its file holds the port on one line and the address on the next. The file appears before
+ * it is whole, so a file that holds less is not an answer yet.
+ */
+export function devToolsEndpoint(file: string): { port: string; path: string } | undefined {
+  let text: string;
+  try { text = readFileSync(file, "utf8"); } catch { return undefined; }
+  const m = /^(\d+)\r?\n(\/\S+)/.exec(text);
+  return m ? { port: m[1]!, path: m[2]! } : undefined;
+}
+
 class Session {
   #socket!: WebSocket;
   #next = 1;
@@ -64,7 +75,8 @@ class Session {
     const portFile = join(s.#dir, "DevToolsActivePort");
     const wait = Number(process.env.NAVVIED_BROWSER_START_MS) || 15_000;
     const until = Date.now() + wait;
-    while (!existsSync(portFile)) {
+    let endpoint: { port: string; path: string } | undefined;
+    while (!(endpoint = devToolsEndpoint(portFile))) {
       if (stopped !== undefined) throw new StoppedAtStart(`the browser stopped while starting (exit ${stopped})${said.trim() ? `: ${said.trim().split("\n").pop()}` : ""}`);
       if (s.closed || Date.now() > until) {
         // What was seen, so that a start that never ends can be told from one that never began.
@@ -74,8 +86,7 @@ class Session {
       }
       await new Promise((r) => setTimeout(r, 100));
     }
-    const [port, path] = readFileSync(portFile, "utf8").trim().split("\n");
-    s.#socket = new WebSocket(`ws://127.0.0.1:${port}${path}`);
+    s.#socket = new WebSocket(`ws://127.0.0.1:${endpoint.port}${endpoint.path}`);
     await new Promise<void>((resolve, reject) => { s.#socket.onopen = () => resolve(); s.#socket.onerror = () => reject(new Error("could not connect to the browser")); });
     s.#socket.onmessage = (m) => s.#message(String(m.data));
     s.#socket.onclose = () => s.close();
