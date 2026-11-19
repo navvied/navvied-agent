@@ -1,15 +1,17 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { EngineEvent } from "@navvied/protocol";
 import { Jobs, defaultTools, isPrivateHost } from "../src/index.ts";
 import { clip, run } from "../src/tools/util.ts";
 import type { Tool, ToolContext } from "../src/types.ts";
+import { stopAllJobs } from "../src/index.ts";
+import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const dirs: string[] = [];
 const workdir = () => { const d = mkdtempSync(join(tmpdir(), "navvied-tools-")); dirs.push(d); return d; };
-afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
+afterAll(hook("tools removes what it made", async () => { await stopAllJobs(); await removeTrees(dirs); }));
 
 const tool = (name: string): Tool => { const t = defaultTools().find((x) => x.name === name); if (!t) throw new Error(`no tool ${name}`); return t; };
 const ctx = (cwd: string, extra: Partial<ToolContext> = {}): ToolContext & { emitted: EngineEvent[] } => {

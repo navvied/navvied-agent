@@ -1,13 +1,15 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Jobs, defaultTools, dockerBackend, localBackend, sshBackend } from "../src/index.ts";
 import type { Backend } from "../src/backend.ts";
 import type { ToolContext } from "../src/types.ts";
+import { stopAllJobs } from "../src/index.ts";
+import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-backend-"));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(hook("backend removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }));
 const bash = defaultTools().find((t) => t.name === "Bash")!;
 const ctx = (backend?: Backend): ToolContext => ({ cwd: dir, signal: new AbortController().signal, emit: () => undefined, allowPrivateNetwork: false, jobs: new Jobs(() => undefined), ...(backend ? { backend } : {}) });
 

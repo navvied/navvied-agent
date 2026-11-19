@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { asksAboutProgram } from "../../engine/src/prompt.ts";
 import { applySolution, check, findBash, shell, loadTask, loadTasks, prepare, protectedHashes, repoFiles, runTask, solutionFiles, summarize, validateTask, type Task, type TaskResult } from "../src/index.ts";
+import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const TASKS = join(import.meta.dir, "../tasks");
 const CLI = join(import.meta.dir, "../../cli/src/main.ts");
 const state = mkdtempSync(join(tmpdir(), "navvied-eval-state-"));
-afterAll(() => rmSync(state, { recursive: true, force: true }));
+afterAll(hook("eval removes what it made", async () => { await removeTree(state); }));
 
 describe("the task set", () => {
   const tasks = loadTasks(TASKS);

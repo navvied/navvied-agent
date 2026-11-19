@@ -1,13 +1,14 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Command, EngineEvent } from "@navvied/protocol";
 import { StreamEngine, type StreamEngineOptions } from "../src/index.ts";
+import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const FAKE = join(import.meta.dir, "fake-agent.ts");
 const dirs: string[] = [];
-afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
+afterAll(hook("stream-engine removes what it made", async () => { await removeTrees(dirs); }));
 
 function rig(opts: Partial<StreamEngineOptions> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "navvied-stream-")); dirs.push(dir);

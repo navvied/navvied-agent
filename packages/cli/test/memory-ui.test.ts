@@ -1,12 +1,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureFile, memoryPathsFor, memoryRows } from "../src/memory-ui.ts";
+import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const dirs: string[] = [];
 const temp = (): string => { const d = mkdtempSync(join(tmpdir(), "navvied-memui-")); dirs.push(d); return d; };
-afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
+afterAll(hook("memory-ui removes what it made", async () => { await removeTrees(dirs);; }));
 
 describe("the memory screen", () => {
   test("notes for every project sit next to the configuration, notes for a project in its own .navvied folder", () => {

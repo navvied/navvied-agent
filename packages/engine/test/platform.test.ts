@@ -1,10 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Jobs, killTree, shellFor, usesProcessGroups } from "../src/index.ts";
 import { inTerminal, launch } from "../src/platform.ts";
+import { stopAllJobs } from "../src/index.ts";
+import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 /** No file exists: a Windows computer is described only by what a test gives it, never by the one the tests run on. */
 const none = (): boolean => false;
@@ -86,7 +88,7 @@ describe("a terminal for a program you type to", () => {
   // is run for real here.
   const real = process.platform === "linux" ? Bun.which("script") : null;
   const dir = mkdtempSync(join(tmpdir(), "navvied-terminal-"));
-  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  afterAll(hook("platform removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }));
   writeFileSync(join(dir, "script"), [
     "#!/bin/sh",
     '[ -S /proc/self/fd/0 ] && { echo "script: tcgetattr: Operation not supported on socket" >&2; exit 1; }',

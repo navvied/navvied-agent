@@ -16,6 +16,8 @@ const QUIT_MS = 3000;
 /** After a stop, how long a job's end is waited for. Something it started that got away can hold its output open long after. */
 const STOP_GRACE_MS = 1500;
 const alive = new Set<Jobs>();
+/** Commands of a Jobs that was closed, until they have really exited. */
+const dying = new Set<Promise<void>>();
 let guarded = false;
 
 /** A program that dies must not leave servers running behind it. */
@@ -27,7 +29,7 @@ function guard(): void {
   for (const [name, code] of [["SIGTERM", 143], ["SIGHUP", 129]] as const) process.once(name, () => { for (const jobs of alive) jobs.stopAll(); process.exit(code); });
 }
 
-interface Job extends JobView { /** Someone may type to it (BashInput). */ interactive: boolean; child: ChildProcess; output: string; dropped: number; read: number; ended: boolean; /** The model has been told it ended (by reading it, or by the line that says so). */ told: boolean; endedAt?: number; /** Makes what it prints safe as it arrives: what is kept here has no secret in it. */ safe: Redactor }
+interface Job extends JobView { /** Settles when the program has really exited and let go of its folder (not when the job was only marked as ended). */ gone: Promise<void>; /** Someone may type to it (BashInput). */ interactive: boolean; child: ChildProcess; output: string; dropped: number; read: number; ended: boolean; /** The model has been told it ended (by reading it, or by the line that says so). */ told: boolean; endedAt?: number; /** Makes what it prints safe as it arrives: what is kept here has no secret in it. */ safe: Redactor }
 
 /** Commands that keep running after the turn that started them, such as a development server. */
 export class Jobs {
@@ -55,7 +57,8 @@ export class Jobs {
     const id = `job${this.#next++}`;
     const safe = new Redactor();
     const first = printed ? safe.push(printed) + safe.end() : "";
-    const job: Job = { id, title, interactive, status: "running", code: null, startedAt: this.now(), child, output: first, dropped: 0, read: shown ? first.length : 0, ended: false, told: false, safe };
+    const gone = new Promise<void>((resolve) => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else { child.once("exit", () => resolve()); child.once("error", () => resolve()); } });
+    const job: Job = { gone, id, title, interactive, status: "running", code: null, startedAt: this.now(), child, output: first, dropped: 0, read: shown ? first.length : 0, ended: false, told: false, safe };
     this.#jobs.set(id, job);
     const collect = (d: Buffer): void => {
       job.output += job.safe.push(d.toString("utf8"));
@@ -142,7 +145,24 @@ export class Jobs {
 
   stopAll(): void { for (const job of this.#jobs.values()) this.#halt(job); }
 
-  close(): void { this.stopAll(); alive.delete(this); }
+  close(): void {
+    this.stopAll();
+    alive.delete(this);
+    const gone = this.stopped(10_000);
+    dying.add(gone);
+    void gone.finally(() => dying.delete(gone));
+  }
+
+  /**
+   * Resolves when every command has really exited, or after `most` ms. A folder cannot be removed on Windows while a program that was
+   * started in it still runs, so whoever removes a folder after `close()` waits for this first.
+   */
+  async stopped(most = 5_000): Promise<void> {
+    const all = Promise.all([...this.#jobs.values()].map((j) => j.gone));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([all, new Promise<void>((r) => { timer = setTimeout(r, most); })]);
+    clearTimeout(timer);
+  }
 
   #halt(job: Job, gently = false): void {
     if (job.status !== "running") return;
@@ -163,6 +183,16 @@ export class Jobs {
     const last = lastLine(job.output);
     this.emit({ ev: "job", id: job.id, title: job.title, status: job.status, startedAt: job.startedAt, ...(code !== null ? { code } : {}), ...(last ? { last } : {}) });
   }
+}
+
+/**
+ * Stops every command of every Jobs there is and waits until they have exited. A program that shuts down does this; so does a test
+ * that is about to remove the folders its commands ran in (Windows will not remove a folder a running program has open).
+ */
+export async function stopAllJobs(): Promise<void> {
+  const open = [...alive];
+  for (const jobs of open) jobs.stopAll();
+  await Promise.all([...open.map((j) => j.stopped()), ...dying]);
 }
 
 const view = (j: Job): JobView => ({ id: j.id, title: j.title, status: j.status, code: j.code, startedAt: j.startedAt });

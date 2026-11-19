@@ -1,11 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentsDir, commandLine, findBash, footprint, missingPrograms, misuseOf, instantiate, listAdapters, loadAdapter, parseAdapter, rate, sizeOf, summarize, wilson, type TaskResult } from "../src/index.ts";
+import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-bench-misc-"));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(hook("footprint removes what it made", async () => { await removeTree(dir); }));
 
 describe("footprint", () => {
   test("a file and a folder are measured by what is in them", () => {

@@ -1,14 +1,16 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Jobs, closeBrowser, defaultTools } from "../src/index.ts";
 import { sseData } from "../src/providers/sse.ts";
 import { garbage, int, mutate, pick, prng, value } from "../../protocol/test/prng.ts";
+import { stopAllJobs } from "../src/index.ts";
+import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-tool-fuzz-"));
 // The browser tool may have been started by a random call: it is closed, so no program is left running after the tests.
-afterAll(() => { closeBrowser(); rmSync(dir, { recursive: true, force: true }); });
+afterAll(hook("fuzz removes what it made", async () => { await stopAllJobs(); closeBrowser(); await removeTree(dir); }));
 
 test("every tool turns any arguments into a string answer; none throws or hangs", async () => {
   const r = prng(31);

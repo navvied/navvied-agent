@@ -1,15 +1,17 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import type { FileInput } from "@navvied/protocol";
 import { receive, safeName } from "../src/attachments.ts";
 import { PNG, b64, docxFile, odpFile, odsFile, odtFile, pdf, pptxFile, xlsxFile, zip } from "./make-files.ts";
+import { stopAllJobs } from "../src/index.ts";
+import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const made: string[] = [];
 const folder = () => { const d = mkdtempSync(join(tmpdir(), "navvied-attach-")); made.push(d); return join(d, "session"); };
-afterAll(() => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
+afterAll(hook("attachments removes what it made", async () => { await stopAllJobs(); await removeTrees(made); }));
 
 const file = (name: string, bytes: Buffer | string, mime = "application/octet-stream"): FileInput => ({ name, mime, data: b64(bytes) });
 const opts = (dir: string, more: Partial<Parameters<typeof receive>[1]> = {}) => ({ dir, budget: 20_000, readsPdf: false, ...more });

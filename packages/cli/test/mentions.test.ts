@@ -1,9 +1,10 @@
 import { describe, expect, test, afterAll } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateRawSync } from "node:zlib";
 import { expandMentions, extractAttachments, previewChips } from "../src/mentions.ts";
+import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const dirs: string[] = [];
 function project(files: Record<string, Buffer | string>): string {
@@ -12,7 +13,7 @@ function project(files: Record<string, Buffer | string>): string {
   for (const [name, body] of Object.entries(files)) { mkdirSync(join(d, name, ".."), { recursive: true }); writeFileSync(join(d, name), body); }
   return d;
 }
-afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
+afterAll(hook("mentions removes what it made", async () => { await removeTrees(dirs);; }));
 
 /** The real PNG signature, padded with a null byte so it is seen as binary the same way a real file's header would be. */
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);

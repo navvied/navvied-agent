@@ -1,6 +1,6 @@
 import { beforeAll, afterAll, describe, expect, test } from "bun:test";
 import { resolveTheme, setTheme } from "../src/theme.ts";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderBanner } from "../src/banner.ts";
@@ -8,6 +8,7 @@ import { makeSuggest, pathMatches } from "../src/complete.ts";
 import { expandMentions } from "../src/mentions.ts";
 import { Renderer } from "../src/render.ts";
 import { fakeIO } from "./helpers.ts";
+import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 /** These tests look at colour codes, which depend on the shared theme: start from the default one. */
 beforeAll(() => setTheme(resolveTheme(null, {})));
@@ -18,7 +19,7 @@ const project = (files: Record<string, string>): string => {
   for (const [name, text] of Object.entries(files)) { mkdirSync(join(d, name, ".."), { recursive: true }); writeFileSync(join(d, name), text); }
   return d;
 };
-afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
+afterAll(hook("ui removes what it made", async () => { await removeTrees(dirs);; }));
 
 describe("banner", () => {
   const info = { version: "1.2.3", cwd: "/home/ana/shop", home: "/home/ana", mode: "auto", model: { name: "qwen3", where: "running on this computer" }, rules: ["NAVVIED.md"] } as const;

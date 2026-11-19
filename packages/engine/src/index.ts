@@ -19,7 +19,7 @@ export { parseHtmlResults, parseJsonResults, type SearchHit } from "./tools/web-
 export type { Message, ModelReply, ModelRequest, Part, Provider, Recall, SessionStore, StreamHandlers, Tool, ToolCall, ToolContext, ToolSpec, WebProxy } from "./types.ts";
 export { killTree, launch, shellFor, usesProcessGroups, type Shell } from "./platform.ts";
 export { dockerBackend, localBackend, sshBackend, type Backend } from "./backend.ts";
-export { Jobs, type JobStatus, type JobView } from "./jobs.ts";
+export { Jobs, stopAllJobs, type JobStatus, type JobView } from "./jobs.ts";
 export { SMALL_WINDOW } from "./engine.ts";
 export { McpClient, McpHttpClient, connectMcp, type McpConnection, type McpServerConfig } from "./mcp.ts";
 export { loadSkills, parseFrontmatter, readSkill, skillsPrompt, type SkillInfo } from "./skills.ts";

@@ -1,13 +1,15 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MEMORY_FILE, loadInstructions, memoryText, readNotes, remember } from "../src/index.ts";
 import { cleanupAll, prompt, rig } from "./helpers.ts";
+import { stopAllJobs } from "../src/index.ts";
+import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const dirs: string[] = [];
 const temp = (): string => { const d = mkdtempSync(join(tmpdir(), "navvied-memory-")); dirs.push(d); return d; };
-afterAll(() => { dirs.forEach((d) => rmSync(d, { recursive: true, force: true })); cleanupAll(); });
+afterAll(hook("memory removes what it made", async () => { await stopAllJobs(); await removeTrees(dirs); await cleanupAll(); }));
 
 const paths = () => { const root = temp(); return { user: join(root, "config", MEMORY_FILE), project: join(root, "project", ".navvied", MEMORY_FILE) }; };
 

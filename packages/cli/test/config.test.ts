@@ -1,11 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkpointsDir, configPath, loadConfig, rememberBashPattern, resolveModel, sessionsDir, type ConfigFile } from "../src/config.ts";
+import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-cfg-"));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(hook("config removes what it made", async () => { await removeTree(dir); }));
 const write = (name: string, body: unknown) => { const p = join(dir, name); writeFileSync(p, typeof body === "string" ? body : JSON.stringify(body)); return p; };
 
 describe("where a hosted session reaches the web", () => {
