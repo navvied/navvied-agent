@@ -32,10 +32,10 @@ describe("what a step says about how it went", () => {
     expect(toolEvents(r).at(-1)!.output).toContain("two");
     r.cleanup();
   });
-  test("a command that runs out of time says timeout, and long output says it was cut", async () => {
+  test("a command that runs out of time goes on as a job, and long output says it was cut", async () => {
     const slow = rig(scripted("Bash", { command: "sleep 5", timeout: 1 }));
     await slow.turn(prompt("go", { mode: "auto" }), 20_000);
-    expect(toolEvents(slow).at(-1)).toMatchObject({ status: "error", outcome: "timeout" });
+    expect(toolEvents(slow).at(-1)).toMatchObject({ status: "done", outcome: "background" });
     slow.cleanup();
     const long = rig(scripted("Bash", { command: "head -c 60000 /dev/zero | tr '\\0' 'x'" }));
     await long.turn(prompt("go", { mode: "auto" }));

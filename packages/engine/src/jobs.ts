@@ -8,6 +8,8 @@ export type JobStatus = "running" | "done" | "failed" | "stopped";
 export interface JobView { id: string; title: string; status: JobStatus; code: number | null; startedAt: number }
 
 const KEEP = 400_000;
+/** How long a program asked to quit has before it is forced. */
+const QUIT_MS = 3000;
 /** After a stop, how long a job's end is waited for. Something it started that got away can hold its output open long after. */
 const STOP_GRACE_MS = 1500;
 const alive = new Set<Jobs>();
@@ -37,9 +39,18 @@ export class Jobs {
   /** `interactive`: its input stays open, for BashInput to type to. Otherwise nobody can type to it and it sees the end of its input at once. */
   start(argv: string[], cwd: string, title: string, env?: NodeJS.ProcessEnv, interactive = false): JobView {
     const [cmd, ...args] = argv;
-    const id = `job${this.#next++}`;
     const child = spawn(cmd ?? "", args, { cwd, env: { ...process.env, ...QUIET_ENV, ...env }, detached: usesProcessGroups(), windowsHide: true, stdio: [interactive ? "pipe" : "ignore", "pipe", "pipe"] });
-    const job: Job = { id, title, interactive, status: "running", code: null, startedAt: this.now(), child, output: "", dropped: 0, read: 0, ended: false };
+    return this.#track(child, title, interactive, "", 0);
+  }
+
+  /** Takes over a command that is already running, as one that ran out of its time in the foreground: `printed` is what it has said so far, of which the first `given` characters have already been shown to the model. */
+  adopt(child: ChildProcess, title: string, printed: string, given = printed.length): JobView {
+    return this.#track(child, title, false, printed, given);
+  }
+
+  #track(child: ChildProcess, title: string, interactive: boolean, printed: string, given: number): JobView {
+    const id = `job${this.#next++}`;
+    const job: Job = { id, title, interactive, status: "running", code: null, startedAt: this.now(), child, output: printed, dropped: 0, read: given, ended: false };
     this.#jobs.set(id, job);
     const collect = (d: Buffer): void => {
       job.output += d.toString("utf8");
@@ -75,28 +86,33 @@ export class Jobs {
   }
 
   /** What the job printed since it was last read, and how it is doing. */
-  read(id: string): { view: JobView; output: string; skipped: number } | undefined {
+  read(id: string): { view: JobView; output: string; skipped: number; ports: number[] } | undefined {
     const job = this.#jobs.get(id);
     if (!job) return undefined;
     const from = Math.max(0, job.read - job.dropped);
     const skipped = Math.max(0, job.dropped - job.read);
     const output = job.output.slice(from);
     job.read = job.dropped + job.output.length;
-    return { view: view(job), output, skipped };
+    return { view: view(job), output, skipped, ports: job.status === "running" ? portsIn(job.output) : [] };
   }
 
-  /** Waits until the job has printed something new or has ended, for at most `ms`, or until `signal` aborts. */
-  async waitFor(id: string, ms: number, signal: AbortSignal): Promise<void> {
+  /**
+   * Waits until the job has printed something new or has ended, for at most `ms`, or until `signal` aborts. With `until`, it waits
+   * for that text to be in what the job printed (any case) instead of for anything new.
+   */
+  async waitFor(id: string, ms: number, signal: AbortSignal, until?: string): Promise<void> {
     const job = this.#jobs.get(id);
     if (!job) return;
-    const until = this.now() + ms;
-    while (job.status === "running" && job.dropped + job.output.length === job.read && this.now() < until && !signal.aborted) await new Promise((r) => setTimeout(r, 100));
+    const end = this.now() + ms, needle = until?.toLowerCase();
+    const waiting = (): boolean => (needle === undefined ? job.dropped + job.output.length === job.read : !job.output.toLowerCase().includes(needle));
+    while (job.status === "running" && waiting() && this.now() < end && !signal.aborted) await new Promise((r) => setTimeout(r, 100));
   }
 
-  stop(id: string): JobView | undefined {
+  /** Stops a job and everything it started. `gently`: it is asked to quit first and has a few seconds before it is forced (not on Windows, which has no such request for a program running without a window). */
+  stop(id: string, gently = false): JobView | undefined {
     const job = this.#jobs.get(id);
     if (!job) return undefined;
-    this.#halt(job);
+    this.#halt(job, gently);
     return view(job);
   }
 
@@ -104,11 +120,13 @@ export class Jobs {
 
   close(): void { this.stopAll(); alive.delete(this); }
 
-  #halt(job: Job): void {
+  #halt(job: Job, gently = false): void {
     if (job.status !== "running") return;
     job.status = "stopped";
-    killTree(job.child);
-    setTimeout(() => this.#end(job, null), STOP_GRACE_MS).unref();
+    const ask = gently && usesProcessGroups() && job.child.pid !== undefined;
+    if (ask) { try { process.kill(-job.child.pid!, "SIGTERM"); } catch { /* already gone */ } } else killTree(job.child);
+    const force = (): void => { if (!job.ended) killTree(job.child); setTimeout(() => this.#end(job, null), STOP_GRACE_MS).unref(); };
+    if (ask) setTimeout(force, QUIT_MS).unref(); else force();
   }
 
   #end(job: Job, code: number | null): void {
@@ -122,5 +140,15 @@ export class Jobs {
 }
 
 const view = (j: Job): JobView => ({ id: j.id, title: j.title, status: j.status, code: j.code, startedAt: j.startedAt });
+
+/** The ports a program says it listens on (`localhost:3000`, `http://0.0.0.0:8080`, `listening on port 5173`), without repeats. */
+export function portsIn(output: string): number[] {
+  const found = new Set<number>();
+  for (const m of output.matchAll(/(?:localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[::1?\]|\*):(\d{2,5})\b|\bports?\s+(\d{2,5})\b/gi)) {
+    const port = Number(m[1] ?? m[2]);
+    if (port > 0 && port <= 65535) found.add(port);
+  }
+  return [...found].slice(0, 5);
+}
 
 const lastLine = (output: string): string => (output.trimEnd().split(/\r?\n/).pop() ?? "").slice(0, 200);

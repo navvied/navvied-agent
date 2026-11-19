@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Jobs, defaultTools } from "../src/index.ts";
 import type { ToolContext } from "../src/types.ts";
+import { until } from "./helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-quiet-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -53,14 +54,14 @@ describe("a command that nobody can type to", () => {
     const child = Bun.spawn([process.execPath, script], { stdout: "pipe", cwd: dir });
     const reader = child.stdout.getReader();
     await reader.read();
-    const before = Bun.spawnSync(["pgrep", "-f", "sleep 59.77"]).stdout.toString().trim();
-    expect(before).not.toBe("");
+    const running = (): string => Bun.spawnSync(["pgrep", "-f", "sleep 59.77"]).stdout.toString().trim();
+    // "ready" is printed as the command is started; the program itself may not have taken its name yet on a busy machine.
+    await until(() => running() !== "", 15_000);
     child.kill("SIGTERM");
     await child.exited;
-    const left = (): string => Bun.spawnSync(["pgrep", "-f", "sleep 59.77"]).stdout.toString().trim();
-    for (let i = 0; i < 40 && left() !== ""; i++) await Bun.sleep(100);
-    expect(left()).toBe("");
-  });
+    await until(() => running() === "", 15_000);
+    expect(running()).toBe("");
+  }, 40_000);
 });
 
 describe("what the model is shown of a command", () => {

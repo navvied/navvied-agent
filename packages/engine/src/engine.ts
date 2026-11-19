@@ -143,6 +143,7 @@ export class Engine implements AgentEngine {
   /** Kinds of action the person said not to ask about again, until this engine closes. */
   readonly #allowed = new Set<string>();
   readonly #jobs = new Jobs((e) => this.#emit(e));
+  readonly #closing = new AbortController();
   #abort = new AbortController();
   #lastContext = 0;
   #written = new Set<string>();
@@ -196,6 +197,7 @@ export class Engine implements AgentEngine {
   /** Tools that are still being connected. The first step of the next turn waits for them, so no turn starts without tools that are about to arrive. Programs that fail are reported as errors, and the rest go on. */
   loadTools(load: Promise<{ tools: Tool[]; close(): void; problems?: { server: string; reason: string }[] }>): void {
     this.#loading.push(load.then((c) => {
+      if (this.#closing.signal.aborted) { attempt(() => c.close()); return; }
       this.addTools(c.tools, () => c.close());
       for (const p of c.problems ?? []) this.#emit({ ev: "notice", msg: `The connected program "${p.server}" could not be used: ${p.reason}` });
     }, () => undefined));
@@ -203,7 +205,11 @@ export class Engine implements AgentEngine {
 
   async idle(): Promise<void> { await this.#running; }
 
+  /** Aborted when the engine is closed: what is still being connected (see `connectMcp`) is stopped then. */
+  get closing(): AbortSignal { return this.#closing.signal; }
+
   close(): void {
+    this.#closing.abort();
     this.#cancel();
     this.#jobs.close();
     for (const dispose of this.#disposers.splice(0)) attempt(dispose);
