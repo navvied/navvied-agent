@@ -1,6 +1,12 @@
 {
   "id": "implement-slugify",
   "title": "Implement slugify from its tests",
+  "kind": "feature",
+  "level": 1,
+  "lang": "ts",
+  "requires": [
+    "bun"
+  ],
   "prompt": "src/slug.ts has a stub for slugify. Implement it so that all tests pass. Do not change the tests.",
   "check": "bun test",
   "protect": [

@@ -1,4 +1,11 @@
 export { loadTask, loadTasks, repoFiles, solutionFiles, type Task } from "./task.ts";
-export { applySolution, check, prepare, protectedHashes, type CheckResult } from "./workspace.ts";
+export { applySolution, check, leftovers, missingPrograms, newSecret, prepare, protectedHashes, shell, type CheckResult } from "./workspace.ts";
+export { validateTask, type Validation } from "./validate.ts";
 export { runTask, type RunOptions, type TaskResult } from "./run.ts";
 export { summarize } from "./report.ts";
+export { startMeter, type Hit, type Meter } from "./meter.ts";
+export { startMock, type Behaviour, type Mock } from "./mock.ts";
+export { processes, watchMemory, type MemoryPeak, type Process } from "./memory.ts";
+export { footprint, sizeOf, type Footprint } from "./footprint.ts";
+export { agentsDir, instantiate, listAdapters, loadAdapter, parseAdapter, type Adapter } from "./adapter.ts";
+export { rate, wilson } from "./stats.ts";

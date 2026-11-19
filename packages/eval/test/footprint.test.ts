@@ -1,0 +1,83 @@
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { agentsDir, footprint, instantiate, listAdapters, loadAdapter, parseAdapter, rate, sizeOf, summarize, wilson, type TaskResult } from "../src/index.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "navvied-bench-misc-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+describe("footprint", () => {
+  test("a file and a folder are measured by what is in them", () => {
+    mkdirSync(join(dir, "app/lib"), { recursive: true });
+    writeFileSync(join(dir, "app/a"), "x".repeat(1000));
+    writeFileSync(join(dir, "app/lib/b"), "y".repeat(234));
+    expect(sizeOf(join(dir, "app/a"))).toBe(1000);
+    expect(sizeOf(join(dir, "app"))).toBe(1234);
+  });
+  test("the first start is told apart from the rest, each with a home folder that is new, and the size is that of the install path", async () => {
+    const homes = join(dir, "homes");
+    const script = join(dir, "show-home.ts");
+    writeFileSync(script, `import { appendFileSync, readdirSync } from "node:fs";\nappendFileSync(${JSON.stringify(homes)}, process.env.HOME + ":" + readdirSync(process.env.HOME!).length + "\\n");`);
+    const f = await footprint([process.execPath, script], { install: join(dir, "app"), runs: 4 });
+    expect(f.installBytes).toBe(1234);
+    expect(f.runs).toBe(4);
+    expect(f.firstMs).toBeGreaterThan(0);
+    expect(f.medianMs).toBeGreaterThan(0);
+    const lines = (await Bun.file(homes).text()).trim().split("\n");
+    expect(new Set(lines.map((l) => l.split(":")[0])).size).toBe(4);
+    expect(lines.every((l) => l.endsWith(":0"))).toBe(true);
+  });
+  test("the runtime that runs source is not mistaken for the program", async () => {
+    expect((await footprint([process.execPath, "-e", "0"], { runs: 2 })).installBytes).toBeUndefined();
+  });
+});
+
+describe("rates", () => {
+  test("the interval is wide for few runs and narrows with more, and holds the extremes", () => {
+    expect(wilson(3, 4)).toEqual({ lo: 30, hi: 95 });
+    expect(wilson(0, 5)).toEqual({ lo: 0, hi: 43 });
+    expect(wilson(5, 5)).toEqual({ lo: 57, hi: 100 });
+    expect(wilson(30, 40).hi - wilson(30, 40).lo).toBeLessThan(wilson(3, 4).hi - wilson(3, 4).lo);
+    expect(wilson(0, 0)).toEqual({ lo: 0, hi: 100 });
+    expect(rate(3, 4)).toBe("3/4 (75%, 30 to 95%)");
+  });
+  const r = (task: string, model: string, passed: boolean, kind: TaskResult["kind"], level: TaskResult["level"], lang: TaskResult["lang"]): TaskResult => ({ task, model, passed, reason: passed ? "solved" : "check failed", ms: 1000, modelCalls: 2, toolCalls: 1, outTokens: 10, peakContext: 1, exitCode: 0, kind, level, lang });
+  test("the report breaks the results down by kind, level and language, with the interval", () => {
+    const text = summarize([r("a", "m1", true, "fix", 1, "ts"), r("b", "m1", false, "fix", 2, "py"), r("c", "m1", true, "terminal", 3, "sh"), r("a", "m2", true, "fix", 1, "ts")]);
+    expect(text).toContain("| kind of work | m1 | m2 |");
+    expect(text).toContain("| fix | 1/2 (50%, 9 to 91%) | 1/1 (100%, 21 to 100%) |");
+    expect(text).toContain("| terminal | 1/1 (100%, 21 to 100%) | - |");
+    expect(text).toContain("| level 2 | 0/1 (0%, 0 to 79%) | - |");
+    expect(text).toContain("| py | 0/1 (0%, 0 to 79%) | - |");
+  });
+});
+
+describe("agents described as data", () => {
+  const good = { label: "example-agent", argv: ["example-agent", "--model", "{model}", "{prompt}"], env: { EXAMPLE_URL: "{base_url}", EXAMPLE_KEY: "{key}" }, version: ["example-agent", "--version"], install: "/usr/bin/example-agent" };
+  test("a file is read, and filled in for one task", () => {
+    const a = parseAdapter(good);
+    expect(a).toMatchObject({ label: "example-agent", pointable: true, install: "/usr/bin/example-agent" });
+    expect(instantiate(a, { prompt: "fix it", dir: "/w", model: "m1", baseUrl: "http://127.0.0.1:9/v1", key: "k" })).toEqual({ argv: ["example-agent", "--model", "m1", "fix it"], env: { EXAMPLE_URL: "http://127.0.0.1:9/v1", EXAMPLE_KEY: "k" } });
+    expect(parseAdapter({ label: "plain", argv: ["x", "{prompt}"] }).pointable).toBe(false);
+  });
+  test("a file that is wrong is refused with the file's name and what is needed", () => {
+    for (const [bad, said] of [[{ ...good, label: "bad name!" }, '"label"'], [{ ...good, argv: [] }, '"argv"'], [{ ...good, argv: ["x"] }, "{prompt}"], [{ ...good, env: { A: 1 } }, '"env"'], [{ ...good, version: "x" }, '"version"'], [null, '"label"']] as const) {
+      expect(() => parseAdapter(bad, "mine.json"), said).toThrow(new RegExp(`mine\\.json: .*${said.replace(/[{}"]/g, (c) => `\\${c}`)}`));
+    }
+  });
+  test("the folder is the person's own, outside the repository; files are found by label", () => {
+    expect(agentsDir({ XDG_CONFIG_HOME: "/c" }, "linux")).toBe("/c/navvied/bench/agents");
+    expect(agentsDir({ HOME: "/h" }, "linux")).toBe("/h/.config/navvied/bench/agents");
+    expect(agentsDir({ APPDATA: "C:\\a" }, "win32")).toContain("navvied");
+    expect(agentsDir({ NAVVIED_BENCH_AGENTS: "/mine" }, "linux")).toBe("/mine");
+    const folder = join(dir, "agents");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "b.json"), JSON.stringify({ label: "bee", argv: ["b", "{prompt}"] }));
+    writeFileSync(join(folder, "a.json"), JSON.stringify(good));
+    writeFileSync(join(folder, "notes.txt"), "ignored");
+    expect(listAdapters(folder).map((x) => x.label)).toEqual(["example-agent", "bee"]);
+    expect(loadAdapter(join(folder, "b.json")).label).toBe("bee");
+    expect(listAdapters(join(dir, "nowhere"))).toEqual([]);
+  });
+});

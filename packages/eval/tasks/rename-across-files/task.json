@@ -1,6 +1,12 @@
 {
   "id": "rename-across-files",
   "title": "Rename a function everywhere",
+  "kind": "refactor",
+  "level": 2,
+  "lang": "ts",
+  "requires": [
+    "bun"
+  ],
   "prompt": "Rename the function getUser to fetchUser everywhere in src/, keeping behaviour. The tests already use the new name. Do not change the tests.",
   "check": "bun test",
   "protect": [

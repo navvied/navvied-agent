@@ -1,6 +1,12 @@
 {
   "id": "fix-sort-order",
   "title": "Descending sort compares numbers as text",
+  "kind": "fix",
+  "level": 1,
+  "lang": "ts",
+  "requires": [
+    "bun"
+  ],
   "prompt": "The tests in this project fail. Find the bug in the source code and fix it. Do not change the tests.",
   "check": "bun test",
   "protect": [
