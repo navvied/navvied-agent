@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { Jobs, killTree, shellFor, usesProcessGroups } from "../src/index.ts";
 import { inTerminal, launch } from "../src/platform.ts";
 
+/** No file exists: a Windows computer is described only by what a test gives it, never by the one the tests run on. */
+const none = (): boolean => false;
 const has = (...names: string[]) => (cmd: string): string | null => (names.includes(cmd) ? `/found/${cmd}` : null);
 
 describe("shellFor", () => {
@@ -16,14 +18,14 @@ describe("shellFor", () => {
     expect(shellFor("linux", has()).argv("ls")).toEqual(["sh", "-c", "ls"]);
   });
   test("windows: Git Bash if installed, else PowerShell (pwsh first), else cmd", () => {
-    expect(shellFor("win32", has("bash", "pwsh")).name).toBe("bash");
+    expect(shellFor("win32", has("bash", "pwsh"), {}, none).name).toBe("bash");
     const exit = "\nif ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }";
-    expect(shellFor("win32", has("pwsh", "powershell")).argv("dir")).toEqual(["/found/pwsh", "-NoProfile", "-NonInteractive", "-Command", `dir${exit}`]);
-    expect(shellFor("win32", has("powershell")).argv('"C:\\Program Files\\bun.exe" "C:\\x.js"')[4]).toBe(`& "C:\\Program Files\\bun.exe" "C:\\x.js"${exit}`);
-    expect(shellFor("win32", has("powershell")).argv("  'a b.exe' x")[4]).toBe(`&   'a b.exe' x${exit}`);
-    expect(shellFor("win32", has("powershell")).name).toBe("PowerShell");
-    expect(shellFor("win32", has())).toMatchObject({ name: "cmd" });
-    expect(shellFor("win32", has()).argv("dir")).toEqual(["cmd.exe", "/d", "/s", "/c", "dir"]);
+    expect(shellFor("win32", has("pwsh", "powershell"), {}, none).argv("dir")).toEqual(["/found/pwsh", "-NoProfile", "-NonInteractive", "-Command", `dir${exit}`]);
+    expect(shellFor("win32", has("powershell"), {}, none).argv('"C:\\Program Files\\bun.exe" "C:\\x.js"')[4]).toBe(`& "C:\\Program Files\\bun.exe" "C:\\x.js"${exit}`);
+    expect(shellFor("win32", has("powershell"), {}, none).argv("  'a b.exe' x")[4]).toBe(`&   'a b.exe' x${exit}`);
+    expect(shellFor("win32", has("powershell"), {}, none).name).toBe("PowerShell");
+    expect(shellFor("win32", has(), {}, none)).toMatchObject({ name: "cmd" });
+    expect(shellFor("win32", has(), {}, none).argv("dir")).toEqual(["cmd.exe", "/d", "/s", "/c", "dir"]);
   });
   test("windows: the bash that is a door into WSL is never used; Git's own bash is found beside git or where Git installs", () => {
     const where = (found: Record<string, string>) => (cmd: string): string | null => found[cmd] ?? null;

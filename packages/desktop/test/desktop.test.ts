@@ -4,7 +4,7 @@
  */
 import { expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 
 const HERE = resolve(import.meta.dir, "..");
 const read = (p: string) => readFileSync(join(HERE, p), "utf8");
@@ -27,7 +27,7 @@ test("the app, its crates and the packages share one version", () => {
 });
 
 test("the bundle identifier is written in one place only", () => {
-  const holders = [...files(HERE)].filter((f) => !f.endsWith("Cargo.lock") && !/\.(png|ico|icns)$/.test(f) && !f.endsWith("test/desktop.test.ts") && readFileSync(f).includes("com.navvied.desktop")).map((f) => relative(HERE, f));
+  const holders = [...files(HERE)].map((f) => relative(HERE, f).replaceAll(sep, "/")).filter((f) => !f.endsWith("Cargo.lock") && !/\.(png|ico|icns)$/.test(f) && f !== "test/desktop.test.ts" && readFileSync(join(HERE, f)).includes("com.navvied.desktop"));
   expect(holders).toEqual(["src-tauri/tauri.conf.json"]);
 });
 

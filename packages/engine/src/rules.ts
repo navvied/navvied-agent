@@ -3,8 +3,14 @@ import nativePath from "node:path";
 /** The path rules of the computer the files are on; tests pass the other system's. */
 export type Paths = Pick<typeof nativePath, "isAbsolute" | "relative" | "resolve" | "sep"> & { caseless?: boolean };
 
+/**
+ * The path rules of this computer. Written out, not `nativePath`: on a Unix computer `path.posix` is the same object as `path`, so a
+ * test that passes `posix` to stand for Linux would be taken for the real thing on a Mac.
+ */
+export const nativePaths: Paths = { isAbsolute: nativePath.isAbsolute, relative: nativePath.relative, resolve: nativePath.resolve, sep: nativePath.sep, caseless: nativePath.sep === "\\" || process.platform === "darwin" };
+
 /** Windows and macOS keep one file under every spelling of its name (`.ENV` is `.env`), so a rule written for one must hold for all. */
-export const caselessFor = (p: Paths): boolean => p.caseless ?? (p.sep === "\\" || (p === nativePath && process.platform === "darwin"));
+export const caselessFor = (p: Paths): boolean => p.caseless ?? p.sep === "\\";
 
 /**
  * Permission rules the person writes in their own configuration: what the agent may always do, must always ask about, and may never do.
@@ -85,7 +91,7 @@ function covers(tool: string, pattern: string | undefined, subject: string, cwd:
 
 export class Rules {
   readonly #parsed: { allow: Parsed[]; ask: Parsed[]; deny: Parsed[] };
-  constructor(set: RuleSet, private readonly cwd: string, private readonly paths: Paths = nativePath) {
+  constructor(set: RuleSet, private readonly cwd: string, private readonly paths: Paths = nativePaths) {
     const parse = (list: string[]): Parsed[] => list.flatMap((text) => { const m = SHAPE.exec(text); return m ? [{ text, tool: m[1]!, pattern: m[2] }] : []; });
     this.#parsed = { allow: parse(set.allow), ask: parse(set.ask), deny: parse(set.deny) };
   }
@@ -169,7 +175,7 @@ function blockedCommand(command: string, depth = 0): string | undefined {
  * system. Short on purpose: it stops the disasters, and everything else is left to the mode and to the person's rules.
  * Returns the reason, or nothing when the call is not one of these.
  */
-export function hardBlock(tool: string, args: Record<string, unknown>, cwd: string, p: Paths = nativePath): string | undefined {
+export function hardBlock(tool: string, args: Record<string, unknown>, cwd: string, p: Paths = nativePaths): string | undefined {
   if (tool === "Bash") return blockedCommand(String(args.command ?? ""));
   if (tool === "Write" || tool === "Edit") {
     const file = args.file_path;
