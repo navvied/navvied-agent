@@ -1,0 +1,11 @@
+{
+  "id": "fix-off-by-one",
+  "title": "Inclusive range is missing its last element",
+  "prompt": "The tests in this project fail. Find the bug in the source code and fix it. Do not change the tests.",
+  "check": "bun test",
+  "protect": [
+    "tests/**"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 300
+}

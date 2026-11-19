@@ -1,0 +1,44 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every system on the public repository; elsewhere Linux on each push, every system when run by hand.
+        os: ${{ fromJSON((github.repository == 'navvied/navvied-agent' || github.event_name == 'workflow_dispatch') && '["ubuntu-latest", "macos-latest", "windows-latest"]' || '["ubuntu-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    env:
+      # The runner's Ubuntu does not let an unprivileged program make the namespaces Chrome's own sandbox needs; the machine is a throw-away one.
+      NAVVIED_BROWSER_NO_SANDBOX: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - name: Run the tests
+        shell: bash
+        run: |
+          set +e
+          bun test packages 2>&1 | tee "$RUNNER_TEMP/test.log"
+          code=${PIPESTATUS[0]}
+          grep -E '^\(fail\)' "$RUNNER_TEMP/test.log" | while IFS= read -r line; do echo "::error title=failed test::$line"; done
+          exit $code
+
+  windows-install:
+    if: github.repository == 'navvied/navvied-agent'
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - name: Install the latest release exactly as a user does
+        shell: powershell
+        run: irm https://github.com/navvied/navvied-agent/releases/latest/download/install.ps1 | iex
+      - name: The program starts in a new terminal
+        shell: powershell
+        run: |
+          $env:Path = [Environment]::GetEnvironmentVariable("Path", "User") + ";" + [Environment]::GetEnvironmentVariable("Path", "Machine")
+          navvied --version

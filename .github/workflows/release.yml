@@ -1,0 +1,41 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    if: github.repository == 'navvied/navvied-agent'
+    runs-on: ubuntu-latest
+    env:
+      # The runner's Ubuntu does not let an unprivileged program make the namespaces Chrome's own sandbox needs; the machine is a throw-away one.
+      NAVVIED_BROWSER_NO_SANDBOX: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: The tag must match the version in the code
+        run: test "v$(bun -p "require('./packages/cli/package.json').version")" = "$GITHUB_REF_NAME"
+      - run: bun install --frozen-lockfile
+      - name: Run the tests
+        shell: bash
+        run: |
+          set +e
+          bun test packages 2>&1 | tee "$RUNNER_TEMP/test.log"
+          code=${PIPESTATUS[0]}
+          grep -E '^\(fail\)' "$RUNNER_TEMP/test.log" | while IFS= read -r line; do echo "::error title=failed test::$line"; done
+          exit $code
+      - name: Build one executable per platform
+        run: |
+          mkdir dist
+          for target in linux-x64 linux-x64-baseline linux-x64-musl linux-arm64 linux-arm64-musl darwin-arm64 darwin-x64 windows-x64 windows-x64-baseline; do
+            ext=""; case "$target" in windows-*) ext=".exe" ;; esac
+            bun build --compile --target=bun-$target packages/cli/src/main.ts --outfile dist/navvied-$target$ext
+          done
+          cd dist && sha256sum navvied-* > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+            install.sh
+            install.ps1

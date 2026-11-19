@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "local-pages",
+  "description": "The pages that ship inside the app (starting, cannot start). They can ask the app to retry, copy text, open the download page and show the log folder.",
+  "windows": ["main"],
+  "permissions": ["allow-page-action"]
+}

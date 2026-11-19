@@ -1,0 +1,11 @@
+{
+  "id": "rename-across-files",
+  "title": "Rename a function everywhere",
+  "prompt": "Rename the function getUser to fetchUser everywhere in src/, keeping behaviour. The tests already use the new name. Do not change the tests.",
+  "check": "bun test",
+  "protect": [
+    "tests/**"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 300
+}

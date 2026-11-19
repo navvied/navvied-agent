@@ -1,0 +1,11 @@
+{
+  "id": "fix-missing-await",
+  "title": "Results are promises instead of values",
+  "prompt": "The tests in this project fail. Find the bug in the source code and fix it. Do not change the tests.",
+  "check": "bun test",
+  "protect": [
+    "tests/**"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 300
+}

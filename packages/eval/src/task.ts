@@ -1,0 +1,53 @@
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+
+export interface Task {
+  id: string;
+  title: string;
+  prompt: string;
+  /** Shell command run in the finished workspace; exit code 0 means the task is solved. */
+  check: string;
+  /** Files (globs) the agent must not change, such as the tests. */
+  protect: string[];
+  maxSteps: number;
+  timeoutSeconds: number;
+  dir: string;
+}
+
+const isString = (v: unknown): v is string => typeof v === "string" && v.length > 0;
+
+export function loadTask(dir: string): Task {
+  const raw = JSON.parse(readFileSync(join(dir, "task.json"), "utf8")) as Record<string, unknown>;
+  if (!isString(raw.id) || !isString(raw.title) || !isString(raw.prompt) || !isString(raw.check)) throw new Error(`${dir}/task.json: id, title, prompt and check are required`);
+  if (!existsSync(join(dir, "repo")) || !existsSync(join(dir, "solution"))) throw new Error(`${dir}: repo/ and solution/ are required`);
+  const protect = Array.isArray(raw.protect) ? raw.protect.filter(isString) : [];
+  return {
+    id: raw.id, title: raw.title, prompt: raw.prompt, check: raw.check, protect, dir,
+    maxSteps: typeof raw.maxSteps === "number" ? raw.maxSteps : 30,
+    timeoutSeconds: typeof raw.timeoutSeconds === "number" ? raw.timeoutSeconds : 300,
+  };
+}
+
+export function loadTasks(root: string, only?: readonly string[]): Task[] {
+  const all = readdirSync(root).sort().map((name) => join(root, name)).filter((p) => statSync(p).isDirectory() && existsSync(join(p, "task.json"))).map(loadTask);
+  const ids = new Set(all.map((t) => t.id));
+  if (ids.size !== all.length) throw new Error("task ids must be unique");
+  const missing = (only ?? []).filter((id) => !ids.has(id));
+  if (missing.length) throw new Error(`unknown task: ${missing.join(", ")}`);
+  return only?.length ? all.filter((t) => only.includes(t.id)) : all;
+}
+
+export function filesOf(dir: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (d: string): void => {
+    for (const name of readdirSync(d)) {
+      const p = join(d, name);
+      if (statSync(p).isDirectory()) walk(p); else out[relative(dir, p).replace(/\\/g, "/")] = readFileSync(p, "utf8");
+    }
+  };
+  walk(dir);
+  return out;
+}
+
+export const repoFiles = (task: Task): Record<string, string> => filesOf(join(task.dir, "repo"));
+export const solutionFiles = (task: Task): Record<string, string> => filesOf(join(task.dir, "solution"));

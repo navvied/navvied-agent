@@ -1,0 +1,18 @@
+{
+  "name": "@navvied/cli",
+  "version": "0.2.0",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "navvied": "src/main.ts"
+  },
+  "dependencies": {
+    "@navvied/protocol": "workspace:*",
+    "@navvied/engine": "workspace:*",
+    "@navvied/stream-engine": "workspace:*"
+  }
+}

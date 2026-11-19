@@ -1,0 +1,194 @@
+# Protocol v1
+
+Transport: any ordered byte stream (stdio, WebSocket, pipe). Encoding: UTF-8, one JSON object per line (`\n`).
+Peers **ignore unknown fields and unknown events**. The reference implementation is `packages/protocol`.
+
+## Commands (front-end → engine)
+
+| `cmd` | Fields | Notes |
+|---|---|---|
+| `prompt` | `text`, `qid?`, `images?`, `effort?`, `mode?`, `paths?` | `qid` is a client-chosen id; re-sending a known `qid` is a no-op, so a client may safely re-send anything not yet confirmed by `taken`. A prompt sent while a turn runs is folded into it. |
+| `cancel` | — | Stops the turn, kills running commands, denies pending approvals. |
+| `approve` | `id`, `optionId` | Answers an `approval` event. |
+| `compact` | — | Summarise older turns now. |
+| `model` | `id` | Use another of the models in `caps.models` from the next message on. The conversation carries over. |
+| `effort` | `level` (`auto` or an effort) | Set the reasoning effort from the next message on. `auto` sends none. |
+| `load` | `id` | Continue a saved session: the engine answers with `loaded` (the conversation in short form), and the next `prompt` goes on in it and is saved into it. Refused while a turn runs. |
+| `search` | `query`, `limit?` | Look for words in what was said in the saved conversations (full-text, any language, no model; every word must be there, the last may be only a start). Answered with a `found` event for every attached window. `query` 1 to 200 characters, `limit` 1 to 50 (default 10). |
+| `sessions` | none | List the saved sessions of this engine; answered with a `sessions` event, which every attached window receives. |
+| `checkpoints` | — | List the code snapshots taken before each prompt. |
+| `restore` | `id`, `preview?` | Put the code back as at that checkpoint. With `preview: true`, only report what would change. |
+| `job.stop` | `id` | Stop one background command (a `job` event with status `running`). A finished or unknown id is ignored. |
+
+`mode` is `ask`, `edits`, `plan`, `auto` or `bypass` (see `docs/CLI.md`: Ask first, Accept edits, Plan only, Auto, Bypass permissions). An `approval` event may carry `risk`: why it is asked even in Auto, in plain words (it cannot be undone). `effort` is `minimal`…`max`. Limits are in `LIMITS` (e.g. 1 MB of prompt text,
+8 images, 100 paths).
+
+## Events (engine → front-end)
+
+Every event carries `seq` (strictly increasing) and `eid` (unique).
+
+| `ev` | Fields | Meaning |
+|---|---|---|
+| `loaded` | `id`, `items?` | A saved session is now the one in use (also announced to every window, so all show the same conversation). `items` is the conversation in short form: `{k: "user"\|"assistant"\|"tool", text}` (a tool is its name), the last 200, each text cut at 4000 characters. A window clears its screen and shows them. |
+| `found` | `query`, `items[{id,title,snippet,updated}]` | The answer to `search`: conversations that mention the words, best first, one passage each (`snippet`, the words in [brackets]). Open one with `load`. Only the window that asked should open a menu from it. |
+| `sessions` | `items[{id,title,updated,messages,source?,project?}]` | The saved sessions, newest first (at most 50). `title` is what the person asked first, on one line (60 characters); `updated` is in ms since the epoch. Only a window that asked should open a menu from it. |
+| `session` | `id` | The session id (first event). |
+| `loaded` | `id` | A `load` succeeded. |
+| `caps` | `steer`, `modes`, `defaultMode?`, `compact`, `checkpoints?`, `models?`, `efforts?`, `effort?` | What this engine can do. Show only what is real. `models` lists what can be switched to (`id`, `name`, and optionally `brand`, `badge`, `blurb`, `locked`, `current`); `efforts` the levels the current model supports (none: it has no effort setting); `effort` the level in use. Sent again whenever one of them changes. |
+| `user` | `qid`, `text`, `images?` | The text of a prompt the engine accepted, sent once just before its `taken` (also for a prompt folded into a running turn). `images` is only a count. It lets a second window, or a reload, show the real message. A re-sent known `qid` emits nothing. |
+| `taken` | `qid` | The engine started on that prompt. |
+| `text` / `thought` | `text` | Reply and reasoning, streamed in pieces. |
+| `thought_end` | `ms` | The model stopped thinking; `ms` is how long. Sent once per stretch of thought, only if there was one. |
+| `tool` | `id`, `name`, `status`, `input?`, `output?`, `progress?`, `parent?` | One card per `id`: `running` → `done` \| `error`. |
+| `plan` | `entries[{title,status}]` | The task list. |
+| `usage` | `ctx`, `win`, `out` | Context tokens used / window / produced by the last call. |
+| `approval` | `id`, `title`, `options[]`, `change?` | Ask mode: the tool waits for `approve`. `change` shows what it would do: `{tool:"Edit",file,old,new}`, `{tool:"Write",file,content}` or `{tool:"Bash",command}`; text over 20,000 characters is cut and `truncated: true` is set. |
+| `plan_proposal` | `id` | Plan mode finished; the plan was streamed as `text`. |
+| `phase` | `name` | `""`, `starting` or `compacting`. |
+| `job` | `id`, `title`, `status` (`running`, `done`, `failed`, `stopped`), `code?`, `startedAt?`, `last?` | A command running in the background: sent when it starts and again when it ends. `startedAt` is in ms since the epoch; `last` is the last line it printed, sent when it ends. |
+| `notice` | `msg` | Something worth telling the person that does not stop the work, such as a connected program that could not start. |
+| `alive` | — | Heartbeat during long silent work. |
+| `queue` | `position` | Sent by a hosting server (never by an engine) while a session waits for a free place; `1` is next. It carries no `seq`. The engine's own events follow once the session starts. |
+| `checkpoints` | `items[{id,at,label,repos}]` | The reply to `checkpoints`. |
+| `restore` | `id`, `preview`, `changes[{repo,path,change}]`, `undoId?` | The reply to `restore`. `change` is `revert`, `recreate` or `remove`. A real restore first saves the current state as `undoId`. |
+| `done` | `stop` | The turn ended: `end_turn`, `cancelled`, `compacted`, `error`. |
+| `error` | `msg` | Something failed; a `done` follows. |
+
+## Delivery
+
+* A front-end keeps each prompt until `taken` (or `done`/`error`) arrives, and re-sends it after a reconnect.
+* A host may buffer events by `seq` and replay those after a cursor to a reconnecting front-end.
+
+## WebSocket transport
+
+`navvied serve --http [--port 8787] [--host 127.0.0.1] [--web <folder>]` carries the same protocol over a WebSocket, for browsers, desktop shells and phones.
+
+* `GET /ws?token=<token>[&since=<seq>]`: upgrade to a WebSocket. One text frame is one command (client to server) or one event (server to client), the same JSON objects as on standard input/output. A wrong or missing token answers `401`; a page from another origin answers `403`.
+* `since`: the last `seq` the client has already seen. The server keeps the last 5000 events of the session and replays the newer ones when a client connects, so a reload or a dropped connection loses nothing. Without `since`, everything kept is replayed. Prompts carry a `qid`, so resending one after a reconnect is safe.
+* Every client of the server sees every event; a command from any client reaches the one engine.
+* `GET /api/info` (token as `?token=` or `Authorization: Bearer`): `{ "version", "model", "cwd", "session" }`. `model` and `session` are `null` while no model is connected.
+* The server starts without a model. Until one is configured, a `prompt` is answered with an `error` ("No model is connected. Run `navvied init`.") and a `done`. The configuration is read again every second while no model is connected, and on every `/api/info` call and command, so the moment `navvied init` finishes the server connects by itself, and clients receive the usual `session` and `caps` events. A damaged configuration is reported as "No model is connected: " followed by the reason.
+* Everything else is served from `--web` (with `index.html` as the fallback for app routes), with a strict content security policy. Without `--web`, the web UI built into the program is served (it works offline once loaded: a service worker caches the static files only, never `/ws` or `/api`).
+* The token is printed once in the start-up URL. Set `NAVVIED_SERVE_TOKEN` (16 characters or more) to keep it stable. On a loopback address the `Host` header must also be loopback. With `--host 0.0.0.0` the server is reachable from the network; the token is then the only protection.
+* A page served from another site (for example a hosted front-end that talks to a server on the visitor's own computer) is refused by default. `--allow-origin https://site.example` (repeatable; plain origins only, no path, no wildcard) lets that site's pages open the socket and call `/api/info`: the server answers the CORS preflight, including `Access-Control-Allow-Private-Network` for browsers that ask before a public page reaches a local address. The token is still required for everything.
+* Every reply carries an `x-navvied: <version>` header (exposed to allowed cross-origin pages), so a page can tell this server from any other address.
+
+## Connecting a model over HTTP
+
+A page can set up a model without a terminal. All of these need the key (`Authorization: Bearer`, or the `navvied-key.` subprotocol for a socket), answer JSON, and are open to the sites the server allows. A key sent to them is written to the private configuration file (mode 0600) and is never sent back.
+
+| Request | Body | Answer |
+| --- | --- | --- |
+| `GET /api/setup` | — | `{ servers: [{ name, baseUrl, models, ollama }], programs: [{ id, label, installed }], models: [{ name, label, how, current }] }`: model servers found on this computer, the programs a person can sign in to with their plan (the `label` is ready to show), and whether each is installed, and what is already connected. |
+| `POST /api/setup/test` | `{ baseUrl, api?, apiKey? }` | `{ ok: true, models }` or `{ ok: false, reason }` where `reason` is `unauthorised`, `unreachable` or `no-models`. |
+| `POST /api/setup/save` | `{ baseUrl, model, name?, api?, apiKey?, window?, makeDefault? }` | `{ ok: true, name, connected }`, or `{ ok: false, error }` with status 400. The engine is started again on the new model, and clients receive the usual `session` and `caps`. For `api: "ollama"` the memory is chosen from what the model supports. |
+| `POST /api/setup/use` | `{ name }` | The same, for a model that is already connected; 404 for an unknown name. |
+
+Signing in to a program (a plan) is not done over HTTP: the page tells the person to run `navvied init` in a terminal, or the desktop app does it for them.
+
+## Attaching to a hub: what a window is given
+
+A hub (a computer, or a hosted session) keeps what was said, so a window that comes later, or comes back, can catch up. Attaching with `since` (the last `seq` the window saw):
+
+* `since > 0`: every event after it, in order.
+* `since = 0` (a window that knows nothing, such as a page after a refresh): only the **current conversation of each kind**, from its latest `session` or `loaded` event on, plus the latest `caps` of each kind (said once, early). Older conversations the hub still remembers are not replayed: the window lists them with `sessions`.
+* Either way the last line is `{"ev":"synced","version":"0.1.33"}` (the version of the program that runs the hub; absent on hubs older than 0.1.34 that have `synced` at all), also when there was nothing to replay. A hub that never sends `synced` is older than 0.1.33. It has no `kind` and no `seq`; it means the window is now up to date, so a page can end its loading state on it.
+
+## The cloud and this computer
+
+A signed-in computer sees what the account holds in the cloud (left by hosted sessions, or put there by a person) next to its own conversations. Nothing is moved unless the person asks.
+
+* `SessionInfo.where`: `"cloud"` for a conversation the account holds and this computer does not have; absent for one that is on this computer.
+* `{ev:"importable", count}`: how many conversations wait in the cloud for this computer (said when the hub starts and whenever that changes; a signed-out computer never says it). A page shows "N conversations from the cloud can be moved to this computer".
+* `{cmd:"import", ids?}`: brings the cloud's conversations (all, or the `ids`) onto this computer, as conversations of their kind, indexed, and removes them from the cloud. Answer: `{ev:"imported", count}` (`count` 0 when nothing), the updated `sessions` of each kind, and `importable`.
+* `{cmd:"move", id, to}` and `{cmd:"copy", id, to}` (kind as usual): `to` is `"this"` (a conversation `where: "cloud"` is brought here; a move deletes the cloud copy once it is saved), or the id of another computer of the account (the conversation is sent through the relay, sealed, in parts of at most 100 items; the other computer saves it as a conversation of its kind and project and says `{ev:"received"}`; a move removes the source only after that; nothing is kept by the relay or the server). `to: "cloud"` is always refused: "Conversations are never sent to the cloud from a computer." A computer that is off answers "<name> is not reachable." (nothing is queued); one that does not let it in, "<name> did not allow it."; no answer in 30 seconds, "<name> did not answer in time.". Answer: `{ev:"moved", id, to, ok, copy?, msg?}` and the updated `sessions`. **Undo is a move back**: it works because the other side still has it, until the person lets go of it.
+* A conversation of a computer never reaches the cloud.
+* `{cmd:"receive", id, title, project?, updated, part, parts, items}` is what the sending computer says to the target (kind as usual); a page does not need it. A conversation that is already there is not replaced, and the sender is told it is there.
+
+## Row actions: fork, archive, read and done
+
+A hub with `caps.rowActions: true` can do these on a saved conversation (kind as usual); each answers every window with the updated `sessions`.
+
+| Command | What it does |
+|---|---|
+| `{cmd:"fork", id}` | Copies it into a new saved conversation (new id, title + " (fork)", same kind, project and place: on this computer or in the cloud). Answer: `{ev:"forked", id, newId, ok, msg?}`; a page then `load`s `newId`. |
+| `{cmd:"archive", id, archived}` | Hides it from the normal list, and from `search` unless `includeArchived: true`; it is kept. `{cmd:"sessions", archived:true}` lists the archived ones (`SessionInfo.archived: true`). Unarchive = `archived:false`. |
+| `{cmd:"mark", id, read?, done?}` | `read:true` clears `SessionInfo.unread`, `read:false` sets it; `done` sets or clears `SessionInfo.done`. |
+
+`SessionInfo.unread` is set by the hub when a turn ends while no window is attached, and cleared when a window `load`s the conversation or the person marks it read.
+
+## Folders for an agent
+
+`caps.folders` (an agent's caps only) lists the folders the computer offers to work in: `{id, name, path?, last?, current?}`: the folder the program was started in (`current`), the ones worked in lately, and the ones the person named in their own `config.json` (`"folders": [...]`; adding one happens on the computer, never from a page). A folder that is gone is not listed. `id` stands for the path and is the only way to name it: `{cmd:"new", folder:<id>}` starts a fresh conversation whose agent works there (project instructions, checkpoints and permission scopes follow it). An id the hub did not give is refused with the error "That folder is not offered by this computer."; a chat has no folder ("A chat has no folder."). `path` is for showing on the same machine; a page never sends one. `SessionInfo.project` stays the folder's name.
+
+## Scheduled tasks
+
+A hub with `caps.schedule: true` keeps tasks the person scheduled (in the computer's own `schedules.json`) and lists them. `caps.scheduleNote` says when they run: "Tasks run only while this computer is on and navvied is running." A computer whose program is not running does not run them; one that comes due while it was off starts once at the next chance.
+
+| Command | What it does |
+|---|---|
+| `{cmd:"schedules"}` | Answered with `{ev:"schedules", items:[ScheduleInfo]}`; the same event goes to every window whenever a task changes, starts or finishes. |
+| `{cmd:"schedule.add", title?, cron, prompt, folder?, mode?}` (+ `kind:"chat"` for a chat task) | `cron` is the five fields (minute hour day month weekday; also `@hourly`, `@daily`, `@weekly`, `@monthly`). `folder` is an id of `caps.folders` (default: the current folder; a path is never taken; a chat has none). `mode`: `plan` (reads and plans, the default) or `auto` (may change files with nobody to ask; the person's permission rules still apply). At most 50. |
+| `{cmd:"schedule.update", id, title?, cron?, prompt?, enabled?, mode?, folder?}` | Changes one; `enabled: false` stops it running (it stays in the list). |
+| `{cmd:"schedule.remove", id}` / `{cmd:"schedule.run", id}` | Delete one / run one now (not while it is already running). |
+
+`ScheduleInfo`: `{id, title, prompt, cron, next?, last?, lastCode?, enabled, folder?:{id,name}, kind, mode, running?}`; times are ms since the epoch, `next` is the next time it runs (none while turned off), `lastCode` 0 means the last run was fine. A problem answers with an `error` event in plain words ("That folder is not offered by this computer.", "The task was not saved: …"). What a run said is kept on the computer.
+
+## Plugins: skills, tool servers and hooks
+
+A hub with `caps.plugins: true` lists what extends the agent on the computer: skills (folders with a `SKILL.md`, the person's own and the project's), outside tool servers (`"mcp"` in `config.json`) and hooks (`"hooks"` in `config.json`). `{cmd:"plugins"}` answers `{ev:"plugins", items:[{id, kind:"skill"|"mcp"|"hook", name, description, enabled, source:"user"|"project"|"config", fromNext?}]}` (ids `skill:<name>`, `mcp:<name>`, `hook:<event>:<n>`). `{cmd:"plugin.toggle", id, enabled}` switches one: the choice is kept in the computer's own state file and the answer is the updated list to every window; **the configuration file and the skill folders are never touched**, and adding or removing one is done on the computer, never from a page. A skill follows at once; a tool server or a hook (`fromNext: true`) from the next new conversation. An id the computer does not have is refused: "That is not installed on this computer."
+
+A hub with `caps.toolList: true` lists the tools of the agent itself. `{cmd:"tools"}` answers `{ev:"tools", items, sets, backends}`. `items` are the tools, in plain words: `{name, title, about, access:"read"|"change"|"run"|"web", enabled, core, small, calls, set}` (`core` marks what coding is made of: Read, Write, Edit, Bash, Glob, Grep, so a page should warn before one is switched off; `small` says a small model is offered it without being asked; `calls` is how often it was used on this computer; `set` is the id of its set). `sets` are the cards a page shows, `{id, title, about, tools:[names], enabled, calls}`: Files & Search, Terminal & Processes, Web & Browser, Skills & Helpers, Memory & Planning. `backends` are the places the Bash tool can run commands, `{id:"local"|"docker"|"ssh", label, about, ready, using, hint?}`: `ready:false` comes with a `hint` saying what to do (install Docker, add the ssh host to `config.json`). `{cmd:"tool.toggle", name, enabled}` switches one tool, or a whole set when `name` is a set id; `{cmd:"terminal.use", backend}` chooses where commands run (refused with the hint when it is not ready). Both are kept in the computer's own state files and answered with the updated `tools` event; they reach the next new conversation. Only commands move to a container or another computer: files are still read and written on this one. A name that is not a tool or a set is refused: "That tool is not one of the agent's."
+
+A hub with `caps.drafts: true` keeps what the person typed and did not send, so a refresh, another window or another device finds it. `{cmd:"draft", key, text}` keeps the text for a conversation (`key` is its id) or for a new one (`key: "new"`; at most 20000 characters; empty text takes the draft away). Every window of the computer is told at once with `{ev:"drafts", items:[{key, text, updated}]}`; that event is **not** kept in what a window that attaches later is replayed, so such a window asks with `{cmd:"drafts"}` (answered to the asker with the same event). At most 100 drafts are kept, the newest, in the computer's own state file: a draft written for a conversation of this computer never leaves it. A page clears a draft by sending empty text when it sends the message.
+
+**A message that waits.** `{ev:"queued", qid, text, images?}` says a message was received and waits its turn (the agent is busy, or a program engine is still starting): every window shows it as waiting (dimmed), not only the one that sent it. It is followed by `user` and `taken` when the agent takes it. `{ev:"dropped", qids:[…]}` says waiting messages were thrown away without being taken (the person stopped the agent, or it failed): windows take them off the screen. **A model can be chosen at any time**: `{cmd:"model"}` is never refused while a reply is being written; `caps` shows the new model as current at once, the reply in progress finishes with the model it started with, and the next message uses the new one.
+
+**Several conversations at once on one computer.** Opening another conversation (`load`, or `new`) while one is being answered does not stop it and is not refused: the one being answered goes on in the **background** and the new one is the open one. Everything a background conversation says is sent with the same events as always plus `bg: "<conversation id>"` (so a page does not draw it in the open transcript), is not kept for a window that arrives later, and ends with its `done`: the conversation is then marked unread (as when no window was looking) and its engine is let go; the conversation itself stays and can be opened. `{ev:"background", items:[{id, kind?, state:"working"|"approval"}]}` lists them (`approval`: a step waits for the person), is sent to every window whenever it changes (an empty list when the last one ends) and, when it is not empty, to a window that arrives, before `synced`. `sessions` entries carry `running: true` while a reply is being written for them, open or in the background. `{cmd:"load", id}` for a conversation that is in the background **brings it back**: every window is sent `loaded` with what was said so far and then the events of the turn so far (`taken`, text, steps, a pending `approval`), and what follows is no longer marked `bg`; the conversation that was open goes to the background if it is being answered. At most 4 may be answered in the background at once; over that the answer is `{ev:"error", msg:"Too many conversations are running. Wait for one to finish."}`. A conversation that is being answered in the background cannot be deleted. Deleting a conversation on a computer is complete: its record, saved session, search words, checkpoints, the list of files it wrote, and the text typed for it are all removed (the snapshots themselves are git objects that nothing points to any more). `cancel` stops the open one; the terminal and the program's own interrupt stop all.
+
+## Artifacts: the files a conversation wrote
+
+A hub with `caps.artifacts: true` keeps a list, on the computer, of the files each conversation wrote: the ones its Write and Edit steps named, and, for a chat, any file that is new or changed in its own folder after a turn (so a file a command in a sandbox made is there too). `{cmd:"artifacts", id?}` (kind as usual; `id` is a conversation) answers `{ev:"artifacts", items:[{id, conversation, name, bytes, updated, mime, path?}]}`, newest first, files that are gone left out (`path` is for showing on the same machine). `{cmd:"artifact.read", id}` answers `{ev:"artifact", id, name, mime, bytes, text? | data?, truncated?}`: `text` for text files (cut at 1 MB, then `truncated: true`), `data` (base64) for pictures (png, jpeg, gif, webp, up to 1 MB); anything else is only listed. A file is named by the `id` the hub gave, never by a path; an unknown id, or a file that is gone, is the error "That file is gone.", and other kinds, "This kind of file cannot be shown here." Nothing is kept by the server.
+
+## Managing the list of conversations
+
+A hub can start a new conversation and rename, delete and pin saved ones, for each kind apart. It says so with `caps.manage: true`; a page shows the controls only then. Every command answers to every window with the updated `sessions` event (of that kind, sorted pinned first, then newest).
+
+| Command | What it does |
+|---|---|
+| `{cmd:"new", kind?}` | Starts a fresh conversation of that kind: the engine says `session` (and `caps`), then the list. Refused while a turn is running. |
+| `{cmd:"rename", id, title, kind?}` | Gives it another title (80 characters). The title is kept next to the conversations and wins over the one made from the first message. |
+| `{cmd:"remove", id, kind?}` | Deletes it here (the saved conversation, the record, the search index) and on the account. Deleting the one in use starts a new one (`session`); refused while it is running. |
+| `{cmd:"pin", id, pinned, kind?}` | `SessionInfo.pinned: true` keeps it at the top. |
+
+`caps.models` always names the model in use (one entry, `current: true`) when there is no list to switch between, so a page can show it.
+
+## Chat and agent: two kinds of conversation
+
+A conversation is either an **agent** (it works on a project: the folder it was started in, the shell, git, helpers, the person's permission modes) or a **chat** (a conversation with a scratch folder of its own). The two never share a conversation, a history or a folder.
+
+* `SessionKind` = `"agent" | "chat"`. Any command may carry `kind` (which conversation it is for) and any event may carry `kind` (which conversation it belongs to). Absent means `agent`, so an older peer that never heard of it keeps working.
+* `caps.kind` says what an engine is for. A chat has `modes: []`: it asks the person nothing, because it cannot reach anything of theirs.
+* `SessionInfo.kind` tells the two apart in a list. A `sessions` or `search` command with a `kind` answers with that kind only (the answer carries the `kind`).
+* **What a chat may use:** WebSearch and WebFetch, Read/Write/Edit/Glob/Grep in its own scratch folder and nowhere else (not by `..`, an absolute path or a link), and Remember. Where the program itself runs in a sandbox (a hosted session) it may also run commands (Bash, BashOutput, KillShell). It has no helpers, skills, browser, task list, project instructions, hooks or checkpoints.
+* **What an agent may use:** everything, as before.
+
+## Steps in detail: what a page can show for each `tool` event
+
+A step is the series of `tool` events with one `id`. Everything below is optional and added, so a page that ignores it still works.
+
+| To show | Where it comes from |
+|---|---|
+| Queued ("waiting its turn") | `queued: true` on a step that was asked for in the same go as an earlier one; a normal running event follows when it starts |
+| Running, with a clock | `status: "running"` (the page times it); `live` carries what a command printed since the last event (at most every 150 ms, 200 KB in all) |
+| Waiting for the person | an `approval` event whose `tool` is the step's id; its `options` are Allow, Allow-and-do-not-ask-again, and (for a command) **Edit** with `editable.value` = the command. Answer with `approve { id, optionId, input? }`: `input` is the changed command, which is checked again against the hard limits and the rules (a refusal shows as `outcome: "blocked"`). The step then gets a new `running` event with the changed `input` (an "edited" chip) |
+| Done / failed | `status: "done"` or `"error"`, with `ms` (how long), `code` (exit code of a command; `null` when it did not exit) and `output` |
+| Output was cut | `truncated: true` |
+| Denied, blocked, timed out, stopped, skipped, background | `outcome` on a step that ended: `denied` (the person said no), `blocked` (a hard limit, a rule or a hook), `timeout`, `stopped` (cancelled while running), `skipped` (never started because the turn was stopped), `background` (it keeps running; follow it with the `job` events), `redirected` (never started: the person sent a new message while it waited its turn, so it did not run and the new message takes its place) |
+| Starting, Thinking, Compacting | `phase` (`starting`, `compacting`), and `thought` … `thought_end` for thinking |
+| The group's line ("Ran 3 commands, read 1 file") | counted by the page from the steps' `name`s |
+| Tokens of the turn | `usage.turn` = `{in, out, calls}` so far in this turn (`in` counts every call's prompt, `out` is what the model wrote, `calls` how many times it was called); the last `usage` before `done` is the total. It starts again with each turn. A model that does not report tokens leaves `out` at 0: show nothing then |
+| A task list inside its group | `plan` carries `qid` (the prompt that started the turn) and `tool` (the id of the step that wrote it, a `TodoWrite` step), so a page can put the list in that group |
+
+Not sent: a step that is reconnecting after a dropped connection (the page knows its own connection), and a "cached" mark (no tool has a cache yet; the field name is reserved as `cached: true` on a step that ended). A page should not show those states from engine events.
+

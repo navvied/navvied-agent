@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-shell-answer"
+description = "Enables the shell_answer command without any pre-configured scope."
+commands.allow = ["shell_answer"]
+
+[[permission]]
+identifier = "deny-shell-answer"
+description = "Denies the shell_answer command without any pre-configured scope."
+commands.deny = ["shell_answer"]
