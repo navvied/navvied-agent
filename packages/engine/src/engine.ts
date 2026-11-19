@@ -26,7 +26,7 @@ import { systemPrompt } from "./prompt.ts";
 import { PLAN_TOOL_NAME, defaultTools } from "./tools/index.ts";
 import { AGENT_TOOL_NAME, agentTool } from "./tools/agent.ts";
 import type { AgentDef } from "./agents.ts";
-import type { Message, ModelReply, Part, Provider, Recall, SessionStore, Tool, ToolCall } from "./types.ts";
+import type { Message, ModelReply, Part, Provider, Recall, SessionStore, Tool, ToolCall, WebProxy } from "./types.ts";
 
 /** What the engine needs to let a person switch models in the middle of a conversation. */
 export interface ModelSwitch {
@@ -67,6 +67,8 @@ export interface EngineOptions {
   switcher?: ModelSwitch;
   /** A search server to use instead of the public search page (it must answer in JSON, as SearXNG does). */
   search?: { url?: string };
+  /** The service that fetches and searches the web for a session that has no network of its own. */
+  webProxy?: WebProxy;
   /** The skills in effect, read again each turn so a new one is seen without a restart. */
   skills?: () => SkillInfo[];
   /** Commands the person runs around what the agent does. */
@@ -506,6 +508,7 @@ export class Engine implements AgentEngine {
       ...(def ? { persona: `${this.#persona ? `${this.#persona}\n\n` : ""}You are the helper "${def.name}". ${def.prompt}` } : this.#persona ? { persona: this.#persona } : {}),
       ...(this.#o.instructions ? { instructions: this.#o.instructions } : {}),
       ...(this.#o.search ? { search: this.#o.search } : {}),
+      ...(this.#o.webProxy ? { webProxy: this.#o.webProxy } : {}),
       ...(this.#o.skills ? { skills: this.#o.skills } : {}),
       emit: (e) => {
         if (e.ev === "text") answer += e.text;
@@ -580,7 +583,7 @@ export class Engine implements AgentEngine {
     let meta: { code?: number | null; truncated?: boolean; timedOut?: boolean; background?: boolean } = {};
     let output: string;
     try {
-      output = await tool.run(args, { cwd: this.#o.cwd, ...(isConfined(this.#kind) ? { root: this.#o.cwd } : {}), signal: this.#abort.signal, emit: (e) => this.#emit(e.ev === "plan" ? { ...e, ...(this.#turnQid ? { qid: this.#turnQid } : {}), tool: call.id } : e), live, report: (m) => { meta = { ...meta, ...m }; }, allowPrivateNetwork: this.#o.allowPrivateNetwork, jobs: this.#jobs, ...(this.#o.backend ? { backend: this.#o.backend } : {}), ...(this.#o.recall ? { recall: this.#o.recall } : {}), ...(this.#o.search ? { search: this.#o.search } : {}), ...(this.#o.skills ? { skills: this.#o.skills } : {}), ...(this.#o.memory ? { memory: this.#o.memory } : {}), helper: (task, signal) => this.#delegate(call.id, task, signal) });
+      output = await tool.run(args, { cwd: this.#o.cwd, ...(isConfined(this.#kind) ? { root: this.#o.cwd } : {}), signal: this.#abort.signal, emit: (e) => this.#emit(e.ev === "plan" ? { ...e, ...(this.#turnQid ? { qid: this.#turnQid } : {}), tool: call.id } : e), live, report: (m) => { meta = { ...meta, ...m }; }, allowPrivateNetwork: this.#o.allowPrivateNetwork, jobs: this.#jobs, ...(this.#o.backend ? { backend: this.#o.backend } : {}), ...(this.#o.recall ? { recall: this.#o.recall } : {}), ...(this.#o.search ? { search: this.#o.search } : {}), ...(this.#o.webProxy ? { webProxy: this.#o.webProxy } : {}), ...(this.#o.skills ? { skills: this.#o.skills } : {}), ...(this.#o.memory ? { memory: this.#o.memory } : {}), helper: (task, signal) => this.#delegate(call.id, task, signal) });
     } catch (e) { output = `Error: ${e instanceof Error ? e.message : String(e)}`; }
     clearTimeout(timer);
     flush();

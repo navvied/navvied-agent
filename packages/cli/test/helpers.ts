@@ -132,6 +132,8 @@ export function startMockModel() {
       const write = /\bwrite (\S+)/.exec(user);
       if (write) return call("Write", { file_path: write[1], content: "hello from the agent\n" });
       if (/\bbash\b/.test(user)) return call("Bash", { command: "echo from-shell" });
+      const fetchUrl = /\bfetch (\S+)/.exec(user);
+      if (fetchUrl) return call("WebFetch", { url: fetchUrl[1] });
       if (/\bslow\b/.test(user)) return text("thinking for a long while before answering", 100, 400);
       return text("all done here");
     },

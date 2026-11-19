@@ -147,6 +147,7 @@ export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) =>
           skills: () => activeSkills(new PluginState(pluginStatePath(io.env)), { user: join(dirname(path), "skills"), project: projectDirs(cwd).map((d) => join(d, ".navvied", "skills")) }),
         }),
         ...(io.env.NAVVIED_SEARCH_URL ? { search: { url: io.env.NAVVIED_SEARCH_URL } } : {}),
+        ...(file.value?.webProxy ? { webProxy: file.value.webProxy } : {}),
         ...(kind === "chat" ? {} : { instructions: () => loadInstructions(cwd, dirname(path), memoryText(memory), INSTRUCTION_FILE_NAMES) }),
         memory,
         ...(kind === "chat" ? {} : { checkpoints: new Checkpoints({ dir: checkpointsDir(io.env), session: sessionId }) }),

@@ -1,5 +1,6 @@
 import type { Tool } from "../types.ts";
 import { clip, num, str } from "./util.ts";
+import { viaProxy } from "./web-proxy.ts";
 
 export interface SearchHit { title: string; url: string; snippet: string }
 
@@ -53,6 +54,12 @@ export const webSearch: Tool = {
     const limit = Math.min(Math.max(1, Math.round(num(a.max_results, 5))), 10);
     const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(20_000)]);
     const configured = ctx.search?.url;
+    if (ctx.webProxy) {
+      const got = await viaProxy<{ results?: unknown }>(ctx.webProxy, "search", { query, max_results: limit }, signal);
+      if (!got.ok) return `Error: ${got.message}`;
+      const found = Array.isArray(got.value.results) ? (got.value.results as Partial<SearchHit>[]) : [];
+      return format(query, found.flatMap((r) => (typeof r.title === "string" && typeof r.url === "string" ? [{ title: r.title, url: r.url, snippet: typeof r.snippet === "string" ? r.snippet : "" }] : [])).slice(0, limit));
+    }
     try {
       if (configured) {
         const res = await fetch(`${configured}${configured.includes("?") ? "&" : "?"}q=${encodeURIComponent(query)}&format=json`, { signal, headers: { accept: "application/json", "user-agent": "navvied-agent" } });

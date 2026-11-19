@@ -8,6 +8,22 @@ const dir = mkdtempSync(join(tmpdir(), "navvied-cfg-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 const write = (name: string, body: unknown) => { const p = join(dir, name); writeFileSync(p, typeof body === "string" ? body : JSON.stringify(body)); return p; };
 
+describe("where a hosted session reaches the web", () => {
+  test("is read from the file, without a trailing slash", () => {
+    const r = loadConfig(write("proxy.json", { models: {}, webProxy: { url: "http://127.0.0.1:4000/v1/web/", token: "t-1" } }), {});
+    expect(r.ok && r.value?.webProxy).toEqual({ url: "http://127.0.0.1:4000/v1/web", token: "t-1" });
+    const none = loadConfig(write("none.json", { models: {} }), {});
+    expect(none.ok && none.value?.webProxy).toBeUndefined();
+  });
+  test("an address that is not a web address, or no token, is refused with the file's name", () => {
+    for (const bad of [{ url: "file:///x", token: "t" }, { url: "http://x/", token: "" }, { url: "http://x/" }, "http://x/", null, { url: 4, token: "t" }]) {
+      const r = loadConfig(write("bad.json", { models: {}, webProxy: bad }), {});
+      expect(r.ok).toBe(false);
+      expect(!r.ok && r.error).toContain('"webProxy" needs a web address in "url" and a "token"');
+    }
+  });
+});
+
 describe("paths", () => {
   test("flag > NAVVIED_CONFIG > XDG > home", () => {
     expect(configPath({ HOME: "/h" }, "/flag.json", "linux")).toBe("/flag.json");

@@ -8,8 +8,10 @@ import { fakeIO, remove, startMockModel, tempDir, until } from "./helpers.ts";
 
 let mock: ReturnType<typeof startMockModel>;
 const dirs: string[] = [];
+const hubs: { stop(): Promise<void> }[] = [];
 beforeAll(() => { mock = startMockModel(); });
-afterAll(() => { mock.stop(); dirs.forEach(remove); });
+// Every hub is stopped before its folders are removed, also one whose test stopped early: a running hub holds its files open.
+afterAll(async () => { await Promise.all(hubs.map((h) => h.stop())); mock.stop(); dirs.forEach(remove); });
 
 type Ev = { ev: string; [k: string]: unknown };
 type Item = { id: string; kind: string; name: string; description: string; enabled: boolean; source: string; fromNext?: boolean };
@@ -22,6 +24,7 @@ function open() {
   writeFileSync(join(dirname(configPath(env)), "skills", "changelog", "SKILL.md"), "---\nname: changelog\ndescription: Write a changelog from the commits\n---\nStep one.\n");
   writeFileSync(configPath(env), JSON.stringify({ models: {}, mcp: { files: { command: "node", args: ["server.js"] }, web: { url: "https://tools.example.com/mcp" } }, hooks: { PreToolUse: [{ matcher: "Bash", command: "echo checking" }, { command: "echo second" }] } }));
   const hub = createHub({ json: false, yes: false, thinking: false, cwd: work } as never, fakeIO({ env }).io, { watch: false });
+  hubs.push(hub);
   const got: Ev[] = [];
   hub.attach({ send: (line) => { got.push(JSON.parse(String(line))); } }, 0);
   const send = (cmd: object): void => hub.command(JSON.stringify(cmd), () => undefined);

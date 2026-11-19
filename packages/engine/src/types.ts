@@ -51,6 +51,9 @@ export interface Provider {
   complete(system: string, user: string, signal: AbortSignal): Promise<string>;
 }
 
+/** The address (up to and including `/v1/web`) and the token of the service that fetches and searches the web for a session. */
+export interface WebProxy { url: string; token: string }
+
 export interface ToolContext {
   cwd: string;
   /** When set, the tools that read or write files work only inside this folder (a chat's scratch folder). */
@@ -68,6 +71,8 @@ export interface ToolContext {
   recall?: Recall;
   /** A search server to use instead of the public search page. */
   search?: { url?: string };
+  /** Where a session with no network of its own reaches the web: WebFetch and WebSearch ask it, with the token, instead of going out. */
+  webProxy?: WebProxy;
   /** The skills in effect now. */
   skills?: () => SkillInfo[];
   /** Where the agent keeps notes for later. */
