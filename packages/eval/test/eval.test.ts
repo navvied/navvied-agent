@@ -104,7 +104,7 @@ describe.skipIf(findBash() === undefined)("validating a task", () => {
   });
   test("a setup that fails is said so, and its teardown still runs", async () => {
     const mark = join(state, "torn-down");
-    const v = await validateTask(made({ setup: "exit 4", teardown: `touch ${mark}` }, { "a": "x" }, { "a": "y" }));
+    const v = await validateTask(made({ setup: "exit 4", teardown: `touch "${mark.replaceAll("\\", "/")}"` }, { "a": "x" }, { "a": "y" }));
     expect(v.status).toBe("fail");
     expect(v.problems[0]).toContain("its setup fails");
     expect(existsSync(mark)).toBe(true);

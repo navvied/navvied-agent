@@ -1,7 +1,11 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import type { Tool } from "../types.ts";
-import { place, clip, run, str } from "./util.ts";
+import { clip, firstLines, place, run, str } from "./util.ts";
+
+/** Matches shown at most: more than this is not read by a model, only paid for. */
+const MOST_MATCHES = 100;
+const NARROWER = "add a glob or a narrower pattern";
 
 const SKIP_DIRS = new Set(["node_modules", ".git"]);
 const MAX_FILE = 1_000_000;
@@ -59,13 +63,13 @@ export const grep: Tool = {
     if (!pattern) return "Error: empty pattern.";
     const insensitive = a.ignore_case === true;
     const path = process.env.PATH ?? "";
-    if (!Bun.which("rg", { PATH: path }) && !Bun.which("grep", { PATH: path })) return clip(searchHere(root, pattern, insensitive, a.glob ? str(a.glob) : undefined)) || "No matches.";
+    if (!Bun.which("rg", { PATH: path }) && !Bun.which("grep", { PATH: path })) { const found = searchHere(root, pattern, insensitive, a.glob ? str(a.glob) : undefined); return found ? clip(firstLines(found, MOST_MATCHES, "matches", NARROWER)) : "No matches."; }
     const argv = Bun.which("rg", { PATH: path })
       ? ["rg", "-n", "--no-heading", "--max-columns", "300", "--max-count", "50", ...(insensitive ? ["-i"] : []), ...(a.glob ? ["-g", str(a.glob)] : []), "-e", pattern, root]
       : ["grep", "-rnE", ...(insensitive ? ["-i"] : []), ...(a.glob ? ["--include", str(a.glob)] : []), "--exclude-dir=node_modules", "--exclude-dir=.git", "-e", pattern, root];
     const r = await run(argv, { cwd: ctx.cwd, signal: ctx.signal, timeoutMs: 30_000 });
     const text = r.output.trim();
     if (!text) return "No matches.";
-    return clip(text.split("\n").map((l) => l.replace(`${root}/`, "").replace(`${root}\\`, "")).join("\n"));
+    return clip(firstLines(text.split("\n").map((l) => l.replace(`${root}/`, "").replace(`${root}\\`, "")).map((l) => (l.length > 300 ? `${l.slice(0, 300)}…` : l)).join("\n"), MOST_MATCHES, "matches", NARROWER));
   },
 };

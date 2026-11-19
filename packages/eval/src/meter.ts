@@ -89,7 +89,7 @@ export function startMeter(upstream: string): Meter {
         res = await fetch(`${target.origin}${path}${url.search}`, { method: req.method, headers, ...(raw ? { body: raw } : {}), signal: req.signal });
       } catch (e) {
         release();
-        record(run, { at: started, path, stream: false, requestBytes: raw?.length ?? 0, ...weigh(path, parsed), inTokens: 0, outTokens: 0, estimated: true, status: 502, ms: Date.now() - started });
+        record(run, { at: started, path, stream: false, requestBytes: raw?.length ?? 0, ...weigh(path, parsed), inTokens: Math.ceil((raw?.length ?? 0) / 4), outTokens: 0, estimated: true, status: 502, ms: Date.now() - started });
         return new Response(`the counter could not reach the model: ${e instanceof Error ? e.message : String(e)}`, { status: 502 });
       }
       const out = new Headers(res.headers);

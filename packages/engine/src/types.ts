@@ -55,6 +55,8 @@ export interface Provider {
 export interface WebProxy { url: string; token: string }
 
 export interface ToolContext {
+  /** The model's context window in tokens, for tools that size what they return to it. */
+  window?: number;
   cwd: string;
   /** When set, the tools that read or write files work only inside this folder (a chat's scratch folder). */
   root?: string;

@@ -1,8 +1,10 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import type { Tool } from "../types.ts";
-import { place, clip, str } from "./util.ts";
+import { clip, firstLines, place, str } from "./util.ts";
 
+/** Files listed at most, the most recently changed first. */
+const MOST_FILES = 100;
 const SKIP = /(^|\/)(node_modules|\.git)\//;
 
 export const glob: Tool = {
@@ -26,6 +28,6 @@ export const glob: Tool = {
     }
     if (!found.length) return "No files matched.";
     found.sort((x, y) => y.mtime - x.mtime);
-    return clip(found.slice(0, 300).map((f) => f.path).join("\n"));
+    return clip(firstLines(found.map((f) => f.path).join("\n"), MOST_FILES, "files", "add a folder to the pattern or a narrower one"));
   },
 };

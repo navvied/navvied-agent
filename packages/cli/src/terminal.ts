@@ -25,15 +25,26 @@ export class TerminalState {
   }
 }
 
-const has = (program: string): boolean => { try { return spawnSync(program, ["--version"], { stdio: "ignore", timeout: 5000, windowsHide: true }).status === 0; } catch { return false; } };
-const containerProgram = (): string | undefined => ["docker", "podman"].find(has);
+/** Whether a program is there: it is asked to say its version. Starting one can take seconds (Docker on Windows), so an answer is kept for half a minute. */
+export type Probe = (program: string) => boolean;
+const KEEP_MS = 30_000;
+const seen = new Map<string, { ok: boolean; at: number }>();
+const has: Probe = (program) => {
+  const known = seen.get(program);
+  if (known && Date.now() - known.at < KEEP_MS) return known.ok;
+  let ok = false;
+  try { ok = spawnSync(program, ["--version"], { stdio: "ignore", timeout: 5000, windowsHide: true }).status === 0; } catch { /* not there */ }
+  seen.set(program, { ok, at: Date.now() });
+  return ok;
+};
+const containerProgram = (probe: Probe): string | undefined => ["docker", "podman"].find(probe);
 
 /** The places commands can run, with whether each can be used right now and, when not, what to do about it. */
-export function listBackends(state: TerminalState, config: TerminalConfig | undefined): BackendInfo[] {
+export function listBackends(state: TerminalState, config: TerminalConfig | undefined, probe: Probe = has): BackendInfo[] {
   const using = state.chosen();
-  const program = containerProgram();
+  const program = containerProgram(probe);
   const ssh = config?.ssh;
-  const sshReady = ssh !== undefined && has("ssh");
+  const sshReady = ssh !== undefined && probe("ssh");
   return [
     { id: "local", label: "This computer", about: "Run commands directly on this computer. No isolation.", ready: true, using: using === "local" },
     { id: "docker", label: "Docker or Podman", about: "Run commands in an isolated container that keeps its files between commands.", ready: program !== undefined, using: using === "docker", ...(program ? {} : { hint: "Docker or Podman was not found. Install Docker Desktop, docker-ce or Podman." }) },
@@ -42,9 +53,9 @@ export function listBackends(state: TerminalState, config: TerminalConfig | unde
 }
 
 /** The backend for new conversations: the one chosen when it can be used, otherwise this computer. */
-export function backendFor(state: TerminalState, config: TerminalConfig | undefined): Backend {
+export function backendFor(state: TerminalState, config: TerminalConfig | undefined, probe: Probe = has): Backend {
   const chosen = state.chosen();
-  if (chosen === "docker") { const program = containerProgram(); if (program) return dockerBackend({ program, image: config?.docker?.image ?? DEFAULT_IMAGE }); }
+  if (chosen === "docker") { const program = containerProgram(probe); if (program) return dockerBackend({ program, image: config?.docker?.image ?? DEFAULT_IMAGE }); }
   if (chosen === "ssh" && config?.ssh) return sshBackend(config.ssh);
   return localBackend;
 }
