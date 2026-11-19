@@ -118,6 +118,16 @@ describe("where a file has one name in every case", () => {
     const linux = new Rules(set, "/work/project", posix);
     expect(linux.check("Edit", { file_path: "src/config/.ENV" }).kind).toBe("allow");
   });
+  test("the Linux rules are the Linux rules on a Mac too: posix is the same object as path there, and must not be taken for the computer's own", () => {
+    const real = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      const r = new Rules({ allow: ["Edit(src/**)"], ask: [], deny: ["Edit(**/.env)"] }, "/work/project", posix);
+      expect(r.check("Edit", { file_path: "src/config/.ENV" }).kind).toBe("allow");
+      expect(hardBlock("Write", { file_path: "/ETC/passwd" }, "/p", posix)).toBeUndefined();
+      expect(riskOf("Edit", { file_path: "/home/me/.SSH/id_rsa" }, "/p", posix)).toBeUndefined();
+    } finally { Object.defineProperty(process, "platform", { value: real }); }
+  });
   test("the agent's own permissions and the system folders are the same file under any spelling", () => {
     for (const [paths, dir, own, system] of [[win32, "D:\\p", "C:\\Users\\me\\.NAVVIED\\Permissions.JSON", "C:\\WINDOWS\\x"], [mac, "/p", "/Users/me/.Navvied/PERMISSIONS.json", "/ETC/passwd"]] as const) {
       expect(hardBlock("Write", { file_path: own }, dir, paths)).toBe("this would change what the agent is allowed to do");

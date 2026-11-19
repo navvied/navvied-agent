@@ -8,6 +8,8 @@ export type JobStatus = "running" | "done" | "failed" | "stopped";
 export interface JobView { id: string; title: string; status: JobStatus; code: number | null; startedAt: number }
 
 const KEEP = 400_000;
+/** After a stop, how long a job's end is waited for. Something it started that got away can hold its output open long after. */
+const STOP_GRACE_MS = 1500;
 const alive = new Set<Jobs>();
 let guarded = false;
 
@@ -94,13 +96,20 @@ export class Jobs {
   stop(id: string): JobView | undefined {
     const job = this.#jobs.get(id);
     if (!job) return undefined;
-    if (job.status === "running") { job.status = "stopped"; killTree(job.child); }
+    this.#halt(job);
     return view(job);
   }
 
-  stopAll(): void { for (const job of this.#jobs.values()) if (job.status === "running") { job.status = "stopped"; killTree(job.child); } }
+  stopAll(): void { for (const job of this.#jobs.values()) this.#halt(job); }
 
   close(): void { this.stopAll(); alive.delete(this); }
+
+  #halt(job: Job): void {
+    if (job.status !== "running") return;
+    job.status = "stopped";
+    killTree(job.child);
+    setTimeout(() => this.#end(job, null), STOP_GRACE_MS).unref();
+  }
 
   #end(job: Job, code: number | null): void {
     if (job.ended) return;

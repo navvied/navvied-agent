@@ -21,6 +21,20 @@ const rig = () => {
 };
 const states = (events: EngineEvent[]) => events.filter((e) => e.ev === "job").map((e) => (e as { status: string }).status);
 
+describe("stopping a command", () => {
+  test.skipIf(process.platform === "win32")("it is stopped for the person even when something it started got away and keeps its output open", async () => {
+    const { events, jobs } = rig();
+    const job = jobs.start(["sh", "-c", "setsid sleep 7.31 & sleep 30"], dir, "escaper");
+    await wait(300);
+    const at = Date.now();
+    jobs.stop(job.id);
+    await until(() => states(events).includes("stopped"), 6000);
+    expect(Date.now() - at).toBeLessThan(5000);
+    expect(jobs.list()[0]).toMatchObject({ status: "stopped" });
+    Bun.spawnSync(["pkill", "-f", "sleep 7.31"]);
+  });
+});
+
 describe("background commands", () => {
   test("start at once, report output since the last read, and end with their exit code", async () => {
     const { events, jobs } = rig();

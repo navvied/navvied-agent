@@ -334,7 +334,7 @@ describe("Claude, with your subscription", () => {
     const { f, config } = setup("1\n1\n2\n", { system });
     expect(await main(["init", "--config", config], f.io)).toBe(2);
     expect(f.err()).toContain("Claude Code is not installed on this computer");
-    expect(f.err()).toContain("curl -fsSL https://claude.ai/install.sh | bash");
+    expect(f.err()).toContain(process.platform === "win32" ? "irm https://claude.ai/install.ps1 | iex" : "curl -fsSL https://claude.ai/install.sh | bash");
     expect(f.err()).toContain("Run this command?");
     expect(system.ran).toEqual([]);
     expect(existsSync(config)).toBe(false);

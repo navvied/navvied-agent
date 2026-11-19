@@ -91,7 +91,8 @@ export function fakeIO(opts: { interactive?: boolean; color?: boolean; env?: Env
 }
 
 export const tempDir = (): string => mkdtempSync(join(tmpdir(), "navvied-cli-"));
-export const remove = (d: string): void => rmSync(d, { recursive: true, force: true });
+/** Windows lets go of a folder a moment after the program that used it has ended, so a removal is retried. */
+export const remove = (d: string): void => rmSync(d, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 
 /** A scripted model server (chat-completions API over SSE). It answers from keywords in the latest user message. */
 export function startMockModel() {

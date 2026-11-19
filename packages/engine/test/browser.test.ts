@@ -1,4 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { browser, closeBrowser, findChrome } from "../src/index.ts";
 
 const chrome = findChrome();
@@ -82,5 +85,32 @@ describe.skipIf(!chrome)("using the browser", () => {
   test("close ends the browser, and the next use starts a fresh one", async () => {
     expect(await run({ action: "close" })).toContain("closed");
     expect(await run({ action: "open", url: `${home}about` })).toContain("About us");
+  }, 45_000);
+});
+
+describe.skipIf(!chrome || process.platform === "win32")("a browser that stops while starting", () => {
+  const dir = mkdtempSync(join(tmpdir(), "navvied-fakechrome-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const withBrowser = async <T,>(script: string, body: () => Promise<T>): Promise<T> => {
+    const file = join(dir, `chrome-${Math.random().toString(36).slice(2)}`);
+    writeFileSync(file, `#!/bin/sh\n${script}\n`);
+    chmodSync(file, 0o755);
+    const before = process.env.NAVVIED_CHROME;
+    process.env.NAVVIED_CHROME = file;
+    closeBrowser();
+    try { return await body(); } finally { closeBrowser(); if (before === undefined) delete process.env.NAVVIED_CHROME; else process.env.NAVVIED_CHROME = before; }
+  };
+
+  test("the answer says it stopped, with its exit code and its last words, at once rather than after 15 s", async () => {
+    const started = Date.now();
+    const out = await withBrowser('echo "cannot open display" >&2; exit 3', () => run({ action: "open", url: home }));
+    expect(out).toContain("the browser stopped while starting (exit 3): cannot open display");
+    expect(Date.now() - started).toBeLessThan(10_000);
+  }, 30_000);
+
+  test("one that stopped once is started again, and the second start is the one used", async () => {
+    const marker = join(dir, `started-${Math.random().toString(36).slice(2)}`);
+    const out = await withBrowser(`if [ ! -e "${marker}" ]; then : > "${marker}"; echo "crashed" >&2; exit 139; fi\nexec "${chrome}" "$@"`, () => run({ action: "open", url: home }));
+    expect(out).toContain("Welcome to the shop");
   }, 45_000);
 });

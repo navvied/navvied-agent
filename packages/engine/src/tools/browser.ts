@@ -34,6 +34,8 @@ const CALL_MS = 30_000;
 
 interface Pending { resolve(v: unknown): void; reject(e: Error): void; timer: ReturnType<typeof setTimeout> }
 
+class StoppedAtStart extends Error {}
+
 /** One browser, one page, spoken to over the DevTools protocol. */
 class Session {
   #socket!: WebSocket;
@@ -45,15 +47,26 @@ class Session {
   #idle: ReturnType<typeof setTimeout> | undefined;
   closed = false;
 
+  /** Starts the browser. One that stops while starting is started once more: a crash at launch is rare and does not repeat. */
   static async open(chrome: string): Promise<Session> {
+    try { return await Session.start(chrome); } catch (e) { if (!(e instanceof StoppedAtStart)) throw e; return Session.start(chrome); }
+  }
+
+  static async start(chrome: string): Promise<Session> {
     const s = new Session();
     s.#dir = mkdtempSync(join(tmpdir(), "navvied-browser-"));
-    s.#child = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${s.#dir}`, "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync", "--mute-audio", "--hide-scrollbars", "--window-size=1280,900", ...(process.getuid?.() === 0 || process.env.NAVVIED_BROWSER_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), "about:blank"], { detached: usesProcessGroups(), stdio: "ignore", windowsHide: true });
-    s.#child.on("exit", () => s.close());
-    s.#child.on("error", () => s.close());
+    s.#child = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${s.#dir}`, "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync", "--mute-audio", "--hide-scrollbars", "--window-size=1280,900", ...(process.getuid?.() === 0 || process.env.NAVVIED_BROWSER_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), "about:blank"], { detached: usesProcessGroups(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+    let said = "", stopped: number | null | undefined;
+    s.#child.stderr?.on("data", (d: Buffer) => { said = (said + d.toString("utf8")).slice(-600); });
+    s.#child.on("exit", (code) => { stopped = code; s.close(); });
+    s.#child.on("error", (e) => { said += e.message; stopped = null; s.close(); });
     const portFile = join(s.#dir, "DevToolsActivePort");
     const until = Date.now() + 15_000;
-    while (!existsSync(portFile)) { if (s.closed || Date.now() > until) { s.close(); throw new Error("the browser did not start"); } await new Promise((r) => setTimeout(r, 100)); }
+    while (!existsSync(portFile)) {
+      if (stopped !== undefined) throw new StoppedAtStart(`the browser stopped while starting (exit ${stopped})${said.trim() ? `: ${said.trim().split("\n").pop()}` : ""}`);
+      if (s.closed || Date.now() > until) { s.close(); throw new Error(`the browser did not start in 15 s${said.trim() ? `: ${said.trim().split("\n").pop()}` : ""}`); }
+      await new Promise((r) => setTimeout(r, 100));
+    }
     const [port, path] = readFileSync(portFile, "utf8").trim().split("\n");
     s.#socket = new WebSocket(`ws://127.0.0.1:${port}${path}`);
     await new Promise<void>((resolve, reject) => { s.#socket.onopen = () => resolve(); s.#socket.onerror = () => reject(new Error("could not connect to the browser")); });

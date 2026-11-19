@@ -1,5 +1,5 @@
-import nativePath, { isAbsolute } from "node:path";
-import { caselessFor, splitCommand, type Paths } from "./rules.ts";
+import { isAbsolute } from "node:path";
+import { caselessFor, nativePaths, splitCommand, type Paths } from "./rules.ts";
 
 /**
  * What is asked about even when the person said "do not ask again", and in Auto mode: things that can be done, but not undone.
@@ -92,7 +92,7 @@ function ofPath(file: string, cwd: string, p: Paths): Risk | undefined {
 }
 
 /** The risk of a tool call, or nothing when there is none worth asking about. */
-export function riskOf(tool: string, args: Record<string, unknown>, cwd: string, p: Paths = nativePath): Risk | undefined {
+export function riskOf(tool: string, args: Record<string, unknown>, cwd: string, p: Paths = nativePaths): Risk | undefined {
   if (tool === "Bash" && typeof args.command === "string") return ofBash(args.command);
   if ((tool === "Write" || tool === "Edit") && typeof args.file_path === "string") return ofPath(args.file_path, cwd, p);
   return undefined;
