@@ -19,8 +19,8 @@ const answer = (status: number, type: string, body: string): string => {
 export const webFetch: Tool = {
   name: "WebFetch",
   readOnly: true,
-  offeredWhen: ({ small, userText }) => !small || /https?:\/\//i.test(userText),
-  description: "Fetch a web page or file over http(s) and return its text. HTML is reduced to readable text.",
+  offeredWhen: ({ userText, chat }) => chat === true || /https?:\/\/|\b(website|web ?page|url|documentation|docs)\b/i.test(userText),
+  description: "Fetch a web page or file over http(s); HTML comes back as text.",
   parameters: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
   title: (a) => `Fetch ${str(a.url)}`,
   async run(a, ctx) {

@@ -1,0 +1,17 @@
+{
+  "id": "term-background-worker",
+  "title": "Keep a worker running in the background, then stop it",
+  "kind": "terminal",
+  "level": 3,
+  "lang": "py",
+  "requires": [
+    "python3"
+  ],
+  "prompt": "Start worker.py so that it keeps running in the background. Wait until heartbeat.log has at least 8 lines, write the number of lines it has at that moment into beats.txt, and then stop the worker.",
+  "check": "python3 -c \"import hashlib,os,sys\nn = int(open('beats.txt').read().strip())\nlines = open('heartbeat.log').read().split()\ntok = hashlib.sha1((os.environ['BENCH_SECRET'] + 'worker').encode()).hexdigest()[:8]\nassert n >= 8 and tok in lines\ntry:\n    os.kill(int(open('worker.pid').read()), 0)\n    sys.exit(1)\nexcept OSError:\n    pass\"",
+  "protect": [
+    "worker.py"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 300
+}

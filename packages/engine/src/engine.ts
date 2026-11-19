@@ -22,7 +22,7 @@ import { needsApproval, toolsFor } from "./permissions.ts";
 import { riskOf } from "./risk.ts";
 import { isConfined, profileTools } from "./profiles.ts";
 import { hardBlock, type Rules } from "./rules.ts";
-import { systemPrompt } from "./prompt.ts";
+import { asksAboutProgram, systemPrompt } from "./prompt.ts";
 import { PLAN_TOOL_NAME, defaultTools } from "./tools/index.ts";
 import { AGENT_TOOL_NAME, agentTool } from "./tools/agent.ts";
 import type { AgentDef } from "./agents.ts";
@@ -37,7 +37,7 @@ export interface ModelSwitch {
   /** The effort levels the model in use supports; none when it has no such setting. */
   efforts?: Effort[];
   /** What it takes to use another: its provider and window, and the effort levels it supports. */
-  use(id: string): { provider: Provider; window: number; efforts?: Effort[]; persona?: string } | { error: string };
+  use(id: string): { provider: Provider; window: number; efforts?: Effort[]; persona?: string; reference?: string } | { error: string };
 }
 
 export interface EngineOptions {
@@ -49,6 +49,8 @@ export interface EngineOptions {
   /** Continue a saved session (needs `store`). */
   sessionId?: string;
   persona?: string;
+  /** What the person may ask about this program (its commands, modes, files): put in the prompt only for a request that asks about it. */
+  reference?: string;
   instructions?: () => string | undefined;
   checkpoints?: Checkpoints;
   tools?: Tool[];
@@ -130,6 +132,7 @@ export class Engine implements AgentEngine {
   #provider: Provider;
   #window: number;
   #persona: string | undefined;
+  #reference: string | undefined;
   #model: string | undefined;
   #efforts: Effort[] | undefined;
   #busy = false;
@@ -156,6 +159,7 @@ export class Engine implements AgentEngine {
     this.#provider = opts.provider;
     this.#window = opts.window;
     this.#persona = opts.persona;
+    this.#reference = opts.reference;
     this.#model = opts.switcher?.current;
     this.#efforts = opts.switcher?.efforts;
     this.#tools = profileTools(opts.kind ?? "agent", opts.tools ?? defaultTools(), { sandboxed: opts.sandboxed === true }).map((t) => (t.name === AGENT_TOOL_NAME && opts.agents?.length ? agentTool(opts.agents) : t));
@@ -297,6 +301,7 @@ export class Engine implements AgentEngine {
       this.#provider = next.provider;
       this.#window = next.window;
       if (next.persona !== undefined) this.#persona = next.persona;
+      if (next.reference !== undefined) this.#reference = next.reference;
       this.#model = id;
       this.#efforts = next.efforts;
       if (this.#effort && !next.efforts?.includes(this.#effort)) this.#effort = undefined;
@@ -398,6 +403,12 @@ export class Engine implements AgentEngine {
     this.#messages.push({ role: "user", content: asParts(q) });
   }
 
+  /** What the person wrote last. */
+  #lastUserText(): string {
+    const m = [...this.#messages].reverse().find((x) => x.role === "user");
+    return !m ? "" : typeof m.content === "string" ? m.content : (m.content ?? []).map((p) => (p.type === "text" ? p.text : "")).join(" ");
+  }
+
   /** Everything the person has written so far, to decide which tools are worth offering. */
   #userText(): string {
     return this.#messages.filter((m) => m.role === "user").map((m) => (typeof m.content === "string" ? m.content : (m.content ?? []).map((p) => (p.type === "text" ? p.text : "")).join(" "))).join("\n");
@@ -412,7 +423,7 @@ export class Engine implements AgentEngine {
 
       const small = this.#window <= SMALL_WINDOW;
       const skills = attempt(() => this.#o.skills?.()) ?? [];
-      const tools = toolsFor(this.#mode, this.#tools, { small, userText: this.#userText(), jobs: this.#jobs.running, typable: this.#jobs.typable, skills: skills.length, recall: this.#o.recall !== undefined });
+      const tools = toolsFor(this.#mode, this.#tools, { small, userText: this.#userText(), jobs: this.#jobs.running, steps: step, chat: this.#kind === "chat", typable: this.#jobs.typable, skills: skills.length, recall: this.#o.recall !== undefined });
       const instructions = attempt(() => this.#o.instructions?.());
       const written = new TextToolCalls(Object.fromEntries(tools.map((t) => [t.name, t.parameters as { properties?: Record<string, { type?: string }> }])), `text${this.#messages.length}_`);
       let thinkingSince: number | undefined;
@@ -420,7 +431,7 @@ export class Engine implements AgentEngine {
       const said = (text: string): void => { if (text) { endThought(); this.#emit({ ev: "text", text }); } };
       const model = await this.#provider.stream(
         {
-          system: systemPrompt({ cwd: this.#o.cwd, platform: process.platform, date: (this.#o.now?.() ?? new Date()).toISOString().slice(0, 10), ...(this.#persona ? { persona: this.#persona } : {}), ...(instructions ? { instructions } : {}), ...(skills.length ? { skills: skillsPrompt(skills, small)! } : {}), small, ...(this.#kind === "chat" ? { kind: "chat" as const, sandboxed: this.#o.sandboxed === true } : {}) }, this.#mode),
+          system: systemPrompt({ cwd: this.#o.cwd, platform: process.platform, date: (this.#o.now?.() ?? new Date()).toISOString().slice(0, 10), ...(this.#persona ? { persona: this.#persona } : {}), ...(this.#reference && asksAboutProgram(this.#lastUserText()) ? { reference: this.#reference } : {}), tools: tools.map((t) => t.name), ...(instructions ? { instructions } : {}), ...(skills.length ? { skills: skillsPrompt(skills, small)! } : {}), small, ...(this.#kind === "chat" ? { kind: "chat" as const, sandboxed: this.#o.sandboxed === true } : {}) }, this.#mode),
           messages: this.#messages,
           tools: tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
           ...(this.#effort ? { effort: this.#effort } : {}),

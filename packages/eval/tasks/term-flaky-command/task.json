@@ -1,0 +1,18 @@
+{
+  "id": "term-flaky-command",
+  "title": "Run a command that fails twice before it works",
+  "kind": "terminal",
+  "level": 2,
+  "lang": "sh",
+  "requires": [
+    "python3",
+    "bash"
+  ],
+  "prompt": "Run `bash deploy.sh` until it succeeds. Its failures are temporary. Do not edit it.",
+  "check": "test \"$(tr -d \"[:space:]\" < deployed.txt)\" = \"$(python3 -c \"import hashlib,os,sys; print(hashlib.sha1((os.environ['BENCH_SECRET']+sys.argv[1]).encode()).hexdigest()[:12])\" deploy)\" && test \"$(cat .attempts)\" = 3",
+  "protect": [
+    "deploy.sh"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 300
+}

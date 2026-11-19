@@ -1,12 +1,14 @@
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, sep } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, join, sep, win32 } from "node:path";
 import { repoFiles, solutionFiles, type Task } from "./task.ts";
 
+/** A file that starts with `#!` is a program: it is made executable, as it would be in a checkout of the project. */
 const write = (dir: string, files: Record<string, string>): void => {
   for (const [name, text] of Object.entries(files)) {
     mkdirSync(dirname(join(dir, name)), { recursive: true });
-    writeFileSync(join(dir, name), text);
+    writeFileSync(join(dir, name), text, text.startsWith("#!") ? { mode: 0o755 } : {});
   }
 };
 
@@ -45,7 +47,7 @@ export async function applySolution(dir: string, task: Task, env: Record<string,
 export const newSecret = (): string => crypto.randomUUID().replaceAll("-", "").slice(0, 16);
 
 /** The programs a task needs that this computer does not have. */
-export const missingPrograms = (task: Task): string[] => task.requires.filter((p) => !Bun.which(p));
+export const missingPrograms = (task: Task, has: (program: string) => boolean = (p) => (p === "bash" ? findBash() !== undefined : Bun.which(p) !== null)): string[] => task.requires.filter((p) => !has(p));
 
 /** Processes, other than this one, that run in the workspace or were started from it. Where processes cannot be listed (not Linux) nothing is found. */
 export function leftovers(dir: string): number[] {
@@ -79,10 +81,29 @@ export function protectedHashes(dir: string, patterns: readonly string[]): Recor
 
 export interface CheckResult { ok: boolean; output: string; ms: number }
 
+/**
+ * The bash that runs a task's commands, or nothing. On Windows it is Git's, found beside `git` or where Git for Windows installs; the
+ * `bash` that Windows itself ships (in System32, or the WindowsApps stub) only opens a Linux machine that cannot see the workspace.
+ */
+export function findBash(platform: NodeJS.Platform = process.platform, which: (c: string) => string | null = (c) => Bun.which(c), env: Record<string, string | undefined> = process.env, exists: (p: string) => boolean = existsSync): string | undefined {
+  const found = which("bash");
+  if (platform !== "win32") return found ?? undefined;
+  if (found && !/[\\/](windows[\\/]system32|windowsapps)[\\/]/i.test(found)) return found;
+  const git = which("git");
+  const roots = [git && win32.dirname(win32.dirname(git)), env.ProgramFiles && win32.join(env.ProgramFiles, "Git"), env.ProgramW6432 && win32.join(env.ProgramW6432, "Git"), env["ProgramFiles(x86)"] && win32.join(env["ProgramFiles(x86)"], "Git"), env.LOCALAPPDATA && win32.join(env.LOCALAPPDATA, "Programs", "Git")];
+  return roots.flatMap((r) => (r ? [win32.join(r, "bin", "bash.exe")] : [])).find((p) => exists(p));
+}
+
+/** The command line that runs `command`: bash where there is one, else the system's own shell (cmd on Windows). */
+export function commandLine(command: string, bash: string | null = findBash() ?? null, platform: NodeJS.Platform = process.platform): string[] {
+  if (bash) return [bash, "-c", command];
+  return platform === "win32" ? ["cmd.exe", "/d", "/s", "/c", command] : ["sh", "-c", command];
+}
+
 /** A shell command in the workspace; `ok` when it exits with 0. */
 export async function shell(dir: string, command: string, env: Record<string, string> = {}, timeoutMs = 120_000): Promise<CheckResult> {
   const started = Date.now();
-  const p = Bun.spawn(process.platform === "win32" ? ["cmd.exe", "/d", "/s", "/c", command] : ["bash", "-c", command], { cwd: dir, env: { ...process.env, ...env }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
+  const p = Bun.spawn(commandLine(command), { cwd: dir, env: { ...process.env, ...env }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
   const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
   return { ok: (await p.exited) === 0, output: `${out}${err}`.slice(-4000), ms: Date.now() - started };
 }

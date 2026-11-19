@@ -62,10 +62,12 @@ describe("what is put in front of the model", () => {
 });
 
 describe("the Remember tool", () => {
-  test("is offered to a capable model, and to a small one only when asked to remember", async () => {
+  test("is offered, to any model, only when the person asks to remember something", async () => {
     const big = rig(() => ({ text: "x" }));
     await big.turn(prompt("hi"));
-    expect(big.provider.requests[0]!.tools.map((t) => t.name)).toContain("Remember");
+    expect(big.provider.requests[0]!.tools.map((t) => t.name)).not.toContain("Remember");
+    await big.turn(prompt("remember that I prefer tabs"));
+    expect(big.provider.requests[1]!.tools.map((t) => t.name)).toContain("Remember");
     const small = rig(() => ({ text: "x" }), { window: 8_000 });
     await small.turn(prompt("fix the bug"));
     expect(small.provider.requests[0]!.tools.map((t) => t.name)).not.toContain("Remember");

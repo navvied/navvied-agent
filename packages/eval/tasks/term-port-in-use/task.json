@@ -1,0 +1,20 @@
+{
+  "id": "term-port-in-use",
+  "title": "A server will not start because something holds its port",
+  "kind": "terminal",
+  "level": 3,
+  "lang": "sh",
+  "requires": [
+    "python3",
+    "bash"
+  ],
+  "prompt": "The service in this folder (see README.md) will not start. Find out why, deal with it without editing server.py, start the service, save what GET /health returns into health.json, and stop the service again.",
+  "check": "python3 -c \"import hashlib,json,os,socket,sys\nh = json.load(open('health.json'))\nassert h['status'] == 'ok'\nassert h['secret'] == hashlib.sha1((os.environ['BENCH_SECRET'] + 'srv').encode()).hexdigest()[:12]\ns = socket.socket(); s.settimeout(1)\nport = int(open('port.txt').read())\nsys.exit(1 if s.connect_ex(('127.0.0.1', port)) == 0 else 0)\" && ! kill -0 \"$(cat leftover.pid)\" 2>/dev/null",
+  "protect": [
+    "server.py",
+    "README.md"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 300,
+  "setup": "python3 -c \"import socket; s = socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[1])\" > port.txt\nprintf \"%s\" \"$(cat <<'EOF'\nimport socket, time\nport = int(open(\"port.txt\").read().strip())\ns = socket.socket()\ns.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\ns.bind((\"127.0.0.1\", port))\ns.listen(1)\ntime.sleep(300)\nEOF\n)\" > /tmp/navvied-leftover-$$.py\n(python3 \"/tmp/navvied-leftover-$$.py\" >/dev/null 2>&1 & echo $! > leftover.pid)\nsleep 0.5\nrm -f /tmp/navvied-leftover-$$.py"
+}

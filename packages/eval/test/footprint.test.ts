@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agentsDir, footprint, instantiate, listAdapters, loadAdapter, parseAdapter, rate, sizeOf, summarize, wilson, type TaskResult } from "../src/index.ts";
+import { agentsDir, commandLine, findBash, footprint, missingPrograms, misuseOf, instantiate, listAdapters, loadAdapter, parseAdapter, rate, sizeOf, summarize, wilson, type TaskResult } from "../src/index.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-bench-misc-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -25,7 +25,8 @@ describe("footprint", () => {
     expect(f.firstMs).toBeGreaterThan(0);
     expect(f.medianMs).toBeGreaterThan(0);
     const lines = (await Bun.file(homes).text()).trim().split("\n");
-    expect(new Set(lines.map((l) => l.split(":")[0])).size).toBe(4);
+    // The home folder and the number of entries in it, told apart at the last colon (a Windows path has one of its own).
+    expect(new Set(lines.map((l) => l.slice(0, l.lastIndexOf(":")))).size).toBe(4);
     expect(lines.every((l) => l.endsWith(":0"))).toBe(true);
   });
   test("the runtime that runs source is not mistaken for the program", async () => {
@@ -69,7 +70,7 @@ describe("agents described as data", () => {
   test("the folder is the person's own, outside the repository; files are found by label", () => {
     expect(agentsDir({ XDG_CONFIG_HOME: "/c" }, "linux")).toBe("/c/navvied/bench/agents");
     expect(agentsDir({ HOME: "/h" }, "linux")).toBe("/h/.config/navvied/bench/agents");
-    expect(agentsDir({ APPDATA: "C:\\a" }, "win32")).toContain("navvied");
+    expect(agentsDir({ APPDATA: "C:\\a" }, "win32")).toBe("C:\\a\\navvied\\bench\\agents");
     expect(agentsDir({ NAVVIED_BENCH_AGENTS: "/mine" }, "linux")).toBe("/mine");
     const folder = join(dir, "agents");
     mkdirSync(folder, { recursive: true });
@@ -79,5 +80,54 @@ describe("agents described as data", () => {
     expect(listAdapters(folder).map((x) => x.label)).toEqual(["example-agent", "bee"]);
     expect(loadAdapter(join(folder, "b.json")).label).toBe("bee");
     expect(listAdapters(join(dir, "nowhere"))).toEqual([]);
+  });
+});
+
+describe("the shell that runs a task's commands", () => {
+  const where = (found: Record<string, string>) => (c: string): string | null => found[c] ?? null;
+  const none = (): boolean => false;
+  test("bash is bash where there is one; on Windows Git's, never the launcher that Windows ships", () => {
+    expect(findBash("linux", where({ bash: "/usr/bin/bash" }))).toBe("/usr/bin/bash");
+    expect(findBash("linux", where({}))).toBeUndefined();
+    expect(findBash("win32", where({ bash: "C:\\Program Files\\Git\\usr\\bin\\bash.exe" }), {}, none)).toBe("C:\\Program Files\\Git\\usr\\bin\\bash.exe");
+    expect(findBash("win32", where({ bash: "C:\\Windows\\System32\\bash.exe" }), {}, none)).toBeUndefined();
+    expect(findBash("win32", where({ bash: "C:\\Users\\me\\AppData\\Local\\Microsoft\\WindowsApps\\bash.exe" }), {}, none)).toBeUndefined();
+    const git = "C:\\Program Files\\Git\\bin\\bash.exe";
+    expect(findBash("win32", where({ bash: "C:\\Windows\\System32\\bash.exe", git: "C:\\Program Files\\Git\\cmd\\git.exe" }), {}, (p) => p === git)).toBe(git);
+    expect(findBash("win32", where({}), { ProgramFiles: "C:\\Program Files" }, (p) => p === git)).toBe(git);
+  });
+  test("commands run in bash when there is one, else in the system's own shell", () => {
+    expect(commandLine("echo hi", "/usr/bin/bash", "linux")).toEqual(["/usr/bin/bash", "-c", "echo hi"]);
+    expect(commandLine("echo hi", null, "win32")).toEqual(["cmd.exe", "/d", "/s", "/c", "echo hi"]);
+    expect(commandLine("echo hi", null, "linux")).toEqual(["sh", "-c", "echo hi"]);
+  });
+  test("a task that needs bash is skipped, not failed, where bash is missing", () => {
+    const task = { requires: ["bash", "python3"] } as never;
+    expect(missingPrograms(task, (p) => p === "python3")).toEqual(["bash"]);
+    expect(missingPrograms(task, () => true)).toEqual([]);
+  });
+});
+
+describe("misuse of the terminal", () => {
+  const step = (name: string, input: Record<string, unknown>, output: string, status = "done") => ({ name, input, output, status });
+  test("calls the tools refused, waits that only polled, and a cd where cwd would do are counted; honest use is not", () => {
+    const m = misuseOf([
+      step("Bash", { command: "cd app && npm test" }, "ok [exit 0]"),
+      step("Bash", { command: "npm test", cwd: "app" }, "ok [exit 0]"),
+      step("Bash", { command: "cd /tmp; ls" }, "x", "done"),
+      step("BashOutput", { job_id: "job1" }, "(no new output)\n[job1: still running]"),
+      step("BashOutput", { job_id: "job1" }, "(no new output)\n[job1: still running]"),
+      step("BashOutput", { job_id: "job1", wait: 5 }, "(no new output)\n[job1: still running]"),
+      step("BashOutput", { job_id: "job1", until: "ready" }, "(no new output)\n[job1: still running]"),
+      step("BashOutput", { job_id: "job1" }, "ready\n[job1: still running]"),
+      step("BashOutput", { job_id: "job9" }, 'Error: there is no job "job9".', "error"),
+      step("KillShell", { job_id: "job1" }, "Error: there is no job", "error"),
+      step("Bash", { command: "false" }, "[exit 1]", "done"),
+      step("Read", { file_path: "a" }, "Error: nope", "error"),
+    ]);
+    expect(m).toEqual({ badCalls: 2, polls: 2, cdCalls: 2 });
+  });
+  test("a run with nothing to count says zero", () => {
+    expect(misuseOf([])).toEqual({ badCalls: 0, polls: 0, cdCalls: 0 });
   });
 });

@@ -81,7 +81,7 @@ describe("the engine hands the service to its tools", () => {
     seen.length = 0;
     reply = () => json(200, { status: 200, contentType: "text/plain", text: "hello from the service" });
     const r = rig((req) => (req.messages.at(-1)?.role === "tool" ? { text: "done" } : { calls: [{ name: "WebFetch", args: { url: "https://never-resolves.invalid/" } }] }), { webProxy: proxy });
-    await r.turn(prompt("fetch it", { mode: "auto" }));
+    await r.turn(prompt("fetch https://never-resolves.invalid/", { mode: "auto" }));
     const shown = JSON.stringify(r.events);
     expect(shown).toContain("hello from the service");
     expect(shown).not.toContain(TOKEN);

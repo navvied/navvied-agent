@@ -1,0 +1,18 @@
+{
+  "id": "term-long-build",
+  "title": "Run a long build to the end and report its checksum",
+  "kind": "terminal",
+  "level": 2,
+  "lang": "sh",
+  "requires": [
+    "python3",
+    "bash"
+  ],
+  "prompt": "Run the build in this folder (`bash build.sh`) until it has finished, and write the checksum it prints at the end into checksum.txt, alone on one line.",
+  "check": "test \"$(tr -d \"[:space:]\" < checksum.txt)\" = \"$(python3 -c \"import hashlib,os,sys; print(hashlib.sha1((os.environ['BENCH_SECRET']+sys.argv[1]).encode()).hexdigest()[:12])\" build)\"",
+  "protect": [
+    "build.sh"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 400
+}

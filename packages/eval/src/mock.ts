@@ -11,6 +11,7 @@ export type Behaviour =
   | "lazy"    // says it looked and changes nothing
   | "tamper"  // rewrites a protected file, then says it is done
   | "leave"   // does what the oracle does, then leaves a program running
+  | "leak"    // says the key it was sent, and changes nothing
   | "crash"   // the model endpoint answers 500
   | "hang";   // never answers
 
@@ -31,7 +32,7 @@ const tokens = (n: number): number => Math.ceil(n / 4);
 interface Step { tool: "Write" | "Bash"; args: Record<string, string> }
 
 function stepsFor(task: Task, behaviour: Behaviour, leaves: string): Step[] {
-  if (behaviour === "lazy" || behaviour === "crash" || behaviour === "hang") return [];
+  if (behaviour === "lazy" || behaviour === "leak" || behaviour === "crash" || behaviour === "hang") return [];
   if (behaviour === "tamper") {
     const protectedFile = Object.keys(repoFiles(task)).find((f) => task.protect.some((p) => new Bun.Glob(p).match(f)));
     return protectedFile ? [{ tool: "Write", args: { file_path: protectedFile, content: "// rewritten by the model\n" } }] : [];
@@ -72,7 +73,7 @@ export function startMock(tasks: readonly Task[], behaviour: Behaviour | ((task:
       const completion = tokens(step ? chars(step.args) : 6);
       requests.push({ task: task?.id ?? "?", prompt: promptTokens, completion });
       const usage = { choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: completion } };
-      if (!step) return sse([{ choices: [{ delta: { content: how === "lazy" ? "I looked at it and everything seems fine." : "done" } }] }, { choices: [{ delta: {}, finish_reason: "stop" }] }, usage]);
+      if (!step) return sse([{ choices: [{ delta: { content: how === "lazy" ? "I looked at it and everything seems fine." : how === "leak" ? `The key I was given is ${req.headers.get("authorization") ?? "none"}.` : "done" } }] }, { choices: [{ delta: {}, finish_reason: "stop" }] }, usage]);
       return sse([
         { choices: [{ delta: { tool_calls: [{ index: 0, id: `call_${done}`, type: "function", function: { name: step.tool, arguments: JSON.stringify(step.args) } }] } }] },
         { choices: [{ delta: {}, finish_reason: "tool_calls" }] }, usage,

@@ -29,6 +29,13 @@ export function summarize(all: readonly TaskResult[]): string {
     });
     lines.push(`| ${task} | ${cells.join(" | ")} |`);
   }
+  const misuse = results.filter((x) => x.misuse);
+  if (misuse.length) {
+    lines.push("", `| terminal misuse (per run) | ${models.join(" | ")} |`, `|---|${models.map(() => "---").join("|")}|`);
+    for (const [label, key] of [["calls the tools refused", "badCalls"], ["waits that only polled", "polls"], ["cd before a command, not cwd", "cdCalls"]] as const) {
+      lines.push(`| ${label} | ${models.map((m) => { const rs = misuse.filter((x) => x.model === m); return rs.length ? avg(rs.map((x) => x.misuse![key])).toFixed(1) : "-"; }).join(" | ")} |`);
+    }
+  }
   // By what the task asks for: where an agent is strong or weak shows here, and the interval says how much a few runs can tell.
   const groups: [string, (r: TaskResult) => string | undefined, string[]][] = [
     ["kind of work", (r) => r.kind, ["fix", "feature", "refactor", "tests", "docs", "terminal"]],

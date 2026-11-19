@@ -8,9 +8,9 @@ export const AGENT_TOOL_NAME = "Agent";
 export const agent: Tool = {
   name: AGENT_TOOL_NAME,
   readOnly: true,
-  offeredWhen: ({ small }) => !small,
-  description: "Hand a research task to a helper that reads and searches on its own and answers with what it found. It cannot change anything. Describe the task completely: the helper does not see this conversation.",
-  parameters: { type: "object", properties: { description: { type: "string", description: "a few words saying what it is for" }, prompt: { type: "string", description: "the full task" } }, required: ["prompt"] },
+  offeredWhen: ({ small, userText }) => !small && /\b(agent|helper|delegate|parallel|research|investigate|explore|survey|compare)\b/i.test(userText),
+  description: "Give a research task to a helper that reads and searches alone and answers with what it found. It changes nothing and does not see this conversation: describe the task fully.",
+  parameters: { type: "object", properties: { description: { type: "string" }, prompt: { type: "string" } }, required: ["prompt"] },
   title: (a) => `Ask a helper: ${str(a.description) || str(a.prompt).slice(0, 80)}`,
   async run(a, ctx) {
     const prompt = str(a.prompt).trim();

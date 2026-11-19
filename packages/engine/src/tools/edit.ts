@@ -5,7 +5,7 @@ import { place, str } from "./util.ts";
 export const edit: Tool = {
   name: "Edit",
   readOnly: false,
-  description: "Replace an exact piece of text in a file. old_string must match exactly once, unless replace_all is true.",
+  description: "Replace one exact piece of text in a file; replace_all for every place it occurs.",
   parameters: {
     type: "object",
     properties: {

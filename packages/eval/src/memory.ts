@@ -30,14 +30,21 @@ export interface MemoryPeak { /** The agent process alone. */ agentMb: number; /
 
 /** The highest memory the system has seen one process use, read from its own record where it keeps one (Linux). */
 function highWaterKb(pid: number): number | undefined {
-  if (process.platform !== "linux") return undefined;
+  if (process.platform !== "linux") {
+    // No high-water mark: the process is looked at as often as is cheap (one `ps` for one process).
+    if (process.platform === "win32") return undefined;
+    const r = Bun.spawnSync(["ps", "-o", "rss=", "-p", String(pid)], { stdout: "pipe", stderr: "ignore" });
+    const kb = Number(r.stdout.toString().trim());
+    return r.exitCode === 0 && Number.isFinite(kb) ? kb : undefined;
+  }
   try { return Number(/^VmHWM:\s+(\d+)/m.exec(readFileSync(`/proc/${pid}/status`, "utf8"))?.[1]); } catch { return undefined; }
 }
 
 /**
  * Watches a process and what it starts, and gives the highest memory seen when stopped (nothing where memory cannot be read).
- * The tree is looked at every `everyMs`. Where the system keeps a high-water mark for a process (Linux) it is read every 20 ms, so
- * a short run that grows fast is not missed: it only misses what happens in the last 20 ms.
+ * The tree is looked at every `everyMs`. The agent alone is looked at more often: every 20 ms where the system keeps a high-water mark
+ * for a process (Linux), so a short run that grows fast is not missed, and every 50 ms elsewhere, where a process that lives a
+ * tenth of a second may still be missed.
  */
 export function watchMemory(pid: number, everyMs = 200, list: () => Process[] | undefined = processes): { stop(): MemoryPeak | undefined } {
   let agent = 0, tree = 0, seen = false;
@@ -57,6 +64,6 @@ export function watchMemory(pid: number, everyMs = 200, list: () => Process[] | 
   const quick = (): void => { const kb = highWaterKb(pid); if (kb !== undefined && Number.isFinite(kb)) { agent = Math.max(agent, kb); tree = Math.max(tree, kb); seen = true; } };
   sample();
   const timer = setInterval(sample, everyMs);
-  const fast = list === processes ? setInterval(quick, 20) : undefined;
+  const fast = list === processes ? setInterval(quick, process.platform === "linux" ? 20 : 50) : undefined;
   return { stop: () => { clearInterval(timer); if (fast) clearInterval(fast); quick(); sample(); return seen ? { agentMb: Math.round(agent / 1024), treeMb: Math.round(tree / 1024) } : undefined; } };
 }

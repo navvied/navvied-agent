@@ -1,0 +1,19 @@
+{
+  "id": "term-wait-for-server",
+  "title": "Start a slow server, wait until it answers, then stop it",
+  "kind": "terminal",
+  "level": 2,
+  "lang": "py",
+  "requires": [
+    "python3"
+  ],
+  "prompt": "This folder holds a small web service (see README.md). Start it, wait until it answers, save what GET /health returns into health.json, and then stop the server again.",
+  "check": "python3 -c \"import hashlib,json,os,socket,sys\nh = json.load(open('health.json'))\nassert h['status'] == 'ok'\nassert h['secret'] == hashlib.sha1((os.environ['BENCH_SECRET'] + 'srv').encode()).hexdigest()[:12]\ns = socket.socket(); s.settimeout(1)\nport = int(open('port.txt').read())\nsys.exit(1 if s.connect_ex(('127.0.0.1', port)) == 0 else 0)\"",
+  "protect": [
+    "server.py",
+    "README.md"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 300,
+  "setup": "python3 -c \"import socket; s = socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[1])\" > port.txt"
+}

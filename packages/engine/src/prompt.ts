@@ -1,11 +1,18 @@
 import type { PermMode, SessionKind } from "@navvied/protocol";
 
+/** A request that asks about the program itself (its commands, modes, files, tools): only then is the reference about it put in the prompt. */
+export const asksAboutProgram = (text: string): boolean => /(^|\s)\/(model|mode|clear|compact|memory|resume|help|checkpoints|restore|login|logout|tools|plugins|steps|output|theme|remote|devices|schedule|exit|web|search|folder|copy|move|import|effort|go|artifacts)(?![\w./-])|\bnavvied\b|\b(how (do|can|to)|what (can|do) you|which|where)\b.*\b(you|mode|model|command|tool|memory|checkpoint|undo|restore|remote|schedule|theme|login|plugin|shortcut|setting|folder|conversation|resume|compact|clear)\b|\b(your|the) (tools|commands|modes|settings)\b|\bwho are you\b|\bwhat are you\b|\bshortcut|\bshift\+tab\b/i.test(text);
+
 export interface PromptInfo {
   cwd: string;
   platform: string;
   date: string;
   persona?: string;
   instructions?: string;
+  /** What to say about the program itself, for a request that asks. */
+  reference?: string;
+  /** The names of the tools offered in this request, so the prompt names only those. */
+  tools?: string[];
   /** The skills the model can load, already written out. */
   skills?: string;
   /** A model with a small context window, usually one running locally: it gets a shorter, more direct prompt. */
@@ -49,17 +56,17 @@ export function systemPrompt(info: PromptInfo, mode: PermMode): string {
       `You are a coding assistant working in ${info.cwd} on ${info.platform}.`,
       SMALL_RULES,
       mode === "plan" ? PLAN_NOTE : "",
+      info.reference,
       info.skills,
       info.instructions ? `Standing instructions from the user. Follow them:\n\n${info.instructions}` : "",
     ].filter(Boolean).join("\n\n");
   }
   return [
     info.persona?.trim(),
-    `You are a coding and operations agent working in the user's workspace. Working directory: ${info.cwd}. Platform: ${info.platform}. Date: ${info.date}.`,
-    "Work like a careful senior engineer: read before you edit, make the smallest correct change, run the tests or the program to check your work, and report what you actually verified. Be concise.",
-    "Use tools to act; never claim you did something you did not do. Prefer Read, Glob and Grep over the shell for looking at code. Use TodoWrite for tasks with several steps.",
-    "If the user denies a tool call, do not retry the same action; ask what they would prefer.",
+    `Working directory: ${info.cwd}. Platform: ${info.platform}. Date: ${info.date}.`,
+    `Work carefully: read before you edit, make the smallest correct change, run the tests or the program to check it, and say what you verified. Be concise. Never claim to have done what you did not. Prefer Read, Glob and Grep to the shell for looking at code.${info.tools?.includes("TodoWrite") ? " Use TodoWrite for work in several steps." : ""} If a tool call is denied, do not retry it: ask what they prefer.`,
     mode === "plan" ? PLAN_NOTE : "",
+    info.reference,
     info.skills,
     info.instructions ? `The user keeps standing instructions for this work. Follow them unless the current request says otherwise.\n\n${info.instructions}` : "",
   ].filter(Boolean).join("\n\n");

@@ -64,6 +64,16 @@ describe("the counter, messages", () => {
   });
 });
 
+describe("the counter, one at a time", () => {
+  test("two requests sent together reach the model one after the other", async () => {
+    let inside = 0, most = 0;
+    upstream = async () => { inside += 1; most = Math.max(most, inside); await Bun.sleep(80); inside -= 1; return Response.json({ usage: { prompt_tokens: 1, completion_tokens: 1 } }); };
+    await Promise.all([1, 2, 3].map(() => post("serial", "/chat/completions", { ...chatRequest, stream: false })));
+    expect(most).toBe(1);
+    expect((await meter.take("serial")).length).toBe(3);
+  });
+});
+
 describe("the counter, in general", () => {
   test("runs are kept apart, and a run that is taken is forgotten", async () => {
     upstream = () => Response.json({ usage: { prompt_tokens: 1, completion_tokens: 1 } });

@@ -87,3 +87,27 @@ never been used: the first start apart from the middle of the rest. Give `--inst
 runs source (`bun`, `node`) is not the program and is not measured.
 
 The report gives each pass rate with a 95% interval (a few runs cannot say more than that), by kind of work, level and language.
+
+## A real model
+
+```
+bun packages/eval/src/main.ts run --upstream http://127.0.0.1:4000/v1 --upstream-model raphael \
+  --upstream-key-file ~/.config/navvied-bench/raphael.key --upstream-window 64000 --out results.jsonl
+```
+
+The key is read from the file into the environment of the agent: never put on a command line, and a result never holds it (it is
+cut out of anything the agent or the model said). The counter lets one request at a time reach the model, and the run is one task
+after another. After two runs in a row that ended in a server error or a time-out the run stops: that is for a person to look at.
+A run that does not solve its task keeps what the agent last said, the steps it took and the end of what the check printed.
+
+## Terminal tasks and how the terminal is misused
+
+Seven of the tasks are about the terminal: finding one line in a 200,000-line log, starting a slow server and waiting until it
+answers, a build of about 40 seconds (`BUILD_SECONDS` shortens it for tests), a command that fails twice before it works, an installer
+that asks questions on its input, a worker kept running in the background, and a server that will not start because something
+holds its port. Each one answers with a value made from this run's `BENCH_SECRET`, so the answer cannot be guessed, and a run that
+leaves a program running is not solved.
+
+For our own program a result also says how the terminal tools were misused (`misuse`): calls the tools refused (`badCalls`), waits
+that only polled (`polls`: `BashOutput` without `wait` or `until` that found nothing new) and a `cd` put in front of a command
+that could have used `cwd` (`cdCalls`). The report shows the average of each per model.

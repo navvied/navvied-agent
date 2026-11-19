@@ -2,12 +2,15 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { main } from "../src/main.ts";
 import { loadTasks, parseAdapter, runTask, startMeter, startMock, type Behaviour, type Meter, type Mock, type Task } from "../src/index.ts";
 
 const TASKS = join(import.meta.dir, "../tasks");
 const CLI = join(import.meta.dir, "../../cli/src/main.ts");
 const home = mkdtempSync(join(tmpdir(), "navvied-bench-home-"));
+// The build of the terminal task is short here; a real run leaves it as it is.
+process.env.BUILD_SECONDS = "2";
 const tasks = loadTasks(TASKS);
 let behaviour: Behaviour = "oracle";
 let mock: Mock, meter: Meter;
@@ -29,6 +32,9 @@ describe("every task can be solved by an agent run, not only by the validator", 
     for (const task of tasks) {
       const r = await run(task, "oracle");
       expect(r, task.id).toMatchObject({ passed: true, reason: "solved" });
+      // Whatever the task says, the first request stays light: a task is never a reason to send the long text about the program.
+      expect(r.prompt!.systemChars + r.prompt!.toolChars, task.id).toBeLessThanOrEqual(3000);
+      expect(r.prompt!.tools, task.id).toBeLessThanOrEqual(6);
     }
   }, 240_000);
 });
@@ -41,12 +47,21 @@ describe("what is measured per run", () => {
     expect(r.inTokens).toBe(mock.requests.reduce((n, q) => n + q.prompt, 0));
     expect(r.outTokens).toBe(mock.requests.reduce((n, q) => n + q.completion, 0));
     expect(r.estimated).toBe(false);
+    expect(r.misuse).toEqual({ badCalls: 0, polls: 0, cdCalls: 0 });
     expect(r.firstRequestMs).toBeGreaterThanOrEqual(0);
     expect(r.prompt!.tools).toBeGreaterThan(0);
     expect(r.prompt!.systemChars).toBeGreaterThan(0);
     expect(r.prompt!.toolChars).toBeGreaterThan(r.prompt!.tools * 10);
     expect(r.prompt!.requestBytes).toBeGreaterThan(r.prompt!.systemChars);
     if (process.platform !== "win32") { expect(r.peakMb).toBeGreaterThan(5); expect(r.peakTreeMb).toBeGreaterThanOrEqual(r.peakMb!); }
+  }, 60_000);
+});
+
+describe("how heavy the first request is", () => {
+  test("the system prompt and the tool definitions together are at most 3,000 characters, and at most six tools are offered", async () => {
+    const r = await run(pick("fix-off-by-one"), "oracle");
+    expect(r.prompt!.tools).toBeLessThanOrEqual(6);
+    expect(r.prompt!.systemChars + r.prompt!.toolChars).toBeLessThanOrEqual(3000);
   }, 60_000);
 });
 
@@ -90,7 +105,8 @@ describe("another agent, described by a file", () => {
     expect(r).toMatchObject({ task: "fix-off-by-one", model: "other:mock", passed: true, reason: "solved", modelCalls: 1, toolCalls: 0, kind: "fix", level: 1, lang: "ts" });
     expect(r.inTokens).toBeGreaterThan(0);
     expect(r.prompt).toMatchObject({ tools: 0 });
-    if (process.platform !== "win32") expect(r.peakMb).toBeGreaterThan(0);
+    // A short-lived stand-in is only certain to be seen where the system keeps its own high-water mark (Linux).
+    if (process.platform === "linux") expect(r.peakMb).toBeGreaterThan(0);
   }, 60_000);
 
   test("one that cannot be pointed at the counter is still timed and checked, and has no calls to count", async () => {
@@ -98,5 +114,33 @@ describe("another agent, described by a file", () => {
     const r = await runTask(pick("fix-off-by-one"), { command: ["unused"], agent, env: world, meter });
     expect(r).toMatchObject({ passed: false, reason: "check failed", modelCalls: 0, model: "default" });
     expect(r.inTokens).toBeUndefined();
+  }, 60_000);
+});
+
+describe("the run command with a scripted model", () => {
+  test("starts our program at the counter, with the model named in the environment, and writes what it measured", async () => {
+    const out = join(home, "run.jsonl");
+    const written: string[] = [];
+    const write = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string) => { written.push(String(chunk)); return true; }) as typeof process.stdout.write;
+    let code: number;
+    try { code = await main(["run", "--mock", "oracle", "--tasks", "fix-off-by-one", "--out", out]); } finally { process.stdout.write = write; }
+    expect(code).toBe(0);
+    const r = JSON.parse(readFileSync(out, "utf8").trim().split("\n")[0]!);
+    expect(r).toMatchObject({ task: "fix-off-by-one", model: "mock:oracle", passed: true, reason: "solved" });
+    expect(r.modelCalls).toBeGreaterThan(0);
+    expect(r.inTokens).toBeGreaterThan(0);
+    expect(written.join("")).toContain("| mock:oracle | 1/1 (100%)");
+  }, 60_000);
+});
+
+describe("what a failed run says about itself", () => {
+  test("the agent's last words, its steps and the check's output are kept; a key it was given never is", async () => {
+    behaviour = "leak";
+    const r = await runTask(pick("fix-sort-order"), { command: ["bun", CLI], label: "mock:leak", env: { ...world, NAVVIED_API_KEY: "not-a-real-key-123" }, meter, agentEnv: (base) => ({ NAVVIED_BASE_URL: base }) });
+    expect(r.passed).toBe(false);
+    expect(r.why!.said).toBe("The key I was given is Bearer [key].");
+    expect(r.why!.check.length).toBeGreaterThan(0);
+    expect(JSON.stringify(r)).not.toContain("not-a-real-key-123");
   }, 60_000);
 });

@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { applySolution, check, loadTask, loadTasks, prepare, protectedHashes, repoFiles, runTask, solutionFiles, summarize, validateTask, type Task, type TaskResult } from "../src/index.ts";
+import { asksAboutProgram } from "../../engine/src/prompt.ts";
+import { applySolution, check, findBash, loadTask, loadTasks, prepare, protectedHashes, repoFiles, runTask, solutionFiles, summarize, validateTask, type Task, type TaskResult } from "../src/index.ts";
 
 const TASKS = join(import.meta.dir, "../tasks");
 const CLI = join(import.meta.dir, "../../cli/src/main.ts");
@@ -17,6 +18,7 @@ describe("the task set", () => {
     expect(new Set(tasks.map((t) => t.id)).size).toBe(tasks.length);
     for (const t of tasks) {
       expect(t.prompt.length).toBeGreaterThan(20);
+      if (t.kind === "terminal") continue;
       expect(t.check).toBe("bun test");
       expect(t.protect).toEqual(["tests/**"]);
       expect(Object.keys(repoFiles(t)).some((f) => f.startsWith("tests/"))).toBe(true);
@@ -24,16 +26,16 @@ describe("the task set", () => {
     }
   });
 
-  test.each(tasks.map((t) => [t.id, t] as const))("%s: fails untouched, passes with its reference solution, and the solution leaves the tests alone", async (_id, task) => {
-    const dir = prepare(task);
-    try {
-      const hashes = protectedHashes(dir, task.protect);
-      expect((await check(dir, task)).ok).toBe(false);
-      await applySolution(dir, task);
-      expect((await check(dir, task)).ok).toBe(true);
-      expect(protectedHashes(dir, task.protect)).toEqual(hashes);
-    } finally { rmSync(dir, { recursive: true, force: true }); }
-  }, 30_000);
+  // The terminal tasks run a build, a server and a worker: BUILD_SECONDS makes the build short here (a real run leaves it as it is).
+  test.each(tasks.map((t) => [t.id, t] as const))("%s: fails untouched, passes with its reference solution, leaves the protected files alone and nothing running", async (_id, task) => {
+    process.env.BUILD_SECONDS = "2";
+    const v = await validateTask(task);
+    expect(v, task.id).toEqual({ task: task.id, status: "ok", problems: [] });
+  }, 60_000);
+
+  test("no task asks about the program itself, so none is sent the long reference about it (a path such as src/age.ts is not a command)", () => {
+    for (const t of tasks) expect(asksAboutProgram(t.prompt), t.id).toBe(false);
+  });
 
   test("a task filter selects, and an unknown id is an error", () => {
     expect(loadTasks(TASKS, ["deep-merge"]).map((t) => t.id)).toEqual(["deep-merge"]);
@@ -80,7 +82,7 @@ function made(meta: Record<string, unknown>, repo: Record<string, string>, solut
   return loadTask(dir);
 }
 
-describe("validating a task", () => {
+describe.skipIf(findBash() === undefined)("validating a task", () => {
   test("a solution that is a script is run, and sees this run's secret; the answer must hold it", async () => {
     const task = made({ check: 'test "$(cat answer.txt)" = "$BENCH_SECRET"' }, { "README.md": "x" }, { "apply.sh": 'echo "$BENCH_SECRET" > answer.txt\n' });
     expect(await validateTask(task)).toEqual({ task: "made", status: "ok", problems: [] });

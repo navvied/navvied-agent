@@ -8,10 +8,10 @@ const SKIP = /(^|\/)(node_modules|\.git)\//;
 export const glob: Tool = {
   name: "Glob",
   readOnly: true,
-  description: 'Find files by glob pattern, for example "src/**/*.ts". Returns paths, most recently changed first.',
+  description: 'Find files by pattern, such as "src/**/*.ts".',
   parameters: {
     type: "object",
-    properties: { pattern: { type: "string" }, path: { type: "string", description: "directory to search (default: working directory)" } },
+    properties: { pattern: { type: "string" }, path: { type: "string" } },
     required: ["pattern"],
   },
   title: (a) => `Find files: ${str(a.pattern)}`,

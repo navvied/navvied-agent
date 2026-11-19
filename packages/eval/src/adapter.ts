@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 
 /**
  * Another agent, described as data. The file is the person's own and lives outside this repository (see docs/EVAL.md): the
@@ -45,8 +45,9 @@ export const loadAdapter = (file: string): Adapter => parseAdapter(JSON.parse(re
 /** Where a person keeps the files of the agents to compare with. */
 export function agentsDir(env: Record<string, string | undefined>, platform: NodeJS.Platform = process.platform): string {
   if (env.NAVVIED_BENCH_AGENTS) return env.NAVVIED_BENCH_AGENTS;
-  const config = platform === "win32" ? env.APPDATA ?? join(homedir(), "AppData", "Roaming") : env.XDG_CONFIG_HOME ?? join(env.HOME ?? homedir(), ".config");
-  return join(config, "navvied", "bench", "agents");
+  const joined = platform === "win32" ? win32.join : posix.join;
+  const config = platform === "win32" ? env.APPDATA ?? joined(homedir(), "AppData", "Roaming") : env.XDG_CONFIG_HOME ?? joined(env.HOME ?? homedir(), ".config");
+  return joined(config, "navvied", "bench", "agents");
 }
 
 /** Every agent file in the folder, by label. */
