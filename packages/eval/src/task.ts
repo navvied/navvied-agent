@@ -1,9 +1,23 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
+export const KINDS = ["fix", "feature", "refactor", "tests", "docs", "terminal"] as const;
+export const LANGS = ["ts", "py", "sh", "c", "none"] as const;
+
 export interface Task {
   id: string;
   title: string;
+  kind: (typeof KINDS)[number];
+  /** 1 easy, 2 medium, 3 hard. */
+  level: 1 | 2 | 3;
+  lang: (typeof LANGS)[number];
+  /** Programs the task needs; on a computer without one the task is skipped, never failed. */
+  requires: string[];
+  /** Shell commands run in the workspace before the agent starts and after the check; both see BENCH_SECRET. */
+  setup?: string;
+  teardown?: string;
+  /** Takes minutes: run only when asked for. */
+  slow: boolean;
   prompt: string;
   /** Shell command run in the finished workspace; exit code 0 means the task is solved. */
   check: string;
@@ -20,9 +34,16 @@ export function loadTask(dir: string): Task {
   const raw = JSON.parse(readFileSync(join(dir, "task.json"), "utf8")) as Record<string, unknown>;
   if (!isString(raw.id) || !isString(raw.title) || !isString(raw.prompt) || !isString(raw.check)) throw new Error(`${dir}/task.json: id, title, prompt and check are required`);
   if (!existsSync(join(dir, "repo")) || !existsSync(join(dir, "solution"))) throw new Error(`${dir}: repo/ and solution/ are required`);
+  const kind = (KINDS as readonly unknown[]).includes(raw.kind) ? (raw.kind as Task["kind"]) : undefined;
+  const lang = (LANGS as readonly unknown[]).includes(raw.lang) ? (raw.lang as Task["lang"]) : undefined;
+  if (!kind || !lang || (raw.level !== 1 && raw.level !== 2 && raw.level !== 3)) throw new Error(`${dir}/task.json: kind (${KINDS.join(", ")}), level (1, 2 or 3) and lang (${LANGS.join(", ")}) are required`);
   const protect = Array.isArray(raw.protect) ? raw.protect.filter(isString) : [];
   return {
-    id: raw.id, title: raw.title, prompt: raw.prompt, check: raw.check, protect, dir,
+    id: raw.id, title: raw.title, kind, level: raw.level, lang, prompt: raw.prompt, check: raw.check, protect, dir,
+    requires: Array.isArray(raw.requires) ? raw.requires.filter(isString) : [],
+    ...(isString(raw.setup) ? { setup: raw.setup } : {}),
+    ...(isString(raw.teardown) ? { teardown: raw.teardown } : {}),
+    slow: raw.slow === true,
     maxSteps: typeof raw.maxSteps === "number" ? raw.maxSteps : 30,
     timeoutSeconds: typeof raw.timeoutSeconds === "number" ? raw.timeoutSeconds : 300,
   };

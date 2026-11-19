@@ -1,6 +1,12 @@
 {
   "id": "add-validation",
   "title": "Add input validation",
+  "kind": "feature",
+  "level": 1,
+  "lang": "ts",
+  "requires": [
+    "bun"
+  ],
   "prompt": "src/age.ts exports parseAge. Make it reject invalid input as the tests describe: throw a RangeError for values outside 0..150 and a TypeError for anything that is not a whole number. Do not change the tests.",
   "check": "bun test",
   "protect": [

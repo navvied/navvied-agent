@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { applySolution, check, loadTask, loadTasks, prepare, protectedHashes, repoFiles, runTask, solutionFiles, summarize, type Task, type TaskResult } from "../src/index.ts";
+import { dirname, join } from "node:path";
+import { applySolution, check, loadTask, loadTasks, prepare, protectedHashes, repoFiles, runTask, solutionFiles, summarize, validateTask, type Task, type TaskResult } from "../src/index.ts";
 
 const TASKS = join(import.meta.dir, "../tasks");
 const CLI = join(import.meta.dir, "../../cli/src/main.ts");
@@ -29,7 +29,7 @@ describe("the task set", () => {
     try {
       const hashes = protectedHashes(dir, task.protect);
       expect((await check(dir, task)).ok).toBe(false);
-      applySolution(dir, task);
+      await applySolution(dir, task);
       expect((await check(dir, task)).ok).toBe(true);
       expect(protectedHashes(dir, task.protect)).toEqual(hashes);
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -40,13 +40,82 @@ describe("the task set", () => {
     expect(() => loadTasks(TASKS, ["nope"])).toThrow(/unknown task: nope/);
   });
 
+  test("every task says what kind of work it is, how hard, and in which language", () => {
+    for (const t of tasks) {
+      expect(["fix", "feature", "refactor", "tests", "docs", "terminal"]).toContain(t.kind);
+      expect([1, 2, 3]).toContain(t.level);
+      expect(["ts", "py", "sh", "c", "none"]).toContain(t.lang);
+    }
+  });
+
   test("a task without its pieces is rejected", () => {
     const d = mkdtempSync(join(tmpdir(), "navvied-badtask-"));
     writeFileSync(join(d, "task.json"), JSON.stringify({ id: "x", title: "t", prompt: "p", check: "true" }));
     expect(() => loadTask(d)).toThrow(/repo\/ and solution\/ are required/);
+    mkdirSync(join(d, "repo")); mkdirSync(join(d, "solution"));
+    expect(() => loadTask(d)).toThrow(/kind \(.*\), level \(1, 2 or 3\) and lang/);
+    writeFileSync(join(d, "task.json"), JSON.stringify({ id: "x", title: "t", kind: "fix", level: 4, lang: "ts", prompt: "p", check: "true" }));
+    expect(() => loadTask(d)).toThrow(/level \(1, 2 or 3\)/);
+    writeFileSync(join(d, "task.json"), JSON.stringify({ id: "x", title: "t", kind: "fix", level: 2, lang: "ts", prompt: "p", check: "true" }));
+    expect(loadTask(d)).toMatchObject({ kind: "fix", level: 2, lang: "ts", requires: [], slow: false });
     writeFileSync(join(d, "task.json"), JSON.stringify({ id: "x" }));
     expect(() => loadTask(d)).toThrow(/are required/);
     rmSync(d, { recursive: true, force: true });
+  });
+});
+
+/** A sleep no other command line holds: the tests look for it by name, and a fixed one would also be found in whatever started the tests. */
+const uniqueSleep = (): string => `sleep ${(50 + Math.random()).toFixed(6)}`;
+const stillThere = (name: string): string => Bun.spawnSync(["pgrep", "-f", name]).stdout.toString().trim();
+async function gone(name: string): Promise<string> { for (let i = 0; i < 60 && stillThere(name); i++) await Bun.sleep(50); return stillThere(name); }
+
+/** A task written to a folder, for the tests of the harness itself. */
+function made(meta: Record<string, unknown>, repo: Record<string, string>, solution: Record<string, string>): Task {
+  const dir = mkdtempSync(join(state, "task-"));
+  writeFileSync(join(dir, "task.json"), JSON.stringify({ id: "made", title: "made", kind: "terminal", level: 2, lang: "sh", prompt: "Do the thing described in this folder.", check: "true", protect: [], ...meta }));
+  for (const [root, files] of [["repo", repo], ["solution", solution]] as const) {
+    mkdirSync(join(dir, root), { recursive: true });
+    for (const [name, text] of Object.entries(files)) { mkdirSync(dirname(join(dir, root, name)), { recursive: true }); writeFileSync(join(dir, root, name), text); }
+  }
+  return loadTask(dir);
+}
+
+describe("validating a task", () => {
+  test("a solution that is a script is run, and sees this run's secret; the answer must hold it", async () => {
+    const task = made({ check: 'test "$(cat answer.txt)" = "$BENCH_SECRET"' }, { "README.md": "x" }, { "apply.sh": 'echo "$BENCH_SECRET" > answer.txt\n' });
+    expect(await validateTask(task)).toEqual({ task: "made", status: "ok", problems: [] });
+  });
+  test("an answer that does not hold the secret cannot pass, so a copied or guessed one is no solution", async () => {
+    const task = made({ check: 'test "$(cat answer.txt)" = "$BENCH_SECRET"' }, { "README.md": "x" }, { "answer.txt": "a guess\n" });
+    expect((await validateTask(task)).problems).toEqual(["fails with its solution"]);
+  });
+  test("a task that passes before any change, or fails with its solution, is refused with the reason", async () => {
+    expect((await validateTask(made({ check: "true" }, { "a": "x" }, { "a": "y" }))).problems).toEqual(["passes before any change"]);
+    expect((await validateTask(made({ check: "false" }, { "a": "x" }, { "a": "y" }))).problems).toEqual(["fails with its solution"]);
+  });
+  test("a solution that changes a protected file, or whose script fails, is refused", async () => {
+    expect((await validateTask(made({ check: "test -f done", protect: ["keep/**"] }, { "keep/t": "x" }, { "keep/t": "y", "done": "" }))).problems).toEqual(["the solution changes protected files"]);
+    expect((await validateTask(made({ check: "test -f done" }, { "a": "x" }, { "apply.sh": "echo broken >&2; exit 3\n" }))).problems[0]).toContain("apply.sh failed: broken");
+  });
+  test("a task whose program is missing here is skipped, not failed", async () => {
+    expect(await validateTask(made({ requires: ["navvied-no-such-program"] }, { "a": "x" }, { "a": "y" }))).toEqual({ task: "made", status: "skipped", problems: ["needs navvied-no-such-program"] });
+  });
+  test("a setup that fails is said so, and its teardown still runs", async () => {
+    const mark = join(state, "torn-down");
+    const v = await validateTask(made({ setup: "exit 4", teardown: `touch ${mark}` }, { "a": "x" }, { "a": "y" }));
+    expect(v.status).toBe("fail");
+    expect(v.problems[0]).toContain("its setup fails");
+    expect(existsSync(mark)).toBe(true);
+  });
+  test.skipIf(process.platform !== "linux")("a solution that leaves a process running is refused, and the process is stopped", async () => {
+    const sleeping = uniqueSleep();
+    const task = made({ check: "test -f done" }, { "a": "x" }, { "apply.sh": `touch done\n(${sleeping} >/dev/null 2>&1 &)\n` });
+    expect((await validateTask(task)).problems).toEqual(["the solution leaves a process running"]);
+    expect(await gone(sleeping)).toBe("");
+  });
+  test.skipIf(process.platform !== "linux")("a process that setup starts is part of the task: the solution has to stop it", async () => {
+    const task = made({ check: "! kill -0 $(cat pid) 2>/dev/null", setup: `${uniqueSleep()} >/dev/null 2>&1 & echo $! > pid` }, { "a": "x" }, { "apply.sh": "kill $(cat pid)\nsleep 0.3\n" });
+    expect(await validateTask(task)).toMatchObject({ status: "ok" });
   });
 });
 
@@ -73,8 +142,9 @@ describe("workspace", () => {
 });
 
 describe("running a task end to end", () => {
-  type Behaviour = "solve" | "lazy" | "tamper" | "down" | "hang";
+  type Behaviour = "solve" | "lazy" | "tamper" | "down" | "hang" | "shell";
   let behaviour: Behaviour = "solve";
+  let command = "true";
   let solution: Record<string, string> = {};
   let server: ReturnType<typeof Bun.serve>;
   const enc = new TextEncoder();
@@ -93,6 +163,7 @@ describe("running a task end to end", () => {
         if (behaviour === "hang") return new Promise<Response>(() => {});
         const written = body.messages.filter((m: any) => m.role === "tool").length;
         if (behaviour === "lazy") return say("I looked at it and everything seems fine.");
+        if (behaviour === "shell") return written === 0 ? sse([{ choices: [{ delta: { tool_calls: [{ index: 0, id: "c_sh", type: "function", function: { name: "Bash", arguments: JSON.stringify({ command }) } }] } }] }, { choices: [{ delta: {}, finish_reason: "tool_calls" }] }, usage]) : say("done");
         if (behaviour === "tamper") return written === 0 ? write("tests/range.test.ts", 'import { test } from "bun:test";\ntest("ok", () => {});\n') : say("done");
         const files = Object.entries(solution);
         const next = files[written];
@@ -104,6 +175,7 @@ describe("running a task end to end", () => {
 
   const env = () => ({ HOME: state, XDG_STATE_HOME: state, XDG_CONFIG_HOME: state, NAVVIED_BASE_URL: `http://127.0.0.1:${server.port}/v1`, NAVVIED_MODEL: "scripted", NAVVIED_WINDOW: "100000" });
   const run = (task: Task) => runTask(task, { command: ["bun", CLI], env: env() });
+  const pickMade = (task: Task) => { solution = {}; return task; };
   const pick = (id: string) => { const t = loadTasks(TASKS, [id])[0]!; solution = solutionFiles(t); return t; };
 
   test("a model that writes the right files solves the task, and the metrics reflect the work", async () => {
@@ -150,6 +222,28 @@ describe("running a task end to end", () => {
     expect(Date.now() - started).toBeLessThan(8000);
   });
 
+  test("the agent and the check share the secret of the run: an answer made in this run is solved", async () => {
+    behaviour = "shell";
+    command = 'echo "$BENCH_SECRET" > answer.txt';
+    const r = await run(pickMade(made({ check: 'test "$(cat answer.txt)" = "$BENCH_SECRET"' }, { "README.md": "x" }, { "apply.sh": "true\n" })));
+    expect(r).toMatchObject({ passed: true, reason: "solved", toolCalls: 1 });
+  });
+
+  test.skipIf(process.platform !== "linux")("a run that leaves a process behind is not solved, and the process is stopped", async () => {
+    behaviour = "shell";
+    const sleeping = uniqueSleep();
+    command = `touch done; (${sleeping} >/dev/null 2>&1 &); true`;
+    const r = await run(pickMade(made({ check: "test -f done" }, { "README.md": "x" }, { "apply.sh": "true\n" })));
+    expect(r).toMatchObject({ passed: false, reason: "left a process running" });
+    expect(await gone(sleeping)).toBe("");
+  });
+
+  test("a task whose program is missing is skipped without starting the agent, and a failing setup is its own reason", async () => {
+    const skipped = await run(made({ requires: ["navvied-no-such-program"] }, { "a": "x" }, { "a": "y" }));
+    expect(skipped).toMatchObject({ passed: false, reason: "skipped", error: "needs navvied-no-such-program", modelCalls: 0 });
+    expect(await run(made({ setup: "exit 5" }, { "a": "x" }, { "a": "y" }))).toMatchObject({ passed: false, reason: "setup failed" });
+  });
+
   test("the workspace can be kept for inspection, and is removed otherwise", async () => {
     behaviour = "solve";
     const kept = await runTask(pick("fix-off-by-one"), { command: ["bun", CLI], env: env(), keep: true });
@@ -174,6 +268,13 @@ describe("report", () => {
     const text = summarize([r("a", "m1", true), r("a", "m1", false), r("a", "m1", true), r("b", "m2", true)]);
     expect(text).toContain("| a | 2/3 | - |");
     expect(text).toContain("| b | - | pass |");
+  });
+  test("skipped tasks are named and left out of the rates", () => {
+    const skipped: TaskResult = { ...r("c", "m1", false), reason: "skipped", error: "needs gcc", modelCalls: 0 };
+    const text = summarize([r("a", "m1", true), skipped]);
+    expect(text).toContain("| m1 | 1/1 (100%) |");
+    expect(text).toContain("Skipped, not counted: c (needs gcc).");
+    expect(text).not.toContain("| c |");
   });
   test("no results is not an error", () => expect(() => summarize([])).not.toThrow());
 });

@@ -5,6 +5,7 @@ use navvied_desktop_core::spawn::OsSpawner;
 use navvied_desktop_core::supervisor::{Clock, Config, Event, Supervisor};
 use navvied_desktop_core::token::Token;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -45,8 +46,14 @@ pub struct Rig {
     pub clock: Arc<FakeClock>,
 }
 
+/// A fresh folder, never shared: two calls with the same `name` (as `real_navvied.rs`'s three tests all pass
+/// `"home"`) must never collide, because `cargo test` runs them as parallel threads of one process, so `name` and
+/// the process id alone are not unique — on a slower runner one call's `remove_dir_all` can delete what another
+/// call just made, and the next write to it answers "the path was not found" (seen on Windows CI).
 pub fn temp_dir(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("navvied-core-{name}-{}", std::process::id()));
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let d = std::env::temp_dir().join(format!("navvied-core-{name}-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
