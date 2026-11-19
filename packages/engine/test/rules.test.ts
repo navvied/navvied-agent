@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { win32 } from "node:path";
-import { Rules, hardBlock, parseRules, splitCommand } from "../src/index.ts";
+import { posix, win32 } from "node:path";
+import { Rules, hardBlock, parseRules, riskOf, splitCommand } from "../src/index.ts";
 import { cleanupAll, prompt, rig, until } from "./helpers.ts";
 
 afterAll(cleanupAll);
@@ -103,6 +103,47 @@ describe("on Windows", () => {
     }
     for (const file_path of ["src\\a.ts", "C:\\Users\\me\\Windows\\a.txt", "D:\\Programs\\a.txt", "/etc/passwd"]) expect(hardBlock("Write", { file_path }, here, win32)).toBeUndefined();
     expect(hardBlock("Edit", { file_path: "C:\\Users\\me\\AppData\\Roaming\\navvied\\config.json" }, here, win32)).toBe("this would change what the agent is allowed to do");
+  });
+});
+
+describe("where a file has one name in every case", () => {
+  const mac = { ...posix, caseless: true };
+  test("a rule written for .env holds for .ENV, on Windows and macOS, and not on Linux", () => {
+    const set = { allow: ["Edit(src/**)"], ask: [], deny: ["Edit(**/.env)"] };
+    for (const [paths, dir] of [[win32, "D:\\work\\project"], [mac, "/work/project"]] as const) {
+      const r = new Rules(set, dir, paths);
+      expect(r.check("Edit", { file_path: "src/config/.ENV" }).kind).toBe("deny");
+      expect(r.check("Edit", { file_path: "SRC/a.ts" }).kind).toBe("allow");
+    }
+    const linux = new Rules(set, "/work/project", posix);
+    expect(linux.check("Edit", { file_path: "src/config/.ENV" }).kind).toBe("allow");
+  });
+  test("the agent's own permissions and the system folders are the same file under any spelling", () => {
+    for (const [paths, dir, own, system] of [[win32, "D:\\p", "C:\\Users\\me\\.NAVVIED\\Permissions.JSON", "C:\\WINDOWS\\x"], [mac, "/p", "/Users/me/.Navvied/PERMISSIONS.json", "/ETC/passwd"]] as const) {
+      expect(hardBlock("Write", { file_path: own }, dir, paths)).toBe("this would change what the agent is allowed to do");
+      expect(hardBlock("Write", { file_path: system }, dir, paths)).toBe("this would change a system folder");
+    }
+    expect(hardBlock("Write", { file_path: "/ETC/passwd" }, "/p", posix)).toBeUndefined();
+  });
+  test("a setup file asks for approval under any spelling", () => {
+    expect(riskOf("Edit", { file_path: "C:\\Users\\me\\.GIT\\config" }, "D:\\p", win32)).toMatchObject({ key: "risk:protected-path" });
+    expect(riskOf("Edit", { file_path: "/Users/me/.SSH/id_rsa" }, "/p", mac)).toMatchObject({ key: "risk:protected-path" });
+    expect(riskOf("Edit", { file_path: "/home/me/.SSH/id_rsa" }, "/p", posix)).toBeUndefined();
+  });
+});
+
+describe("wiping a Windows computer", () => {
+  test("a drive, the system folders, a whole home folder and a disk format are stopped, in Git Bash, cmd and PowerShell", () => {
+    for (const c of ["rm -rf /c", "rm -rf /c/*", "rm -rf C:/", "rm -rf 'C:\\'", "rm -rf C:\\Windows", 'rm -r "C:\\Program Files"', "rm -rf /c/Users", "rm -rf /c/Users/me", "rm -rf C:\\Users\\me\\*",
+      "rd /s /q C:\\", "rmdir /s /q c:\\windows", "del /s /q C:\\*", "Remove-Item -Recurse -Force C:\\", "Remove-Item -Recurse -Force -Path C:\\Users\\me", "rm -r -fo $env:USERPROFILE", "ri -Recurse %USERPROFILE%",
+      "rd /s /q %SystemDrive%\\", "format C:", "Format-Volume -DriveLetter C", "Stop-Computer", "shutdown /s /t 0", "cmd /c rd /s /q C:\\", 'powershell -NoProfile -Command "Remove-Item -Recurse -Force C:\\"']) {
+      expect(hardBlock("Bash", { command: c }, cwd), c).toBeString();
+    }
+  });
+  test("ordinary clean-up in a project is not stopped", () => {
+    for (const c of ["rm -rf /c/Users/me/project/build", "rm -rf C:\\Users\\me\\project\\build", "rd /s /q build", "del file.txt", "Remove-Item -Recurse -Force .\\dist", "del /s /q C:\\Users\\me\\proj\\tmp", "Remove-Item C:\\Users\\me\\a.txt", "rm -rf /c/work/x"]) {
+      expect(hardBlock("Bash", { command: c }, cwd), c).toBeUndefined();
+    }
   });
 });
 

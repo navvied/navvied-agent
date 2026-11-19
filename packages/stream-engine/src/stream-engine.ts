@@ -4,7 +4,7 @@
  * sees or stores a token. It speaks the navvied protocol to the front-end and the agent's JSON-line stream to the process.
  */
 import { LineSplitter, RecentIds, type Command, type Effort, type EngineEvent, type ModelInfo, type PermMode, type PromptCommand } from "@navvied/protocol";
-import type { AgentEngine } from "@navvied/engine";
+import { launch, type AgentEngine } from "@navvied/engine";
 import { buildArgv } from "./argv.ts";
 import { Translator } from "./translate.ts";
 
@@ -173,7 +173,7 @@ export class StreamEngine implements AgentEngine {
     });
     let child: Child;
     try {
-      child = Bun.spawn(argv, { cwd: this.#o.cwd, env: { ...process.env, ...this.#o.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+      child = Bun.spawn(launch(argv), { cwd: this.#o.cwd, env: { ...process.env, ...this.#o.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
     } catch (e) {
       this.#emit({ ev: "error", msg: `Could not start "${this.#o.command}": ${e instanceof Error ? e.message : String(e)}` });
       this.#emit({ ev: "done", stop: "error" });

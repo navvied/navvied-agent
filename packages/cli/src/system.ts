@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { homedir } from "node:os";
-import { killTree, usesProcessGroups } from "@navvied/engine";
+import { killTree, launch, usesProcessGroups } from "@navvied/engine";
 import { delimiter, join } from "node:path";
 
 export interface RunOptions {
@@ -39,7 +39,8 @@ const CLIPBOARD_WRITERS: Record<string, string[][]> = {
 
 const OPENERS: Record<string, string[]> = {
   darwin: ["open"],
-  win32: ["cmd", "/c", "start", ""],
+  // Not `cmd /c start`: cmd reads the & of an address as the end of the command, so `#connect=…&key=…` lost its key.
+  win32: ["rundll32", "url.dll,FileProtocolHandler"],
   linux: ["xdg-open"],
 };
 
@@ -65,7 +66,8 @@ export function realSystem(env: Record<string, string | undefined>, platform: No
   const run: System["run"] = (argv, options = {}) => new Promise((resolve) => {
     let output = "";
     let settled = false;
-    const child = spawn(argv[0]!, argv.slice(1), { env: { ...env, PATH: path }, detached: usesProcessGroups(), windowsHide: true, stdio: [options.input ? "pipe" : "ignore", "pipe", "pipe"] });
+    const [program, ...args] = launch(argv);
+    const child = spawn(program!, args, { env: { ...env, PATH: path }, detached: usesProcessGroups(), windowsHide: true, stdio: [options.input ? "pipe" : "ignore", "pipe", "pipe"] });
     options.input?.((line) => { try { child.stdin?.write(`${line}\n`); } catch { /* the program has already ended */ } });
     guard(child);
     const stop = (): void => killTree(child);

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { realSystem } from "../src/system.ts";
 import { remove, tempDir } from "./helpers.ts";
@@ -66,5 +66,14 @@ describe.skipIf(!posix)("the computer, as the setup screens see it", () => {
     sys.open("javascript:alert(1)");
     expect(() => realSystem({ PATH: tmp() }, "linux").open("https://example.com")).not.toThrow();
     expect(() => sys.open("https://example.com/keys")).not.toThrow();
+  });
+
+  test("on Windows an address with & reaches the browser whole, as one argument and without a shell in between", async () => {
+    const dir = tmp(), log = join(dir, "opened.txt");
+    script(dir, "rundll32", `printf '%s|' "$@" > ${log}`);
+    realSystem({ PATH: dir }, "win32").open("https://beta.example/#connect=abc&key=def&x=1");
+    for (let i = 0; i < 50 && !existsSync(log); i++) await Bun.sleep(50);
+    await Bun.sleep(100);
+    expect(readFileSync(log, "utf8")).toBe("url.dll,FileProtocolHandler|https://beta.example/#connect=abc&key=def&x=1|");
   });
 });

@@ -1,7 +1,10 @@
 import nativePath from "node:path";
 
 /** The path rules of the computer the files are on; tests pass the other system's. */
-export type Paths = Pick<typeof nativePath, "isAbsolute" | "relative" | "resolve">;
+export type Paths = Pick<typeof nativePath, "isAbsolute" | "relative" | "resolve" | "sep"> & { caseless?: boolean };
+
+/** Windows and macOS keep one file under every spelling of its name (`.ENV` is `.env`), so a rule written for one must hold for all. */
+export const caselessFor = (p: Paths): boolean => p.caseless ?? (p.sep === "\\" || (p === nativePath && process.platform === "darwin"));
 
 /**
  * Permission rules the person writes in their own configuration: what the agent may always do, must always ask about, and may never do.
@@ -35,7 +38,7 @@ export const hasRules = (r: RuleSet): boolean => r.allow.length + r.ask.length +
 const escape = (s: string): string => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
 
 /** A pattern as a test. In a command `*` is anything; in a path `*` is anything but a slash and `**` anything. A trailing ` *` also matches the bare command. */
-function matcher(pattern: string, path: boolean): RegExp {
+function matcher(pattern: string, path: boolean, caseless = false): RegExp {
   let source = "";
   const bare = !path && pattern.endsWith(" *");
   const body = bare ? pattern.slice(0, -2) : pattern;
@@ -45,7 +48,7 @@ function matcher(pattern: string, path: boolean): RegExp {
       if (path && body[i + 1] === "*") { source += ".*"; i++; if (body[i + 1] === "/") i++; } else source += path ? "[^/]*" : ".*";
     } else source += escape(c);
   }
-  return new RegExp(`^${source}${bare ? "( .*)?" : ""}$`, "s");
+  return new RegExp(`^${source}${bare ? "( .*)?" : ""}$`, caseless ? "si" : "s");
 }
 
 /** The parts of a command that run separately. Substitutions are not taken apart: see `opaque`. */
@@ -77,7 +80,7 @@ function covers(tool: string, pattern: string | undefined, subject: string, cwd:
   }
   if (tool === "Bash") return matcher(pattern, false).test(subject);
   // An outside path is whole and, on Windows, starts with a drive: the pattern is made whole the same way.
-  return matcher(p.isAbsolute(pattern) ? p.resolve(cwd, pattern).replace(/\\/g, "/") : pattern, true).test(subject);
+  return matcher(p.isAbsolute(pattern) ? p.resolve(cwd, pattern).replace(/\\/g, "/") : pattern, true, caselessFor(p)).test(subject);
 }
 
 export class Rules {
@@ -116,26 +119,43 @@ interface Parsed { text: string; tool: string; pattern: string | undefined }
 /** The files that hold what the agent may do: it can never change its own permissions, whatever the mode. */
 const OWN_PERMISSIONS = /(^|\/)(\.navvied\/permissions\.json|navvied\/config\.json)$/;
 const SYSTEM_DIRS = /^\/(etc|boot|usr|bin|sbin|lib|lib64|System|dev|proc|sys)(\/|$)/;
+/** The same patterns for a computer that does not tell `ETC` from `etc`. */
+const folded = (re: RegExp): RegExp => new RegExp(re.source, "i");
+const OWN_PERMISSIONS_CASELESS = folded(OWN_PERMISSIONS), SYSTEM_DIRS_CASELESS = folded(SYSTEM_DIRS);
 const WINDOWS_SYSTEM_DIRS = /^[a-z]:\/(windows|program files|program files \(x86\)|programdata)(\/|$)/i;
 
 /** What `rm -r` must never be pointed at: the disk, the home folder, or a whole system folder. */
 const WHOLE = /^(\/|~|\$HOME|\/\*|~\/\*|\$HOME\/\*|\/(etc|boot|usr|bin|sbin|lib|lib64|var|opt|root|home|System|Library|Applications|dev|proc|sys)\/?\*?)$/;
 
+/**
+ * What a delete must never be pointed at on Windows, in any of its shells: a drive (`C:`, `/c` in Git Bash), the folders every
+ * Windows install is made of, a user's whole home folder, or the variables that stand for them. Spelt with `/` or `\\`, in any case.
+ */
+const DRIVE = String.raw`(?:[a-z]:|/[a-z])`;
+const SPELLED = String.raw`(?:%(?:userprofile|systemdrive|homedrive|homepath|windir|systemroot)%|\$env:(?:userprofile|systemdrive|homedrive|windir|systemroot)|\$\{?(?:userprofile|systemdrive)\}?)`;
+const WINDOWS_WHOLE = new RegExp(String.raw`(?:^|\s)(?:${SPELLED}|${DRIVE}(?:/(?:windows|programdata|program files(?: \(x86\))?|users(?:/[^/\s]+)?))?)/?\*?(?=\s|$)`);
+
 /** The reason a shell command may never run, or nothing. A command inside `sh -c '…'` is looked at too, and quotes do not hide a path. */
 function blockedCommand(command: string, depth = 0): string | undefined {
   for (const part of splitCommand(command)) {
     const plain = part.replace(/^(sudo|doas|env)\s+/, "").trim();
-    const inner = /^(?:ba|z|da|k)?sh\s+-[a-z]*c\s+(["'])([\s\S]*)\1\s*$/.exec(plain)?.[2];
+    const inner = /^(?:ba|z|da|k)?sh\s+-[a-z]*c\s+(["'])([\s\S]*)\1\s*$/.exec(plain)?.[2]
+      ?? /^cmd(?:\.exe)?\s+(?:\/[a-z]\s+)*\/[ck]\s+(["']?)([\s\S]*?)\1\s*$/i.exec(plain)?.[2]
+      ?? /^(?:powershell|pwsh)(?:\.exe)?\s+(?:-\S+\s+)*?-c(?:ommand)?\s+(["']?)([\s\S]*?)\1\s*$/i.exec(plain)?.[2];
     if (inner !== undefined && depth < 3) { const why = blockedCommand(inner, depth + 1); if (why) return why; }
     const words = plain.replace(/["']/g, "");
-    if (/^rm\s/.test(words)) {
+    if (/^(rm|ri|rmdir|rd|del|erase|remove-item)\s/i.test(words)) {
       const args = words.split(/\s+/).slice(1);
-      const recursive = args.some((a) => /^-[a-zA-Z]*[rR]/.test(a) || a === "--recursive");
-      if (recursive && args.some((a) => !a.startsWith("-") && WHOLE.test(a))) return "this would delete the whole home folder, a system folder or the whole disk";
+      const recursive = args.some((a) => /^-[a-zA-Z]*[rR]/.test(a) || a === "--recursive" || /^\/s$/i.test(a));
+      // `/q` after rd, rmdir, del or erase is a switch, not the folder /q.
+      const targets = /^(rm|ri|remove-item)\s/i.test(words) ? args : args.filter((a) => !/^\/[a-z]$/i.test(a));
+      const everything = args.some((a) => !a.startsWith("-") && WHOLE.test(a)) || WINDOWS_WHOLE.test(targets.join(" ").toLowerCase().replace(/\\/g, "/"));
+      if (recursive && everything) return "this would delete the whole home folder, a system folder or the whole disk";
     }
+    if (/^format(\.com)?\s+[a-z]:/i.test(words) || /^(format-volume|clear-disk|remove-partition)(\s|$)/i.test(words)) return "this would format a disk";
     if (/^mkfs(\.|\s|$)/.test(words)) return "this would format a disk";
     if (/^dd\s.*\bof=\/dev\/(sd|nvme|hd|vd|disk|mmcblk)/.test(words)) return "this would overwrite a disk";
-    if (/^(shutdown|reboot|halt|poweroff)(\s|$)/.test(words)) return "this would switch the computer off";
+    if (/^(shutdown|reboot|halt|poweroff|stop-computer|restart-computer)(\s|$)/i.test(words)) return "this would switch the computer off";
     if (/^chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)\S+\s+\/(\s|$)/.test(words) || /^chown\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)\S+\s+\/(\s|$)/.test(words)) return "this would change the rights of every file on the computer";
     if (/>\s*\/dev\/(sd|nvme|hd|vd|disk|mmcblk)/.test(words)) return "this would overwrite a disk";
     if (/^kill\s+(?:-\S+\s+)*-1(\s|$)/.test(words)) return "this would stop every program you have running";
@@ -155,8 +175,9 @@ export function hardBlock(tool: string, args: Record<string, unknown>, cwd: stri
     const file = args.file_path;
     if (typeof file === "string") {
       const full = p.resolve(cwd, file).replace(/\\/g, "/");
-      if (SYSTEM_DIRS.test(full) || WINDOWS_SYSTEM_DIRS.test(full)) return "this would change a system folder";
-      if (OWN_PERMISSIONS.test(full)) return "this would change what the agent is allowed to do";
+      const caseless = caselessFor(p);
+      if ((caseless ? SYSTEM_DIRS_CASELESS : SYSTEM_DIRS).test(full) || WINDOWS_SYSTEM_DIRS.test(full)) return "this would change a system folder";
+      if ((caseless ? OWN_PERMISSIONS_CASELESS : OWN_PERMISSIONS).test(full)) return "this would change what the agent is allowed to do";
     }
   }
   return undefined;

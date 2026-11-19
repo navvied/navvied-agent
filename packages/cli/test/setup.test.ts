@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { autoUpdate } from "../src/commands/auto-update.ts";
 import { findLocalServers, reachable } from "../src/commands/init.ts";
@@ -103,6 +103,19 @@ describe("navvied update", () => {
     expect(await updateProgram({ ...target(exe), os: "windows" })).toBe("updated");
     expect(readFileSync(exe, "utf8")).toBe("new exe");
     expect(readFileSync(`${exe}.old`, "utf8")).toBe("old exe");
+  });
+  test("on Windows a copy from the last update that cannot be removed (still running) does not stop the update", async () => {
+    files = { "/rel/navvied-windows-x64.exe": "new exe", "/rel/SHA256SUMS": `${sha("new exe")}  navvied-windows-x64.exe\n` };
+    const exe = join(tmp(), "navvied.exe");
+    writeFileSync(exe, "old exe");
+    // A folder stands for a file the system will not let go of: removing it as a file fails.
+    mkdirSync(`${exe}.old`);
+    writeFileSync(join(`${exe}.old`, "held"), "running");
+    expect(await updateProgram({ ...target(exe), os: "windows" })).toBe("updated");
+    expect(readFileSync(exe, "utf8")).toBe("new exe");
+    const aside = readdirSync(join(exe, "..")).filter((n) => n.startsWith("navvied.exe.old."));
+    expect(aside).toHaveLength(1);
+    expect(readFileSync(join(exe, "..", aside[0]!), "utf8")).toBe("old exe");
   });
   test("updates can be turned off from outside, for a program that is updated by whatever installed it", async () => {
     const f = fakeIO({ env: { NAVVIED_NO_UPDATE: "1" } });

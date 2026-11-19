@@ -1,0 +1,3 @@
+# One line ending everywhere. A Windows checkout would otherwise turn every file into CRLF, and bash cannot run a script with CRLF
+# endings; the fingerprints of generated files are also taken over the LF text.
+* text=auto eol=lf

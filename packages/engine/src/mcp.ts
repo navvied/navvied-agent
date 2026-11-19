@@ -3,7 +3,7 @@
  * JSON lines over its standard input and output. Its tools join the engine's own, named `mcp__<server>__<tool>`.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { killTree, usesProcessGroups } from "./platform.ts";
+import { killTree, launch, usesProcessGroups } from "./platform.ts";
 import type { Tool } from "./types.ts";
 import { clip } from "./tools/util.ts";
 
@@ -156,7 +156,8 @@ export class McpClient implements McpLike {
   /** Starts the server and completes the handshake, or throws with the reason. */
   static async start(name: string, config: McpServerConfig): Promise<McpClient> {
     if (!config.command) throw new Error("a connected program needs a command or an address");
-    const child = spawn(config.command, config.args ?? [], { cwd: config.cwd, env: { ...process.env, ...config.env }, detached: usesProcessGroups(), windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    const [program, ...args] = launch([config.command, ...(config.args ?? [])]);
+    const child = spawn(program!, args, { cwd: config.cwd, env: { ...process.env, ...config.env }, detached: usesProcessGroups(), windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     const client = new McpClient(name, child);
     try {
       await client.#request("initialize", { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: "navvied", version: "1" } }, HANDSHAKE_MS);

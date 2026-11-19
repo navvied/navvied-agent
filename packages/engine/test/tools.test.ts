@@ -95,6 +95,25 @@ describe("Write and Edit", () => {
   });
 });
 
+describe("Edit on a file of CRLF lines", () => {
+  test("a piece of several lines, written as a model writes lines, is found and the file stays CRLF", async () => {
+    const d = workdir();
+    const f = join(d, "win.txt");
+    writeFileSync(f, "one\r\ntwo\r\nthree\r\n");
+    expect(await tool("Edit").run({ file_path: f, old_string: "one\ntwo", new_string: "uno\ndos\ntres" }, ctx(d))).toMatch(/Edited .* at line 1/);
+    expect(readFileSync(f, "utf8")).toBe("uno\r\ndos\r\ntres\r\nthree\r\n");
+    expect(await tool("Edit").run({ file_path: f, old_string: "dos\r\ntres", new_string: "2\n3" }, ctx(d))).toMatch(/Edited/);
+    expect(readFileSync(f, "utf8")).toBe("uno\r\n2\r\n3\r\nthree\r\n");
+  });
+  test("a file with mixed endings is matched exactly and keeps them", async () => {
+    const d = workdir();
+    const f = join(d, "mixed.txt");
+    writeFileSync(f, "a\r\nb\nc\r\n");
+    expect(await tool("Edit").run({ file_path: f, old_string: "b\nc", new_string: "B\nC" }, ctx(d))).toMatch(/Edited/);
+    expect(readFileSync(f, "utf8")).toBe("a\r\nB\nC\r\n");
+  });
+});
+
 describe("Bash", () => {
   test("reports output and the exit code, in the working directory", async () => {
     const d = workdir();
