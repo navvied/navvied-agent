@@ -1,11 +1,15 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { createHub } from "../src/commands/hub.ts";
 import { fakeIO, remove, startMockModel, tempDir, until } from "./helpers.ts";
 
 let mock: ReturnType<typeof startMockModel>;
 const dirs: string[] = [];
+const hubs: { stop(): Promise<void> }[] = [];
+// The scripted model answers slowly on purpose and the tests wait up to 30 s for it; the default five seconds is shorter than that wait.
+setDefaultTimeout(60_000);
 beforeAll(() => { mock = startMockModel(); });
-afterAll(() => { mock.stop(); dirs.forEach(remove); });
+// Every hub is stopped before its folders are removed, also one whose test stopped early: a running hub holds its files open.
+afterAll(async () => { await Promise.all(hubs.map((h) => h.stop())); mock.stop(); dirs.forEach(remove); });
 
 type Ev = { ev: string; id?: string; bg?: string; items?: { id: string; state?: string; unread?: boolean; running?: boolean }[]; msg?: string; text?: string; qid?: string; [k: string]: unknown };
 
@@ -14,6 +18,7 @@ function open() {
   dirs.push(state, work);
   const env = { HOME: state, XDG_STATE_HOME: state, XDG_CONFIG_HOME: state, NAVVIED_BASE_URL: mock.url, NAVVIED_MODEL: "mock-model", NAVVIED_WINDOW: "100000" };
   const hub = createHub({ json: false, yes: false, thinking: false, cwd: work } as never, fakeIO({ env }).io, { watch: false });
+  hubs.push(hub);
   const got: Ev[] = [];
   hub.attach({ send: (line) => { got.push(JSON.parse(String(line))); } }, 0);
   const send = (cmd: object): void => hub.command(JSON.stringify(cmd), () => undefined);

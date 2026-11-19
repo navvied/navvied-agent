@@ -42,7 +42,7 @@ const HOOK_EVENTS = ["PreToolUse", "PostToolUse", "Stop", "UserPromptSubmit", "S
 
 /** Where the Bash tool may run its commands besides this computer. The host and the image are set here, never from a page. */
 export interface TerminalConfig { docker?: { image?: string }; ssh?: { host: string; user?: string; dir?: string } }
-export interface ConfigFile { default?: string; terminal?: TerminalConfig; /** Folders an agent may be started in, besides the one the program starts in and the ones worked in lately. Added here, never from a page. */ folders?: string[]; /** `false`: do not use the free models of navvied.com without an account (the default is to use them, as listed by the server). */ guestModels?: boolean; /** `list` (default): every step is one line, a failure or a change shows more. `fold`: steps that went well are folded away. `all`: everything every step printed. */ steps?: "list" | "fold" | "all"; /** Models to use, in this order, when the one chosen cannot be reached (names of entries in `models`). */ fallback?: string[]; theme?: string; accent?: string; autoUpdate?: boolean; models: Record<string, ModelEntry>; mcp?: Record<string, McpEntry>; hooks?: HookConfig; /** `false` keeps this computer's conversations off the account (default: they are kept there while signed in) */ syncConversations?: boolean; /** allow / ask / deny rules; see docs/CLI.md */ permissions?: RuleSet }
+export interface ConfigFile { default?: string; terminal?: TerminalConfig; /** Folders an agent may be started in, besides the one the program starts in and the ones worked in lately. Added here, never from a page. */ folders?: string[]; /** `false`: do not use the free models of navvied.com without an account (the default is to use them, as listed by the server). */ guestModels?: boolean; /** `list` (default): every step is one line, a failure or a change shows more. `fold`: steps that went well are folded away. `all`: everything every step printed. */ steps?: "list" | "fold" | "all"; /** Models to use, in this order, when the one chosen cannot be reached (names of entries in `models`). */ fallback?: string[]; theme?: string; accent?: string; autoUpdate?: boolean; /** Where a hosted session reaches the web, and the token to ask with. Written by the service that runs the session. */ webProxy?: { url: string; token: string }; models: Record<string, ModelEntry>; mcp?: Record<string, McpEntry>; hooks?: HookConfig; /** `false` keeps this computer's conversations off the account (default: they are kept there while signed in) */ syncConversations?: boolean; /** allow / ask / deny rules; see docs/CLI.md */ permissions?: RuleSet }
 
 export interface ResolvedModel {
   name: string;
@@ -237,6 +237,11 @@ function loadConfigFile(path: string): Result<ConfigFile | null> {
   if (raw.folders !== undefined) {
     if (!Array.isArray(raw.folders) || raw.folders.some((f) => typeof f !== "string")) return { ok: false, error: `${path}: "folders" must be a list of folder paths` };
     config.folders = raw.folders as string[];
+  }
+  if (raw.webProxy !== undefined) {
+    const w = raw.webProxy as Record<string, unknown> | null;
+    if (typeof w !== "object" || w === null || typeof w.url !== "string" || typeof w.token !== "string" || !/^https?:\/\//.test(w.url) || !w.token) return { ok: false, error: `${path}: "webProxy" needs a web address in "url" and a "token"` };
+    config.webProxy = { url: w.url.replace(/\/+$/, ""), token: w.token };
   }
   if (raw.guestModels !== undefined) {
     if (typeof raw.guestModels !== "boolean") return { ok: false, error: `${path}: "guestModels" must be true or false` };

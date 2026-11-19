@@ -18,6 +18,23 @@ function setup(extra: Record<string, string> = {}) {
   return { env, work, state };
 }
 
+describe("a hosted session's web access", () => {
+  test("the service named in the configuration answers WebFetch, with the session's token, and the token is not shown", async () => {
+    const seen: { auth: string | null; body: unknown }[] = [];
+    const service = Bun.serve({ port: 0, async fetch(req) { seen.push({ auth: req.headers.get("authorization"), body: await req.json() }); return Response.json({ status: 200, contentType: "text/plain", text: "page from the service" }); } });
+    try {
+      const { env, work, state } = setup();
+      const config = join(state, "hosted.json");
+      writeFileSync(config, JSON.stringify({ default: "m", models: { m: { baseUrl: mock.url, api: "chat", model: "mock-model", apiKey: "test-key", window: 100000 } }, webProxy: { url: `http://127.0.0.1:${service.port}/v1/web`, token: "grant-xyz" } }));
+      const f = fakeIO({ env });
+      expect(await main(["run", "fetch https://never-resolves.invalid/", "--cwd", work, "--config", config], f.io)).toBe(0);
+      expect(seen).toEqual([{ auth: "Bearer grant-xyz", body: { url: "https://never-resolves.invalid/" } }]);
+      expect(f.out() + f.err()).toContain("page from the service");
+      expect(f.out() + f.err()).not.toContain("grant-xyz");
+    } finally { service.stop(true); }
+  });
+});
+
 describe("run", () => {
   test("does the task, prints the answer on stdout and the steps on stderr, exits 0", async () => {
     const { env, work } = setup();
