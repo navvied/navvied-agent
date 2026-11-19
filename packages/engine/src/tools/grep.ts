@@ -41,13 +41,13 @@ function searchHere(root: string, pattern: string, insensitive: boolean, only: s
 export const grep: Tool = {
   name: "Grep",
   readOnly: true,
-  description: "Search file contents with a regular expression. Returns file:line:text for each match.",
+  description: "Search file contents with a regular expression: file:line:text for each match.",
   parameters: {
     type: "object",
     properties: {
       pattern: { type: "string" },
-      path: { type: "string", description: "directory or file (default: working directory)" },
-      glob: { type: "string", description: 'only files matching this pattern, e.g. "*.ts"' },
+      path: { type: "string" },
+      glob: { type: "string" },
       ignore_case: { type: "boolean" },
     },
     required: ["pattern"],

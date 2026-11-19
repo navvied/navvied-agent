@@ -10,13 +10,13 @@ const MAX_DOCUMENT_BYTES = 40_000_000;
 export const read: Tool = {
   name: "Read",
   readOnly: true,
-  description: "Read a text file (or the text of a Word, Excel, PowerPoint or PDF file). Returns numbered lines. Use offset and limit for large files.",
+  description: "Read a file, with line numbers (Word, Excel, PowerPoint and PDF files too). Give offset and limit for a part.",
   parameters: {
     type: "object",
     properties: {
       file_path: { type: "string" },
-      offset: { type: "number", description: "1-based first line" },
-      limit: { type: "number", description: "maximum lines (default 2000)" },
+      offset: { type: "number" },
+      limit: { type: "number" },
     },
     required: ["file_path"],
   },

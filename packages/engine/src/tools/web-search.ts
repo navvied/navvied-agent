@@ -44,8 +44,8 @@ const format = (query: string, hits: SearchHit[]): string =>
 export const webSearch: Tool = {
   name: "WebSearch",
   readOnly: true,
-  offeredWhen: ({ small, userText }) => !small || /\b(search|web|internet|online|latest|news|price|look up|google)\b/i.test(userText),
-  description: "Search the web and return titles, addresses and short summaries. Fetch a result with WebFetch to read it.",
+  offeredWhen: ({ userText, chat }) => chat === true || /\b(search|internet|online|on the web|latest|news|price|look up|google)\b/i.test(userText),
+  description: "Search the web: titles, addresses and short summaries.",
   parameters: { type: "object", properties: { query: { type: "string" }, max_results: { type: "number" } }, required: ["query"] },
   title: (a) => `Search the web for ${str(a.query)}`,
   async run(a, ctx) {

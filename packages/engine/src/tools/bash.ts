@@ -19,16 +19,15 @@ function exitNote(command: string, code: number | null): string {
 export const bash: Tool = {
   name: "Bash",
   readOnly: false,
-  description: `Run a ${shell.name} command in the working directory. Output is shortened if long. Default timeout 120 s, maximum 600 s. For a server or a watcher that must keep running, set run_in_background and read it later with BashOutput. Every call starts a fresh shell: use cwd, not cd, and variables do not carry over; nothing can be typed to a command, so never wait for input. A command still running at its timeout is not killed: it goes on as a job.`,
+  description: `Run a ${shell.name} command: a fresh shell each time, so use cwd, not cd. Long output is shortened; a command still running at its timeout goes on as a job.`,
   parameters: {
     type: "object",
     properties: {
       command: { type: "string" },
-      cwd: { type: "string", description: "folder to run in, for this command only; use it instead of cd" },
+      cwd: { type: "string" },
       timeout: { type: "number", description: "seconds" },
-      description: { type: "string", description: "what the command does, in a few words" },
-      run_in_background: { type: "boolean", description: "keep it running after this step; read it with BashOutput, stop it with KillShell" },
-      interactive: { type: "boolean", description: "for a program you must type to (a REPL, an installer with questions): it runs in the background in a terminal, and you type with BashInput" },
+      run_in_background: { type: "boolean", description: "keep it running: BashOutput reads it, KillShell stops it" },
+      interactive: { type: "boolean", description: "a program you type to, with BashInput" },
     },
     required: ["command"],
   },

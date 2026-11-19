@@ -40,7 +40,7 @@ describe("in the engine", () => {
 
   test("the agent sees what each helper is for, and a named one works with its own instructions", async () => {
     const r = rig(asks({ agent: "reviewer", prompt: "check a.ts" }), { agents: defs });
-    await r.turn(prompt("review it", { mode: "auto" }));
+    await r.turn(prompt("research and review it", { mode: "auto" }));
     const first = r.provider.requests[0]!;
     expect(JSON.stringify(first.tools)).toContain("reviewer: Reviews a change for bugs");
     const helperCall = r.provider.requests.find((q) => q.system.includes('the helper "reviewer"'))!;
@@ -50,7 +50,7 @@ describe("in the engine", () => {
   });
   test("an unknown helper is refused in plain words", async () => {
     const r = rig(asks({ agent: "nobody", prompt: "x" }), { agents: defs });
-    await r.turn(prompt("go", { mode: "auto" }));
+    await r.turn(prompt("go and research it", { mode: "auto" }));
     expect(r.events.some((e) => e.ev === "tool" && e.status === "error" && /no helper "nobody"/.test(e.output ?? ""))).toBe(true);
     r.cleanup();
   });
@@ -60,7 +60,7 @@ describe("in the engine", () => {
       return n === 0 && req.messages.length === 1 ? { calls: [{ name: "Agent", args: { prompt: "one" } }, { name: "Agent", args: { prompt: "two" } }] } : { text: "both back" };
     }, { agents: defs });
     const t0 = Date.now();
-    r.engine.handle(prompt("look twice", { mode: "auto" }));
+    r.engine.handle(prompt("research twice", { mode: "auto" }));
     await r.engine.idle();
     expect(Date.now() - t0).toBeLessThan(560); // one after the other would take at least 600
     expect(r.of("text").map((e) => e.text).join("")).toContain("both back");

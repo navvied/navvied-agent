@@ -1,0 +1,18 @@
+{
+  "id": "term-interactive-installer",
+  "title": "Answer an installer's questions",
+  "kind": "terminal",
+  "level": 2,
+  "lang": "sh",
+  "requires": [
+    "python3",
+    "bash"
+  ],
+  "prompt": "Run `bash install.sh` and answer its three questions: the project name is demo, the port is 8123, and yes to metrics. It writes config.ini.",
+  "check": "test \"$(cat config.ini)\" = \"$(printf \"name=demo\\nport=8123\\nmetrics=y\\ntoken=$(python3 -c \"import hashlib,os,sys; print(hashlib.sha1((os.environ['BENCH_SECRET']+sys.argv[1]).encode()).hexdigest()[:12])\" inst)\")\"",
+  "protect": [
+    "install.sh"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 300
+}

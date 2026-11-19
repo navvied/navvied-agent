@@ -89,7 +89,7 @@ export interface Tool extends ToolSpec {
   /** Read-only tools never need approval and are the only ones offered in plan mode. */
   readOnly: boolean;
   /** Whether to offer this tool now. A small model is easily led astray by tools it does not need, so some are offered only when the conversation calls for them. */
-  offeredWhen?(situation: { small: boolean; userText: string; jobs: number; /** Running commands that can be typed to. */ typable?: number; skills?: number; /** Earlier conversations can be looked through. */ recall?: boolean }): boolean;
+  offeredWhen?(situation: { small: boolean; userText: string; jobs: number; /** Steps taken so far in this turn. */ steps?: number; /** A conversation, not work on a project. */ chat?: boolean; /** Running commands that can be typed to. */ typable?: number; skills?: number; /** Earlier conversations can be looked through. */ recall?: boolean }): boolean;
   title(args: Record<string, unknown>): string;
   run(args: Record<string, unknown>, ctx: ToolContext): Promise<string>;
 }

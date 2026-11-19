@@ -6,7 +6,7 @@ import { place, str } from "./util.ts";
 export const write: Tool = {
   name: "Write",
   readOnly: false,
-  description: "Create a file, or overwrite it completely, with the given content.",
+  description: "Create a file, or replace it whole.",
   parameters: {
     type: "object",
     properties: { file_path: { type: "string" }, content: { type: "string" } },

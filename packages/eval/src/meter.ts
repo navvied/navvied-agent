@@ -63,6 +63,9 @@ export function startMeter(upstream: string): Meter {
   const basePath = target.pathname.replace(/\/+$/, "");
   const hits = new Map<string, Hit[]>();
   const open = new Map<string, number>();
+  // One request at a time reaches the model, whatever the agent does: a model on a machine that also does other work is not to be loaded harder.
+  let tail: Promise<void> = Promise.resolve();
+  const enter = async (): Promise<() => void> => { let release!: () => void; const before = tail; tail = new Promise<void>((r) => { release = r; }); await before; return release; };
   const opened = (run: string, by: number): void => { open.set(run, (open.get(run) ?? 0) + by); };
 
   const server = Bun.serve({
@@ -77,19 +80,21 @@ export function startMeter(upstream: string): Meter {
       const raw = req.method === "GET" || req.method === "HEAD" ? undefined : new Uint8Array(await req.arrayBuffer());
       let parsed: unknown;
       try { parsed = raw ? JSON.parse(new TextDecoder().decode(raw)) : undefined; } catch { /* not JSON: passed on as it is */ }
+      const counted = /\/(chat\/completions|messages)$/.test(path) && parsed !== undefined;
+      const release = counted ? await enter() : () => undefined;
       const headers = new Headers(req.headers);
       for (const h of ["host", "content-length", "accept-encoding"]) headers.delete(h);
       let res: Response;
       try {
         res = await fetch(`${target.origin}${path}${url.search}`, { method: req.method, headers, ...(raw ? { body: raw } : {}), signal: req.signal });
       } catch (e) {
+        release();
         record(run, { at: started, path, stream: false, requestBytes: raw?.length ?? 0, ...weigh(path, parsed), inTokens: 0, outTokens: 0, estimated: true, status: 502, ms: Date.now() - started });
         return new Response(`the counter could not reach the model: ${e instanceof Error ? e.message : String(e)}`, { status: 502 });
       }
-      const counted = /\/(chat\/completions|messages)$/.test(path) && parsed !== undefined;
       const out = new Headers(res.headers);
       for (const h of ["content-encoding", "content-length", "transfer-encoding"]) out.delete(h);
-      if (!counted || !res.body) { opened(run, -1); return new Response(res.body, { status: res.status, headers: out }); }
+      if (!counted || !res.body) { release(); opened(run, -1); return new Response(res.body, { status: res.status, headers: out }); }
       const stream = (res.headers.get("content-type") ?? "").includes("event-stream");
       const [toClient, toCounter] = res.body.tee();
       void (async () => {
@@ -115,6 +120,7 @@ export function startMeter(upstream: string): Meter {
         } catch { /* the client went away: what was seen is counted */ }
         const bytes = raw?.length ?? 0;
         record(run, { at: started, path, stream, requestBytes: bytes, ...weigh(path, parsed), inTokens: got.in ?? Math.ceil(bytes / 4), outTokens: got.out ?? 0, estimated: got.in === undefined || got.out === undefined, status: res.status, ms: Date.now() - started });
+        release();
       })();
       return new Response(toClient, { status: res.status, headers: out });
     },

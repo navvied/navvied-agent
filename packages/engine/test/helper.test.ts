@@ -17,7 +17,7 @@ describe("a helper", () => {
       return { calls: [{ name: "Read", args: { file_path: join(dir, "notes.txt") } }] };
     });
     writeFileSync(join(r.dir, "notes.txt"), "buy milk\n");
-    await r.turn(prompt("what do my notes say?"));
+    await r.turn(prompt("research what my notes say"));
     const events = r.events;
     const ask = events.find((e) => e.ev === "tool" && e.name === "Agent" && e.status === "running" && e.input !== undefined);
     expect(ask).toBeDefined();
@@ -39,7 +39,7 @@ describe("a helper", () => {
       seen.push(req);
       return { text: "looked" };
     });
-    await r.turn(prompt("secret context that the helper must not see"));
+    await r.turn(prompt("research this: secret context that the helper must not see"));
     expect(seen).toHaveLength(1);
     const helper = seen[0]!;
     expect(JSON.stringify(helper.messages)).toContain("Look around.");
@@ -53,19 +53,21 @@ describe("a helper", () => {
   test("it is offered to a capable model but not to a small one, and an empty task is refused", async () => {
     const big = rig(() => ({ text: "x" }));
     await big.turn(prompt("hi"));
-    expect(big.provider.requests[0]!.tools.map((t) => t.name)).toContain("Agent");
+    expect(big.provider.requests[0]!.tools.map((t) => t.name)).not.toContain("Agent");
+    await big.turn(prompt("investigate where the slowness comes from"));
+    expect(big.provider.requests[1]!.tools.map((t) => t.name)).toContain("Agent");
     const small = rig(() => ({ text: "x" }), { window: 8_000 });
     await small.turn(prompt("hi"));
     expect(small.provider.requests[0]!.tools.map((t) => t.name)).not.toContain("Agent");
     const refused = rig((req) => (isMain(req) && req.messages.at(-1)?.role !== "tool" ? { calls: [{ name: "Agent", args: { prompt: "  " } }] } : { text: "ok" }));
-    await refused.turn(prompt("go"));
+    await refused.turn(prompt("go and research it"));
     expect(refused.of("tool").find((e) => e.name === "Agent" && e.status === "error")!.output).toBe("Error: the task is empty.");
     for (const x of [big, small, refused]) x.cleanup();
   });
 
   test("stopping the turn stops the helper and says so", async () => {
     const r = rig((req) => (isMain(req) ? (req.messages.at(-1)?.role === "tool" ? { text: "stopped" } : { calls: [{ name: "Agent", args: { prompt: "Take your time." } }] }) : { text: "slow", delayMs: 5000 }));
-    r.send(prompt("go"));
+    r.send(prompt("go and research it"));
     await until(() => r.of("tool").some((e) => e.parent !== undefined) || r.provider.requests.length >= 2, 3000);
     r.send({ cmd: "cancel" });
     await r.engine.idle();
@@ -75,10 +77,10 @@ describe("a helper", () => {
 
   test("a helper that writes no answer is told so, and one that hits a problem reports it", async () => {
     const quiet = rig((req) => (isMain(req) ? (req.messages.at(-1)?.role === "tool" ? { text: `got: ${last(req)}` } : { calls: [{ name: "Agent", args: { prompt: "x" } }] }) : { text: "" }));
-    await quiet.turn(prompt("go"));
+    await quiet.turn(prompt("go and research it"));
     expect(quiet.text()).toContain("The helper wrote no answer.");
     const broken = rig((req) => (isMain(req) ? (req.messages.at(-1)?.role === "tool" ? { text: `got: ${last(req)}` } : { calls: [{ name: "Agent", args: { prompt: "x" } }] }) : { fail: "the model is down" }));
-    await broken.turn(prompt("go"));
+    await broken.turn(prompt("go and research it"));
     expect(broken.text()).toContain("the helper had a problem");
     quiet.cleanup(); broken.cleanup();
   });

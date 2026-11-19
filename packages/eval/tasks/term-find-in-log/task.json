@@ -1,0 +1,18 @@
+{
+  "id": "term-find-in-log",
+  "title": "Find the failed request in a very long log",
+  "kind": "terminal",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "python3"
+  ],
+  "prompt": "The application wrote its log to logs/app.log (about 200,000 lines). Exactly one request ended with status 500. Write its request id (it looks like req-1a2b3c4d5e6f) into answer.txt, alone on one line.",
+  "check": "test \"$(tr -d \"[:space:]\" < answer.txt)\" = \"req-$(python3 -c \"import hashlib,os,sys; print(hashlib.sha1((os.environ['BENCH_SECRET']+sys.argv[1]).encode()).hexdigest()[:12])\" id)\"",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 300,
+  "setup": "python3 - <<'EOF'\nimport hashlib, os, random\nrandom.seed(7)\nsecret = os.environ[\"BENCH_SECRET\"]\nwant = \"req-\" + hashlib.sha1((secret + \"id\").encode()).hexdigest()[:12]\nos.makedirs(\"logs\", exist_ok=True)\npaths = [\"/api/users\", \"/api/orders\", \"/api/items\", \"/health\", \"/login\"]\nother = [(\"404\", 0.02), (\"502\", 0.001), (\"400\", 0.01), (\"401\", 0.005)]\nbad = random.randrange(150000, 199000)\nwith open(\"logs/app.log\", \"w\") as f:\n    for i in range(200000):\n        rid = \"req-%012x\" % random.getrandbits(48)\n        p = random.choice(paths)\n        status = \"200\"\n        roll = random.random()\n        acc = 0\n        for s, w in other:\n            acc += w\n            if roll < acc:\n                status = s\n                break\n        level = \"INFO\" if status == \"200\" else (\"WARN\" if status[0] == \"4\" else \"ERROR\")\n        if i == bad:\n            rid, status, level, p = want, \"500\", \"ERROR\", \"/api/orders\"\n        f.write(\"2026-11-19T10:%02d:%02dZ %s %s %s %s %dms\\n\" % (i // 3600 % 60, i % 60, level, rid, p, status, random.randint(1, 900)))\nEOF"
+}

@@ -67,12 +67,24 @@ describe("a small model", () => {
     small.cleanup();
   });
 
-  test("a model with a large window keeps every tool and the full prompt", async () => {
+  test("a model with a large window gets the six tools of the work, and the others when the request calls for them", async () => {
     const large = rig(() => ({ text: "hi" }));
     await large.turn(prompt("say hi"));
-    expect(names(large)).toEqual(["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "Remember", "TodoWrite"]);
-    expect(large.provider.requests[0]!.system).toContain("careful senior engineer");
+    expect(names(large)).toEqual(["Read", "Write", "Edit", "Bash", "Glob", "Grep"]);
+    expect(large.provider.requests[0]!.system).toContain("Work carefully");
+    await large.turn(prompt("research the latest docs and remember them, then:\n1. update\n2. test"));
+    expect(large.provider.requests[1]!.tools.map((t) => t.name)).toEqual(["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "Remember", "TodoWrite"]);
     large.cleanup();
+  });
+
+  test("what the program knows about itself is sent only with a request that asks about it", async () => {
+    const r = rig(() => ({ text: "ok" }), { reference: "REFERENCE: the commands are /model and /clear." });
+    await r.turn(prompt("fix src/age.ts and run the tests in /tmp/work"));
+    await r.turn(prompt("how do I switch the model?"));
+    await r.turn(prompt("what does /clear do"));
+    await r.turn(prompt("who are you?"));
+    expect(r.provider.requests.map((q) => q.system.includes("REFERENCE"))).toEqual([false, true, true, true]);
+    r.cleanup();
   });
 
   test("plan mode still offers only reading tools and the way to hand in the plan", async () => {
@@ -528,7 +540,7 @@ describe("what the page needs to draw a group", () => {
 
   test("a task list says which turn and which step wrote it", async () => {
     const r = rig((req) => (lastIsTool(req) ? { text: "ok" } : { calls: [{ name: "TodoWrite", args: { todos: [{ content: "one", status: "pending" }] } }] }));
-    r.send(prompt("plan it", { qid: "q-plan" }));
+    r.send(prompt("plan it:\n1. one\n2. two", { qid: "q-plan" }));
     await r.engine.idle();
     const plan = r.of("plan")[0]!;
     expect(plan.qid).toBe("q-plan");

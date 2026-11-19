@@ -7,8 +7,9 @@ const STATUSES = new Set(["pending", "in_progress", "completed"]);
 export const todo: Tool = {
   name: "TodoWrite",
   readOnly: true,
-  offeredWhen: ({ small }) => !small,
-  description: "Keep a visible task list for work with several steps. Send the whole list each time; at most one item in_progress.",
+  /** Work that is long or listed: after a few steps of it, or when the request is a list or long. */
+  offeredWhen: ({ small, userText, steps }) => !small && ((steps ?? 0) >= 4 || userText.length > 400 || /(^|\n)\s*(\d+[.)]|[-*])\s/.test(userText)),
+  description: "Keep a task list for work in several steps: send the whole list each time, one item in_progress at most.",
   parameters: {
     type: "object",
     properties: {

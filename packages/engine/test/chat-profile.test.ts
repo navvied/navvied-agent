@@ -30,7 +30,7 @@ describe("a chat is not an agent", () => {
     await r.turn(prompt("make a note", { mode: "ask" }));
     expect(r.of("approval").length).toBe(0);
     expect(readFileSync(join(r.dir, "notes.md"), "utf8")).toBe("hi");
-    expect(names(r)).toEqual(["Edit", "Glob", "Grep", "Read", "Remember", "WebFetch", "WebSearch", "Write"]);
+    expect(names(r)).toEqual(["Edit", "Glob", "Grep", "Read", "WebFetch", "WebSearch", "Write"]);
     expect(r.provider.requests[0]!.system).toContain("scratch folder");
     expect(r.provider.requests[0]!.system).not.toContain("coding and operations agent");
     r.cleanup();

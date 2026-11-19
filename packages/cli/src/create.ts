@@ -1,4 +1,4 @@
-import { soulFor, type Brain } from "./soul.ts";
+import { leanSoul, referenceFor, soulFor, type Brain } from "./soul.ts";
 import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { ChatCompletionsProvider, type Recall, loadAgents, Rules, hasRules, parseRules, type RuleSet, commandHooks, memoryText, connectMcp, loadSkills, projectDirs, type ModelSwitch, Checkpoints, Engine, FileSessionStore, MessagesApiProvider, OllamaProvider, ResponsesApiProvider, SMALL_WINDOW, defaultTools, instructionFiles, loadInstructions, type AgentEngine, type ChatCompletionsConfig, type Credentials, type Provider, FallbackProvider, type FallbackLink } from "@navvied/engine";
@@ -93,7 +93,8 @@ function switcherFor(file: ConfigFile | null, current: string, env: Record<strin
       return {
         provider: providerFor(next.value.api, next.value.provider, next.value.window, next.value.signIn ? credentialsFor(next.value.signIn, env) : undefined), window: next.value.window,
         ...(next.value.efforts ? { efforts: next.value.efforts } : {}),
-        persona: soulFor(brainFor(id, next.value.provider.model, next.value.window, file?.models[id]?.display?.name)),
+        persona: leanSoul(brainFor(id, next.value.provider.model, next.value.window, file?.models[id]?.display?.name)),
+        ...(referenceFor(brainFor(id, next.value.provider.model, next.value.window, file?.models[id]?.display?.name)) ? { reference: referenceFor(brainFor(id, next.value.provider.model, next.value.window, file?.models[id]?.display?.name))! } : {}),
       };
     },
   };
@@ -134,7 +135,8 @@ export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) =>
         ...(extras.recall && kind !== "chat" ? { recall: extras.recall } : {}),
         provider: withFallback(providerFor(model.value.api, provider!, model.value.window, model.value.signIn ? credentialsFor(model.value.signIn, io.env) : undefined), model.value.name, file.value, io.env, path, emit),
         store: new FileSessionStore(kind === "chat" ? chatSessionsDir(io.env) : sessionsDir(io.env)),
-        persona: soulFor(brain),
+        persona: leanSoul(brain),
+        ...(referenceFor(brain) ? { reference: referenceFor(brain)! } : {}),
         ...(switcher ? { switcher } : {}),
         kind,
         model: { id: model.value.name, name: shown ?? provider?.model ?? model.value.name, ...(file.value?.models[model.value.name] ? { blurb: describeEntry(file.value.models[model.value.name]!) } : {}), ...(file.value?.models[model.value.name]?.display?.brand ? { brand: file.value.models[model.value.name]!.display!.brand! } : {}) },

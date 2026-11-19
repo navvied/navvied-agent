@@ -28,7 +28,7 @@ const commandList = (withMeaning: boolean): string =>
   SLASH_COMMANDS.filter((c) => c.name !== "session" && c.name !== "accent").map((c) => (withMeaning ? `/${c.name} (${c.desc.replace(/\.$/, "").split(/[:.]/)[0]!.toLowerCase()})` : `/${c.name}`)).join(", ");
 
 /** What the brain knows about the program it runs in, so it can answer "how do I switch the model?" correctly. */
-function aboutNavvied(brain: Brain): string {
+export function aboutNavvied(brain: Brain): string {
   if (brain.small) return "In the app the user types /model to choose or switch the model (a menu opens, nothing to type after it), /checkpoints and then /restore <number> to undo your changes, /clear to start over, /compact to free up space, and /mode or Shift+Tab to change the mode.";
   return [
     "How navvied works, in case the user asks:",
@@ -44,6 +44,17 @@ function aboutNavvied(brain: Brain): string {
     "When the user asks how to do something in navvied, answer from this.",
   ].join("\n");
 }
+
+/**
+ * Who the agent is, in a few words, for the engine's own models. What it knows about the program (the commands, the modes) is
+ * `aboutNavvied`, sent only with a request that asks; the tools are in the request already and are not listed again.
+ */
+export function leanSoul(brain: Brain): string {
+  if (brain.chat) return IDENTITY(brain);
+  return `You are navvied, a coding agent in the user's own folder; the user sees everything you do. Your model is ${brain.label}: that is your brain, not your name. If asked who you are, say navvied and which brain. Say what you did and what you did not check.`;
+}
+
+export const referenceFor = (brain: Brain): string | undefined => (brain.chat ? undefined : aboutNavvied({ ...brain, tools: [] }));
 
 /** The same self-knowledge and identity for every brain; the model is only what the agent thinks with. */
 export function soulFor(brain: Brain, notes?: string): string {

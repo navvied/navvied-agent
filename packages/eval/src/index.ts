@@ -1,7 +1,7 @@
 export { loadTask, loadTasks, repoFiles, solutionFiles, type Task } from "./task.ts";
-export { applySolution, check, leftovers, missingPrograms, newSecret, prepare, protectedHashes, shell, type CheckResult } from "./workspace.ts";
+export { applySolution, check, commandLine, findBash, leftovers, missingPrograms, newSecret, prepare, protectedHashes, shell, type CheckResult } from "./workspace.ts";
 export { validateTask, type Validation } from "./validate.ts";
-export { runTask, type RunOptions, type TaskResult } from "./run.ts";
+export { misuseOf, runTask, type Misuse, type RunOptions, type TaskResult } from "./run.ts";
 export { summarize } from "./report.ts";
 export { startMeter, type Hit, type Meter } from "./meter.ts";
 export { startMock, type Behaviour, type Mock } from "./mock.ts";
