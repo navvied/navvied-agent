@@ -3,9 +3,14 @@ import { localBackend } from "../backend.ts";
 import { inTerminal, shellFor } from "../platform.ts";
 import type { Jobs } from "../jobs.ts";
 import type { Tool } from "../types.ts";
-import { MAX_OUTPUT, cleanOutput, clip, num, place, run, spill, str } from "./util.ts";
+import { relative, resolve } from "node:path";
+import { redact } from "../redact.ts";
+import { endedIn, inside, remembering, type ShellState } from "./shell-state.ts";
+import { cleanOutput, clip, num, outputBudget, place, run, spill, str } from "./util.ts";
 
 const shell = shellFor();
+/** Bash can write down where a command ended and what it exported; PowerShell and cmd cannot, so there each call starts fresh. */
+const remembers = shell.name === "bash";
 
 /** Programs whose exit code 1 is an answer, not a failure: said in words, so a model does not take "no matches" for a broken command. */
 const ANSWERS: [RegExp, string][] = [[/^(grep|egrep|fgrep|rg|ag)$/, "no matches"], [/^(diff|cmp)$/, "the files differ"], [/^(test|\[)$/, "the condition is false"]];
@@ -16,16 +21,19 @@ function exitNote(command: string, code: number | null): string {
   return hit ? `: ${hit[1]}, not a failure` : "";
 }
 
+/** How long a command may be silent before it goes on as a job. A model that started a server in the foreground gets control back after this, so it is short. */
+const SILENCE_SECONDS = 45;
+
 export const bash: Tool = {
   name: "Bash",
   readOnly: false,
-  description: `Run a ${shell.name} command: a fresh shell each time, so use cwd, not cd. Long output is shortened; a command still running at its timeout goes on as a job.`,
+  description: `Run a ${shell.name} command.${remembers ? " cd and export stay for later calls; cwd is for one call." : " Each call starts fresh."} Long output is shortened; a command silent for its timeout goes on as a job.`,
   parameters: {
     type: "object",
     properties: {
       command: { type: "string" },
       cwd: { type: "string" },
-      timeout: { type: "number", description: "seconds" },
+      timeout: { type: "number", description: "seconds without output, 45 if not given" },
       run_in_background: { type: "boolean", description: "keep it running: BashOutput reads it, KillShell stops it" },
       interactive: { type: "boolean", description: "a program you type to, with BashInput" },
     },
@@ -34,41 +42,71 @@ export const bash: Tool = {
   title: (a) => `Run command: ${str(a.command).slice(0, 300)}`,
   async run(a, ctx) {
     const command = str(a.command);
-    if (!command.trim()) return "Error: empty command.";
+    if (!command.trim()) return `Error: empty command, nothing was run. Retry: ${example({ command: "ls -la" })}`;
     let where: ReturnType<typeof localBackend.prepare>;
+    // On this computer, in bash, a command starts from what earlier ones exported and from the folder they ended in (inside the working
+    // folder). With `cwd` it runs there for this call and leaves the remembered folder as it was.
+    const keep = remembers && ctx.shell && (!ctx.backend || ctx.backend.id === "local") ? ctx.shell : undefined;
+    const explicit = a.cwd !== undefined && a.cwd !== "";
     try {
-      const folder = a.cwd === undefined || a.cwd === "" ? ctx.cwd : place(ctx, a.cwd);
-      if (folder !== ctx.cwd && !existsSync(folder)) return `Error: the folder ${folder} does not exist.`;
-      where = (ctx.backend ?? localBackend).prepare(command, folder);
+      let start = ctx.cwd;
+      if (explicit) { start = place(ctx, a.cwd); if (start !== ctx.cwd && !existsSync(start)) return `Error: the folder ${start} does not exist, so nothing was run. Retry without cwd: ${example({ command })}`; }
+      else if (keep?.dir) { if (existsSync(keep.dir)) start = keep.dir; else keep.dir = undefined; }
+      where = (ctx.backend ?? localBackend).prepare(command, start);
     } catch (e) { return `Error: ${e instanceof Error ? e.message : String(e)}`; }
+    const argv = (capture: boolean): string[] => (keep ? [...where.argv.slice(0, -1), remembering(command, keep, capture)] : where.argv);
+    if (a.interactive === true || a.run_in_background === true) { const full = ctx.jobs.room(); if (full) return full; }
     if (a.interactive === true) {
-      if (ctx.backend && ctx.backend.id !== "local") return "Error: a program you type to runs on this computer only, and commands are set to run elsewhere.";
-      const job = ctx.jobs.start(inTerminal(where.argv) ?? where.argv, where.cwd, str(a.description) || command.slice(0, 80), undefined, true);
+      if (ctx.backend && ctx.backend.id !== "local") return `Error: a program you type to runs on this computer only, and commands are set to run elsewhere. Retry without interactive: ${example({ command })}`;
+      const job = ctx.jobs.start(inTerminal(argv(false)) ?? argv(false), where.cwd, str(a.description) || command.slice(0, 80), undefined, true);
       ctx.report?.({ background: true });
       return `Started ${job.id}, a program you can type to. See what it prints with BashOutput (job_id "${job.id}", wait 2), type to it with BashInput, stop it with KillShell.`;
     }
     if (a.run_in_background === true) {
-      const job = ctx.jobs.start(where.argv, where.cwd, str(a.description) || command.slice(0, 80));
+      const job = ctx.jobs.start(argv(false), where.cwd, str(a.description) || command.slice(0, 80));
       ctx.report?.({ background: true });
       return `Started ${job.id} in the background. Read what it prints with BashOutput (job_id "${job.id}"), stop it with KillShell.`;
     }
-    const seconds = Math.min(Math.max(1, num(a.timeout, 120)), 600);
-    // A command that is not done in time is not killed: it goes on as a job, and what it printed so far is not lost.
+    // `timeout` is how long the command may be silent; a command that goes on printing is working. Whatever it does, 10 minutes is the most
+    // it holds this turn. Past either it is not killed: it goes on as a job, and what it printed so far is not lost.
+    const seconds = Math.min(Math.max(1, num(a.timeout, SILENCE_SECONDS)), 600);
     let handedOn: string | undefined;
     const title = str(a.description) || command.slice(0, 80);
-    const r = await run(where.argv, { cwd: where.cwd, signal: ctx.signal, timeoutMs: seconds * 1000, ...(ctx.live ? { onChunk: ctx.live } : {}), onTimeout: (child, printed) => { handedOn = ctx.jobs.adopt(child, title, printed).id; return true; } });
-    ctx.report?.({ code: r.code, truncated: r.output.trimEnd().length > MAX_OUTPUT, timedOut: r.timedOut && !r.adopted, ...(r.adopted ? { background: true } : {}) });
-    const full = cleanOutput(r.output).trimEnd();
-    // Whole output kept in a file (not in a conversation held to a folder, which may not read outside it).
-    const saved = full.length > MAX_OUTPUT && !ctx.root ? spill(full) : undefined;
-    const body = clip(full) + (saved ? `\n[the whole output is saved in ${saved}: read the part you need with Read]` : "");
+    const r = await run(argv(keep !== undefined && !explicit), { cwd: where.cwd, signal: ctx.signal, idleMs: seconds * 1000, timeoutMs: 600_000, ...(ctx.live ? { onChunk: ctx.live } : {}), onTimeout: (child, printed) => { handedOn = ctx.jobs.adopt(child, title, printed).id; return true; } });
+    const budget = outputBudget(ctx.window);
+    const full = redact(cleanOutput(r.output)).trimEnd();
+    ctx.report?.({ code: r.code, truncated: full.length > budget, timedOut: r.timedOut && !r.adopted, ...(r.adopted ? { background: true } : {}) });
+    // Whole output kept in a file (not in a conversation held to a folder, which may not read outside it). The end matters most: it gets the larger share.
+    const saved = full.length > budget && !ctx.root ? spill(full) : undefined;
+    const body = clip(full, budget, 0.3) + (saved ? `\n[the whole output is saved in ${saved}: read the part you need with Read]` : "");
     if (r.interrupted) return `${body}\n[interrupted]`;
-    if (r.adopted && handedOn) return `${body}${body ? "\n" : ""}[still running after ${seconds}s as ${handedOn}: BashOutput job_id "${handedOn}" shows what it prints next, KillShell stops it]`;
-    return `${body}${body ? "\n" : ""}[exit ${r.code}${exitNote(command, r.code)}]`;
+    if (r.adopted && handedOn) return `${body}${body ? "\n" : ""}[still running as ${handedOn} after ${r.ranOut === "time" ? "10 minutes" : `${seconds}s without output`}: BashOutput job_id "${handedOn}" shows what it prints next (until:"text" waits for a line), KillShell stops it]`;
+    // An exit of 0 is not said: it is what no news means. Another code is, with what it means for the programs where it means something.
+    const said = r.code === 0 ? "" : `[exit ${r.code}${exitNote(command, r.code)}]`;
+    const moved = keep && !explicit ? whereNow(keep, ctx.cwd) : "";
+    const lines = [body, moved, said].filter(Boolean);
+    return lines.length ? lines.join("\n") : "(no output)";
   },
 };
 
-const unknownJob = (id: string, jobs: { list(): { id: string }[] }): string => `Error: there is no job "${id}". ${jobs.list().length ? `Jobs: ${jobs.list().map((j) => j.id).join(", ")}.` : "No command is running in the background."}`;
+/** Where the command ended, said only when the remembered folder changed; a folder outside the working folder is not kept. */
+function whereNow(state: ShellState, working: string): string {
+  const end = endedIn(state);
+  if (!end) return "";
+  const before = state.dir ?? working;
+  if (!inside(working, end)) return `[stays in ${relative(working, before) || "the working folder"}: a cd outside it lasts one command]`;
+  if (resolve(end) === resolve(before)) return "";
+  state.dir = resolve(end) === resolve(working) ? undefined : end;
+  return `[now in ${relative(working, end) || "the working folder"}]`;
+}
+
+/** A call as the model writes it, for a message that shows what to send instead. */
+const example = (args: Record<string, unknown>): string => JSON.stringify({ ...args, ...(typeof args.command === "string" && args.command.length > 80 ? { command: `${args.command.slice(0, 77)}...` } : {}) });
+
+const unknownJob = (id: string, jobs: { list(): { id: string }[] }): string => {
+  const all = jobs.list();
+  return `Error: there is no job "${id}". ${all.length ? `Jobs: ${all.map((j) => j.id).join(", ")}. Retry: ${example({ job_id: all[all.length - 1]!.id })}` : `No command is running in the background. To start one: Bash ${example({ command: "npm run dev", run_in_background: true })}`}`;
+};
 
 const age = (ms: number): string => (ms < 60_000 ? `${Math.max(1, Math.round(ms / 1000))} s` : ms < 3_600_000 ? `${Math.round(ms / 60_000)} min` : `${Math.round(ms / 3_600_000)} h`);
 
@@ -109,7 +147,7 @@ export const bashInput: Tool = {
   async run(a, ctx) {
     const id = str(a.job_id), text = str(a.text);
     if (!ctx.jobs.list().some((j) => j.id === id)) return unknownJob(id, ctx.jobs);
-    if (text && !ctx.jobs.type(id, a.enter === false ? text : `${text}\n`)) return `Error: ${id} cannot be typed to: it ended, or it was not started with interactive:true.`;
+    if (text && !ctx.jobs.type(id, a.enter === false ? text : `${text}\n`)) return `Error: ${id} cannot be typed to: it ended, or it was not started with interactive:true. Start the program again: Bash ${example({ command: "<the program>", interactive: true })}`;
     if (a.end === true && !ctx.jobs.endInput(id)) return `Error: the input of ${id} could not be ended.`;
     return `Typed to ${id}. Read what it printed with BashOutput (job_id "${id}", wait 2).`;
   },

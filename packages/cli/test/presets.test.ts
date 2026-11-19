@@ -141,7 +141,7 @@ describe("Claude, with an API key", () => {
     const asked = seen.find((s) => s.url.startsWith("https://api.anthropic.com/v1/models"))!;
     expect(asked.headers.get("x-api-key")).toBe(KEY);
     expect(asked.headers.get("anthropic-version")).toBe("2023-06-01");
-    expect(read(config).models["claude-sonnet-5-5"]).toEqual({ baseUrl: "https://api.anthropic.com/v1", api: "messages", model: "claude-sonnet-5-5", window: 200000, apiKey: KEY });
+    expect(read(config).models["claude-sonnet-5-5"]).toEqual({ baseUrl: "https://api.anthropic.com/v1", api: "messages", model: "claude-sonnet-5-5", window: 200000, vision: true, pdf: true, apiKey: KEY });
     if (process.platform !== "win32") expect(statSync(config).mode & 0o777).toBe(0o600);
   });
 
@@ -199,7 +199,7 @@ describe("other services with a key", () => {
     expect(wrong.f.err()).toContain("Use the key from OPENAI_API_KEY");
     const right = setup("4\n1\n1\n", { services, system: fakeSystem({ clip: OPENAI_KEY }) });
     expect(await main(["init", "--config", right.config], right.f.io)).toBe(0);
-    expect(read(right.config).models["gpt-4o"]).toEqual({ baseUrl: "https://api.openai.com/v1", model: "gpt-4o", window: 128000, apiKey: OPENAI_KEY });
+    expect(read(right.config).models["gpt-4o"]).toEqual({ baseUrl: "https://api.openai.com/v1", model: "gpt-4o", window: 128000, vision: true, apiKey: OPENAI_KEY });
     expect(right.f.err()).not.toContain("whisper");
     expect(right.seen.find((s) => s.url.includes("openai"))!.headers.get("authorization")).toBe(`Bearer ${OPENAI_KEY}`);
   });

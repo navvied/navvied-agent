@@ -3,10 +3,10 @@ import { LineSplitter } from "@navvied/protocol";
 import type { Env } from "./config.ts";
 import { realSystem, type System } from "./system.ts";
 import { runInline } from "./tui/inline.ts";
-import { Menu, Secret, workLines, type Choice, type Frame, type Suggest, type Watch, type WorkContext } from "./tui/menu.ts";
+import { Menu, Secret, workLines, type Chip, type Choice, type Frame, type Suggest, type Watch, type WorkContext } from "./tui/menu.ts";
 import { Tui } from "./tui/terminal.ts";
 
-export type { Choice, Frame, Watch, WorkContext } from "./tui/menu.ts";
+export type { Chip, Choice, Frame, Watch, WorkContext } from "./tui/menu.ts";
 
 export interface Dock {
   refresh(): void;
@@ -20,6 +20,8 @@ export interface LineOptions {
   suggest?: Suggest;
   /** What to show in the conversation for a line the person submitted: nothing, or text. Without it the line is shown as typed, after the prompt. */
   echo?: (line: string) => string | undefined;
+  /** The files an `@mention` in the text would attach, shown as a row above the input while no other list is open. */
+  chips?: (text: string) => Chip[];
 }
 
 export interface IO {
@@ -96,6 +98,7 @@ export function processIO(): IO {
       if (!t) return plainLines();
       t.setSuggest(options?.suggest);
       t.setEcho(options?.echo);
+      t.setChips(options?.chips);
       return t.lines();
     },
     choose: interactive ? (title, items, initial = 0, frame = {}, watch) => {

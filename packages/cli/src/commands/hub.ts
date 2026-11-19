@@ -374,7 +374,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     }
     say(lane, { ev: "found", query, items: hits.slice(0, limit) });
   };
-  const noModel = (lane: Lane): string => (/no model is configured|several models/.test(lane.error) ? "No model is connected. Run `navvied init`." : `No model is connected: ${lane.error}`);
+  const noModel = (lane: Lane): string => (/no model is configured|no model is connected yet|several models/.test(lane.error) ? "No model is connected. Run `navvied init`." : `No model is connected: ${lane.error}`);
   const restartLane = (lane: Lane): { ok: true } | { ok: false; error: string } => {
     lane.created?.engine.close();
     lane.created = undefined;

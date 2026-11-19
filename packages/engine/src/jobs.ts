@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { EngineEvent } from "@navvied/protocol";
 import { killTree, usesProcessGroups } from "./platform.ts";
+import { Redactor } from "./redact.ts";
 import { QUIET_ENV } from "./tools/util.ts";
 
 export type JobStatus = "running" | "done" | "failed" | "stopped";
@@ -8,6 +9,8 @@ export type JobStatus = "running" | "done" | "failed" | "stopped";
 export interface JobView { id: string; title: string; status: JobStatus; code: number | null; startedAt: number }
 
 const KEEP = 400_000;
+/** How many commands may be kept: finished ones are forgotten, oldest first, to make room; running ones are never. */
+export const MOST_JOBS = 16;
 /** How long a program asked to quit has before it is forced. */
 const QUIT_MS = 3000;
 /** After a stop, how long a job's end is waited for. Something it started that got away can hold its output open long after. */
@@ -24,7 +27,7 @@ function guard(): void {
   for (const [name, code] of [["SIGTERM", 143], ["SIGHUP", 129]] as const) process.once(name, () => { for (const jobs of alive) jobs.stopAll(); process.exit(code); });
 }
 
-interface Job extends JobView { /** Someone may type to it (BashInput). */ interactive: boolean; child: ChildProcess; output: string; dropped: number; read: number; ended: boolean }
+interface Job extends JobView { /** Someone may type to it (BashInput). */ interactive: boolean; child: ChildProcess; output: string; dropped: number; read: number; ended: boolean; /** The model has been told it ended (by reading it, or by the line that says so). */ told: boolean; endedAt?: number; /** Makes what it prints safe as it arrives: what is kept here has no secret in it. */ safe: Redactor }
 
 /** Commands that keep running after the turn that started them, such as a development server. */
 export class Jobs {
@@ -40,20 +43,22 @@ export class Jobs {
   start(argv: string[], cwd: string, title: string, env?: NodeJS.ProcessEnv, interactive = false): JobView {
     const [cmd, ...args] = argv;
     const child = spawn(cmd ?? "", args, { cwd, env: { ...process.env, ...QUIET_ENV, ...env }, detached: usesProcessGroups(), windowsHide: true, stdio: [interactive ? "pipe" : "ignore", "pipe", "pipe"] });
-    return this.#track(child, title, interactive, "", 0);
+    return this.#track(child, title, interactive, "", false);
   }
 
-  /** Takes over a command that is already running, as one that ran out of its time in the foreground: `printed` is what it has said so far, of which the first `given` characters have already been shown to the model. */
-  adopt(child: ChildProcess, title: string, printed: string, given = printed.length): JobView {
-    return this.#track(child, title, false, printed, given);
+  /** Takes over a command that is already running, as one that ran out of its time in the foreground: `printed` is what it has said so far, all of it already shown to the model. */
+  adopt(child: ChildProcess, title: string, printed: string): JobView {
+    return this.#track(child, title, false, printed, true);
   }
 
-  #track(child: ChildProcess, title: string, interactive: boolean, printed: string, given: number): JobView {
+  #track(child: ChildProcess, title: string, interactive: boolean, printed: string, shown: boolean): JobView {
     const id = `job${this.#next++}`;
-    const job: Job = { id, title, interactive, status: "running", code: null, startedAt: this.now(), child, output: printed, dropped: 0, read: given, ended: false };
+    const safe = new Redactor();
+    const first = printed ? safe.push(printed) + safe.end() : "";
+    const job: Job = { id, title, interactive, status: "running", code: null, startedAt: this.now(), child, output: first, dropped: 0, read: shown ? first.length : 0, ended: false, told: false, safe };
     this.#jobs.set(id, job);
     const collect = (d: Buffer): void => {
-      job.output += d.toString("utf8");
+      job.output += job.safe.push(d.toString("utf8"));
       if (job.output.length > KEEP) { const cut = job.output.length - KEEP; job.output = job.output.slice(cut); job.dropped += cut; }
     };
     child.stdout?.on("data", collect);
@@ -63,6 +68,24 @@ export class Jobs {
     this.emit({ ev: "job", id, title, status: "running", startedAt: job.startedAt });
     return view(job);
   }
+
+  /**
+   * Whether another command can be started. Finished ones are forgotten, the oldest first, to make room; when all are running there
+   * is none, and the answer is a sentence saying how to make some.
+   */
+  room(): string | undefined {
+    for (const [id, job] of this.#jobs) { if (this.#jobs.size < MOST_JOBS) break; if (job.status !== "running") this.#jobs.delete(id); }
+    if (this.#jobs.size < MOST_JOBS) return undefined;
+    const oldest = [...this.#jobs.values()][0]!;
+    return `Error: ${MOST_JOBS} commands are already running in the background. Stop one with KillShell first (${oldest.id}, the oldest, is "${oldest.title.slice(0, 60)}"): KillShell {"job_id": "${oldest.id}"}. Then start this again.`;
+  }
+
+  /** The commands that ended since the model last heard of them. Reading a job is hearing of it; so is `told`, once the news is sent. */
+  news(): { id: string; status: JobStatus; code: number | null; ms: number }[] {
+    return [...this.#jobs.values()].filter((j) => j.ended && !j.told).map((j) => ({ id: j.id, status: j.status, code: j.code, ms: (j.endedAt ?? this.now()) - j.startedAt }));
+  }
+
+  told(ids: readonly string[]): void { for (const id of ids) { const job = this.#jobs.get(id); if (job) job.told = true; } }
 
   list(): JobView[] { return [...this.#jobs.values()].map(view); }
 
@@ -89,6 +112,7 @@ export class Jobs {
   read(id: string): { view: JobView; output: string; skipped: number; ports: number[] } | undefined {
     const job = this.#jobs.get(id);
     if (!job) return undefined;
+    if (job.ended) job.told = true;
     const from = Math.max(0, job.read - job.dropped);
     const skipped = Math.max(0, job.dropped - job.read);
     const output = job.output.slice(from);
@@ -132,8 +156,10 @@ export class Jobs {
   #end(job: Job, code: number | null): void {
     if (job.ended) return;
     job.ended = true;
+    job.endedAt = this.now();
     if (job.status === "running") job.status = code === 0 ? "done" : "failed";
     job.code = code;
+    job.output += job.safe.end();
     const last = lastLine(job.output);
     this.emit({ ev: "job", id: job.id, title: job.title, status: job.status, startedAt: job.startedAt, ...(code !== null ? { code } : {}), ...(last ? { last } : {}) });
   }

@@ -31,6 +31,7 @@ Prefer a window? The desktop app runs the same program with nothing to type: [do
 * `baseUrl` is any server that speaks the chat-completions API: a hosted service with an API key, or a local model server.
 * Put keys in an environment variable and name it with `apiKeyEnv`. A literal `apiKey` works too; then keep the file private.
 * `window` is the context size in tokens. `reasoning: "none"` stops the CLI sending a reasoning-effort field to models that reject it.
+* `vision: true` or `false` says whether the model can see pictures (left out: not known, so a picture is sent and a refusal is explained in plain words). `pdf: true` says the service reads a PDF given as a file (the messages API of the service that made it), so the original PDF goes along with its text. Files attached to a prompt are described in docs/PROTOCOL.md (Attachments).
 * Without a file, set `NAVVIED_BASE_URL` and `NAVVIED_MODEL` (and optionally `NAVVIED_API_KEY`, `NAVVIED_WINDOW`).
 
 Sessions are saved under `~/.local/state/navvied/sessions`; continue one with `--session <id>`.

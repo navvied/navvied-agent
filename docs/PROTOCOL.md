@@ -7,7 +7,7 @@ Peers **ignore unknown fields and unknown events**. The reference implementation
 
 | `cmd` | Fields | Notes |
 |---|---|---|
-| `prompt` | `text`, `qid?`, `images?`, `effort?`, `mode?`, `paths?` | `qid` is a client-chosen id; re-sending a known `qid` is a no-op, so a client may safely re-send anything not yet confirmed by `taken`. A prompt sent while a turn runs is folded into it. |
+| `prompt` | `text`, `qid?`, `images?`, `files?`, `effort?, `mode?`, `paths?` | `qid` is a client-chosen id; re-sending a known `qid` is a no-op, so a client may safely re-send anything not yet confirmed by `taken`. A prompt sent while a turn runs is folded into it. |
 | `cancel` | — | Stops the turn, kills running commands, denies pending approvals. |
 | `approve` | `id`, `optionId` | Answers an `approval` event. |
 | `compact` | — | Summarise older turns now. |
@@ -21,7 +21,7 @@ Peers **ignore unknown fields and unknown events**. The reference implementation
 | `job.stop` | `id` | Stop one background command (a `job` event with status `running`). A finished or unknown id is ignored. |
 
 `mode` is `ask`, `edits`, `plan`, `auto` or `bypass` (see `docs/CLI.md`: Ask first, Accept edits, Plan only, Auto, Bypass permissions). An `approval` event may carry `risk`: why it is asked even in Auto, in plain words (it cannot be undone). `effort` is `minimal`…`max`. Limits are in `LIMITS` (e.g. 1 MB of prompt text,
-8 images, 100 paths).
+8 images and files together, each at most 15 MB, 100 paths). See "Attachments" below.
 
 ## Events (engine → front-end)
 
@@ -34,8 +34,8 @@ Every event carries `seq` (strictly increasing) and `eid` (unique).
 | `sessions` | `items[{id,title,updated,messages,source?,project?}]` | The saved sessions, newest first (at most 50). `title` is what the person asked first, on one line (60 characters); `updated` is in ms since the epoch. Only a window that asked should open a menu from it. |
 | `session` | `id` | The session id (first event). |
 | `loaded` | `id` | A `load` succeeded. |
-| `caps` | `steer`, `modes`, `defaultMode?`, `compact`, `checkpoints?`, `models?`, `efforts?`, `effort?` | What this engine can do. Show only what is real. `models` lists what can be switched to (`id`, `name`, and optionally `brand`, `badge`, `blurb`, `locked`, `current`); `efforts` the levels the current model supports (none: it has no effort setting); `effort` the level in use. Sent again whenever one of them changes. |
-| `user` | `qid`, `text`, `images?` | The text of a prompt the engine accepted, sent once just before its `taken` (also for a prompt folded into a running turn). `images` is only a count. It lets a second window, or a reload, show the real message. A re-sent known `qid` emits nothing. |
+| `caps` | `steer`, `modes`, `defaultMode?`, `compact`, `checkpoints?`, `models?`, `efforts?`, `effort?`, `vision?` | What this engine can do. Show only what is real. `models` lists what can be switched to (`id`, `name`, and optionally `brand`, `badge`, `blurb`, `locked`, `current`); `efforts` the levels the current model supports (none: it has no effort setting); `effort` the level in use. `vision` says whether the model can see pictures (`false`: pictures are not sent; absent: not known, they are sent and a refusal is turned into the same message). Sent again whenever one of them changes. |
+| `user` | `qid`, `text`, `images?`, `files?` | The text of a prompt the engine accepted, sent once just before its `taken` (also for a prompt folded into a running turn). `images` is only a count; `files` lists what the engine made of each attached file (no content). It lets a second window, or a reload, show the real message. A re-sent known `qid` emits nothing. |
 | `taken` | `qid` | The engine started on that prompt. |
 | `text` / `thought` | `text` | Reply and reasoning, streamed in pieces. |
 | `thought_end` | `ms` | The model stopped thinking; `ms` is how long. Sent once per stretch of thought, only if there was one. |
@@ -142,9 +142,31 @@ A hub with `caps.toolList: true` lists the tools of the agent itself. `{cmd:"too
 
 A hub with `caps.drafts: true` keeps what the person typed and did not send, so a refresh, another window or another device finds it. `{cmd:"draft", key, text}` keeps the text for a conversation (`key` is its id) or for a new one (`key: "new"`; at most 20000 characters; empty text takes the draft away). Every window of the computer is told at once with `{ev:"drafts", items:[{key, text, updated}]}`; that event is **not** kept in what a window that attaches later is replayed, so such a window asks with `{cmd:"drafts"}` (answered to the asker with the same event). At most 100 drafts are kept, the newest, in the computer's own state file: a draft written for a conversation of this computer never leaves it. A page clears a draft by sending empty text when it sends the message.
 
-**A message that waits.** `{ev:"queued", qid, text, images?}` says a message was received and waits its turn (the agent is busy, or a program engine is still starting): every window shows it as waiting (dimmed), not only the one that sent it. It is followed by `user` and `taken` when the agent takes it. `{ev:"dropped", qids:[…]}` says waiting messages were thrown away without being taken (the person stopped the agent, or it failed): windows take them off the screen. **A model can be chosen at any time**: `{cmd:"model"}` is never refused while a reply is being written; `caps` shows the new model as current at once, the reply in progress finishes with the model it started with, and the next message uses the new one.
+**A message that waits.** `{ev:"queued", qid, text, images?, files?}` says a message was received and waits its turn (the agent is busy, or a program engine is still starting): every window shows it as waiting (dimmed), not only the one that sent it. It is followed by `user` and `taken` when the agent takes it. `{ev:"dropped", qids:[…]}` says waiting messages were thrown away without being taken (the person stopped the agent, or it failed): windows take them off the screen. **A model can be chosen at any time**: `{cmd:"model"}` is never refused while a reply is being written; `caps` shows the new model as current at once, the reply in progress finishes with the model it started with, and the next message uses the new one.
 
 **Several conversations at once on one computer.** Opening another conversation (`load`, or `new`) while one is being answered does not stop it and is not refused: the one being answered goes on in the **background** and the new one is the open one. Everything a background conversation says is sent with the same events as always plus `bg: "<conversation id>"` (so a page does not draw it in the open transcript), is not kept for a window that arrives later, and ends with its `done`: the conversation is then marked unread (as when no window was looking) and its engine is let go; the conversation itself stays and can be opened. `{ev:"background", items:[{id, kind?, state:"working"|"approval"}]}` lists them (`approval`: a step waits for the person), is sent to every window whenever it changes (an empty list when the last one ends) and, when it is not empty, to a window that arrives, before `synced`. `sessions` entries carry `running: true` while a reply is being written for them, open or in the background. `{cmd:"load", id}` for a conversation that is in the background **brings it back**: every window is sent `loaded` with what was said so far and then the events of the turn so far (`taken`, text, steps, a pending `approval`), and what follows is no longer marked `bg`; the conversation that was open goes to the background if it is being answered. At most 4 may be answered in the background at once; over that the answer is `{ev:"error", msg:"Too many conversations are running. Wait for one to finish."}`. A conversation that is being answered in the background cannot be deleted. Deleting a conversation on a computer is complete: its record, saved session, search words, checkpoints, the list of files it wrote, and the text typed for it are all removed (the snapshots themselves are git objects that nothing points to any more). `cancel` stops the open one; the terminal and the program's own interrupt stop all.
+
+## Attachments
+
+`prompt` takes `images` (`{mime, data}`) and `files` (`{name, mime, data}`, `data` is base64 without a `data:` prefix). Together they hold at most 8 items, each at most 15 MB (20 000 000 base64 characters); a prompt is valid when it has text, an image or a file. `images` is kept as it was; a picture sent as a file works the same.
+
+What a file is, is decided by its content, never by its name or `mime` (both only label it):
+
+| kind | what | what the model gets |
+|---|---|---|
+| `image` | jpg, png, webp, gif | the picture itself, when the model can see pictures |
+| `text` | any UTF-8 text or code | its text |
+| `pdf` | PDF | the text of its pages; the original PDF too, where the model's service reads PDFs (up to 100 pages) |
+| `document` | docx, pptx, xlsx, odt, odp, ods | its text (slides, sheets and tables as plain lines) |
+| `refused` | old doc, ppt, xls; audio; video; archives; programs; other pictures; anything unreadable | one line saying it was not attached and why |
+
+The engine saves every accepted file in the session's attachment folder (never in the project) and tells the model one line per file, `attached: report.pdf (12 pages) saved at <path>`, followed by the extracted text. The text of all files together is held to the same budget as the output of a tool; when a file is longer, the line says so and the model reads the rest with `Read` on the saved path. Nothing is installed to read these formats.
+
+Both `queued` and `user` carry `files: [{name, kind, pages?, note?}]`, in the order sent, with no content. `note` is one plain sentence and is present for every `refused` file (the reason), for a PDF with nothing to read (`no text in this PDF (scanned pages)`), and for a picture that was not sent (`this model cannot see pictures`). A refused file is not saved and is not an `error`: the rest of the prompt goes on. When some pictures were not sent, a `notice` says so once.
+
+A model of `caps.models` may say `files: false` (left out means yes): it is closed to attachments, for example a hosted model an administrator closed. The engine then takes no file for it: every file of the prompt is `refused` with `This model does not take files here.` (the same sentence for a front-end to show when it hides the attach control), nothing is saved, the model is told the file was not attached, and one `notice` says so. Pictures sent in `images` are not files and are not affected. The model chosen for the next message decides.
+
+`caps.vision` tells a front-end whether to offer pictures: `false` means the model cannot see them, absent means unknown. For an unknown model the picture is sent; if the service refuses it, the picture is taken out of the conversation, the model is marked as unable to see pictures for the rest of the session, and the message is the same.
 
 ## Artifacts: the files a conversation wrote
 

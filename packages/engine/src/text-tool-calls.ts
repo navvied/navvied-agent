@@ -98,3 +98,27 @@ function coerce(value: string, type: string | undefined): unknown {
   if (type === undefined || type === "string") return value;
   try { return JSON.parse(value); } catch { return value; }
 }
+
+/**
+ * A model that cannot call tools may write the command it wants run as a line that starts with `$ `. Only a block of such lines at the
+ * very end of the reply counts, each at the start of its line, outside any fenced code block, and each starting like a command (a
+ * word, a path): a `$` inside a sentence, a price, an example in the middle of an explanation or the shell prompt in a code block is
+ * text. The commands are joined so that each runs only if the one before it worked. Nothing when there is no such block.
+ */
+export function dollarCommand(reply: string): string | undefined {
+  const lines = reply.replace(/\s+$/, "").split(/\r?\n/);
+  let fenced = false;
+  for (const l of lines) if (/^\s*(```|~~~)/.test(l)) fenced = !fenced;
+  if (fenced) return undefined;
+  const found: string[] = [];
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = /^\$ ([A-Za-z.\/~][^\n]*)$/.exec(lines[i]!);
+    if (!m) break;
+    found.unshift(m[1]!.trim());
+  }
+  if (!found.length) return undefined;
+  // The block must not be inside a fence that closed above it either: look at the text before the block.
+  let open = false;
+  for (const l of lines.slice(0, lines.length - found.length)) if (/^\s*(```|~~~)/.test(l)) open = !open;
+  return open ? undefined : found.join(" && ");
+}

@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "loopback-page",
-  "description": "The navvied page served by the program inside the app, on this computer only. Seven commands and nothing else: the three the window itself always had, and four for pairing with navvied.com over the relay.",
+  "description": "The navvied page served by the program inside the app, on this computer only. Eight commands and nothing else: the three the window itself always had, one that reads an image off the clipboard when the page's own paste event carried none, and four for pairing with navvied.com over the relay.",
   "windows": ["main"],
   "remote": { "urls": ["http://127.0.0.1:*"] },
-  "permissions": ["allow-shell-answer", "allow-shell-settings-get", "allow-shell-settings-set", "allow-relay-pair", "allow-relay-status", "allow-relay-forget", "allow-relay-answer"]
+  "permissions": ["allow-shell-answer", "allow-shell-settings-get", "allow-shell-settings-set", "allow-clipboard-image", "allow-relay-pair", "allow-relay-status", "allow-relay-forget", "allow-relay-answer"]
 }

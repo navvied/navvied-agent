@@ -1,6 +1,7 @@
+import { splitCommand } from "@navvied/engine";
 import type { EngineEvent } from "@navvied/protocol";
 import { diffLines } from "./diff-view.ts";
-import type { IO } from "./io.ts";
+import type { Choice, IO } from "./io.ts";
 import { paint } from "./render.ts";
 import { diffRows, shortPath } from "./steps.ts";
 
@@ -26,23 +27,51 @@ const label = (option: Approval["options"][number]): { label: string; hint?: str
   : option.kind === "reject_once" || option.kind === "reject_always" ? { label: "No, I will tell it what to do instead" }
   : { label: "Yes" };
 
-/** What the person answered: the choice, and for "change the command first" the command they typed. */
-export interface Answer { optionId: string; input?: string }
+/** The command of a Bash request, or nothing for any other tool. */
+function bashCommand(asked: Asked): string | undefined {
+  if (asked?.name !== "Bash") return undefined;
+  const a = (typeof asked.input === "object" && asked.input !== null ? asked.input : {}) as Record<string, unknown>;
+  return typeof a.command === "string" ? a.command : undefined;
+}
 
-/** Asks the person, with arrow keys, whether the agent may go ahead. Escape, or any way out, means no. A command can be changed first, where there is a way to type. */
+/** The front of a command part, to remember as a pattern: the first word or two, as written, and a wildcard for the rest. */
+function patternOf(part: string): string {
+  const words = part.trim().split(/\s+/).filter(Boolean);
+  return words.length >= 2 ? `${words[0]} ${words[1]} *` : words.length === 1 ? `${words[0]} *` : "*";
+}
+
+/** One pattern to offer "remember" for per part of the command, in the order they run, each at most once. */
+function patternsOf(command: string): string[] { return [...new Set(splitCommand(command).map(patternOf))].slice(0, 3); }
+
+/** What the person answered: the choice, for "change the command first" the command they typed, and for "remember as a pattern" the pattern to save. */
+export interface Answer { optionId: string; input?: string; pattern?: string }
+
+type Row = { choice: Choice } & ({ option: Approval["options"][number] } | { pattern: string });
+
+/** Asks the person, with arrow keys, whether the agent may go ahead. Escape, or any way out, means no. A command can be changed first, where there is a way to type.
+ * For a plain command (nothing that cannot be undone), a pattern taken from its own start can be remembered for next time, one row per part of a combined command. */
 export async function askApproval(io: IO, e: Approval, asked: Asked, cwd: string, width: number): Promise<Answer> {
   const deny = { optionId: e.options.find((o) => o.kind === "reject_once" || o.kind === "reject_always")?.optionId ?? "deny" };
   if (!io.choose) return deny;
   const request = describeRequest(asked, e.title, cwd, io.color, width);
   const shown = e.options.filter((o) => !o.editable || io.text);
   const heading = [paint(io.color, "cyan", paint(io.color, "bold", request.heading)), ...request.lines];
+  const once = shown.find((o) => o.kind === "allow_once" && !o.editable);
+  const command = bashCommand(asked);
+  const patterns = once && command && e.risk === undefined ? patternsOf(command) : [];
+  const rows: Row[] = [];
+  for (const o of shown) {
+    rows.push({ choice: o.editable ? { label: "Change the command first", hint: "Edit it, then it runs." } : label(o), option: o });
+    if (o === once) for (const p of patterns) rows.push({ choice: { label: `Yes, and allow "${p}" from now on`, hint: "Every time, in every navvied session." }, pattern: p });
+  }
   for (;;) {
-    const answer = await io.choose("Allow this?", shown.map((o) => (o.editable ? { label: "Change the command first", hint: "Edit it, then it runs." } : label(o))), 0, { heading });
-    const picked = typeof answer === "number" ? shown[answer] : undefined;
+    const answer = await io.choose("Allow this?", rows.map((r) => r.choice), 0, { heading, ...(e.risk ? { notice: [e.risk] } : {}) });
+    const picked = typeof answer === "number" ? rows[answer] : undefined;
     if (!picked) return deny;
-    if (!picked.editable) return { optionId: picked.optionId };
-    const typed = await io.text!("Change the command", picked.editable.value, { heading });
-    if (typeof typed === "string" && typed.trim()) return { optionId: picked.optionId, input: typed.trim() };
+    if ("pattern" in picked) return { optionId: once!.optionId, pattern: picked.pattern };
+    if (!picked.option.editable) return { optionId: picked.option.optionId };
+    const typed = await io.text!("Change the command", picked.option.editable.value, { heading });
+    if (typeof typed === "string" && typed.trim()) return { optionId: picked.option.optionId, input: typed.trim() };
     // Backed out of the edit: ask again.
   }
 }

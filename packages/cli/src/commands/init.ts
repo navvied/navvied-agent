@@ -60,7 +60,12 @@ export async function setupModel(options: Options, io: IO, next: NextLine, logo:
   const config: ConfigFile = existing.value ?? { models: {} };
 
   const inApp = !logo;
-  const heading = [paint(io.color, "cyan", paint(io.color, "bold", "Connect a model")), paint(io.color, "dim", "Pick with ↑ ↓ and Enter. Nothing to type except a key you paste.")];
+  const heading = [
+    `${mark(io.color)}  ${paint(io.color, "cyan", paint(io.color, "bold", "navvied"))}`,
+    "",
+    paint(io.color, "cyan", paint(io.color, "bold", "Connect a model")),
+    paint(io.color, "dim", "Pick with ↑ ↓ and Enter. Nothing to type except a key you paste."),
+  ];
   let notice: string[] = [];
   const frame = (): { heading: string[]; notice: string[] } => { const f = { heading: inApp ? heading : [], notice }; notice = []; return f; };
 

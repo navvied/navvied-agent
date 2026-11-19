@@ -41,23 +41,48 @@ describe("how much one result may bring", () => {
   });
 });
 
-describe("a list of matches or files is short", () => {
-  test("Grep shows 100 matches and says how many there were, with the way to narrow", async () => {
-    mkdirSync(join(dir, "logs"), { recursive: true });
-    writeFileSync(join(dir, "logs/app.log"), log);
-    const out = await tool("Grep").run({ pattern: " 500 ", path: "logs" }, ctx());
-    expect(out.split("\n").length).toBe(101);
-    expect(out).toMatch(/\[(\d+) matches, 100 shown: add a glob or a narrower pattern\]$/);
-  });
-  test("the search done in the program itself has the same limit (a computer with neither ripgrep nor grep)", async () => {
-    const path = process.env.PATH;
-    process.env.PATH = "";
-    try {
-      const out = await tool("Grep").run({ pattern: " 500 ", path: "logs" }, ctx());
-      // This search also takes at most 50 matches of a file, which is below the limit of 100 for a list.
-      expect(out.split("\n").length).toBeLessThanOrEqual(101);
-      expect(out.split("\n").length).toBeGreaterThan(0);
-    } finally { process.env.PATH = path; }
+describe("a list of matches or files is short, and says what it left out", () => {
+  const search = (pattern: string, path: string, noPrograms = false): Promise<string> => {
+    const before = process.env.PATH;
+    if (noPrograms) process.env.PATH = "";
+    return tool("Grep").run({ pattern, path }, ctx()).finally(() => { process.env.PATH = before; });
+  };
+  const several = (): void => {
+    mkdirSync(join(dir, "three"), { recursive: true });
+    for (const name of ["a", "b", "c"]) writeFileSync(join(dir, "three", `${name}.log`), Array.from({ length: 80 }, (_, i) => `hit ${name} ${i}`).join("\n"));
+  };
+  for (const noPrograms of [false, true]) {
+    const way = noPrograms ? "the search done in the program itself" : "the search program of the computer";
+    test(`${way}: one file with many matches shows 100 and counts the rest`, async () => {
+      mkdirSync(join(dir, "logs"), { recursive: true });
+      writeFileSync(join(dir, "logs/app.log"), log);
+      const out = await search(" 500 ", "logs", noPrograms);
+      const lines = out.split("\n");
+      expect(lines.length).toBe(101);
+      expect(lines.at(-1)).toBe("[2900 more matches were not shown: narrow the pattern, add a glob, or search one file]");
+    });
+    test(`${way}: matches in several files show 50 of each up to 100, and say how many files hid some`, async () => {
+      several();
+      const out = await search("hit", "three", noPrograms);
+      const lines = out.split("\n");
+      expect(lines.length).toBe(101);
+      // The order of files is the search program's own; the first two it finds are shown 50 times each.
+      const perFile = new Map<string, number>();
+      for (const l of lines.slice(0, -1)) perFile.set(l.split(":")[0]!, (perFile.get(l.split(":")[0]!) ?? 0) + 1);
+      expect([...perFile.values()]).toEqual([50, 50]);
+      expect(lines.at(-1)).toBe("[140 more matches in 3 files were not shown: narrow the pattern, add a glob, or search one file]");
+    });
+    test(`${way}: a result that is whole says nothing about what is left`, async () => {
+      writeFileSync(join(dir, "few.txt"), "needle 1\nneedle 2\nother\n");
+      const out = await search("needle", "few.txt", noPrograms);
+      expect(out.split("\n").length).toBe(2);
+      expect(out).not.toContain("not shown");
+    });
+  }
+  test("a search that itself stopped early says there are at least that many", async () => {
+    writeFileSync(join(dir, "huge.txt"), "match\n".repeat(21_000));
+    const out = await search("match", "huge.txt", true);
+    expect(out.split("\n").at(-1)).toMatch(/^\[at least \d+ more matches were not shown: /);
   });
   test("a very long line of a match is cut", async () => {
     writeFileSync(join(dir, "wide.txt"), `needle ${"w".repeat(5000)}\n`);
@@ -95,6 +120,6 @@ describe("through the engine, whatever the tool", () => {
   test("the search that stalled the model: 437 lines of a log, at a window of 64,000", async () => {
     const out = await sizes(64_000, { name: "Grep", args: { pattern: "500", path: "app.log" } }, (d) => writeFileSync(join(d, "app.log"), log));
     expect(out.length).toBeLessThan(outputBudget(64_000) + 400);
-    expect(out).toContain("100 shown");
+    expect(out).toContain("more matches were not shown");
   });
 });

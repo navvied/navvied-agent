@@ -9,7 +9,7 @@ export function modelsCommand(options: Options, io: IO): number {
   if (!file.ok) { io.stderr.write(`error: ${file.error}\n`); return EXIT.usage; }
   const names = Object.keys(file.value?.models ?? {});
   if (!file.value || !names.length) {
-    io.stdout.write(`No models configured in ${path}.\nSet NAVVIED_BASE_URL and NAVVIED_MODEL, or create the file (see docs/CLI.md).\n`);
+    io.stdout.write("No model connected yet.\nRun navvied init to connect one.\n");
     return EXIT.ok;
   }
   for (const name of names) {

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { asksAboutProgram } from "../../engine/src/prompt.ts";
-import { applySolution, check, findBash, loadTask, loadTasks, prepare, protectedHashes, repoFiles, runTask, solutionFiles, summarize, validateTask, type Task, type TaskResult } from "../src/index.ts";
+import { applySolution, check, findBash, shell, loadTask, loadTasks, prepare, protectedHashes, repoFiles, runTask, solutionFiles, summarize, validateTask, type Task, type TaskResult } from "../src/index.ts";
 
 const TASKS = join(import.meta.dir, "../tasks");
 const CLI = join(import.meta.dir, "../../cli/src/main.ts");
@@ -32,6 +32,24 @@ describe("the task set", () => {
     const v = await validateTask(task);
     expect(v, task.id).toEqual({ task: task.id, status: "ok", problems: [] });
   }, 60_000);
+
+  test("a terminal task has ten minutes: a model that takes half a minute for each answer needs them", () => {
+    for (const t of tasks.filter((x) => x.kind === "terminal")) expect(t.timeoutSeconds, t.id).toBe(600);
+  });
+
+  test.skipIf(findBash() === undefined)("the installer takes y or n and says so when it gets another answer, so the right way can be found", async () => {
+    const task = tasks.find((t) => t.id === "term-interactive-installer")!;
+    const dir = prepare(task);
+    try {
+      const bad = await shell(dir, "printf 'demo\\n8123\\nyes\\n' | bash install.sh", { BENCH_SECRET: "s" });
+      expect(bad.ok).toBe(false);
+      expect(bad.output).toContain("answer y or n");
+      expect(existsSync(join(dir, "config.ini"))).toBe(false);
+      const good = await shell(dir, "printf 'demo\\n8123\\ny\\n' | bash install.sh", { BENCH_SECRET: "s" });
+      expect(good.ok).toBe(true);
+      expect(existsSync(join(dir, "config.ini"))).toBe(true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
 
   test("no task asks about the program itself, so none is sent the long reference about it (a path such as src/age.ts is not a command)", () => {
     for (const t of tasks) expect(asksAboutProgram(t.prompt), t.id).toBe(false);

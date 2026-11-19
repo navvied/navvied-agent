@@ -3,7 +3,7 @@ import { remember } from "@navvied/engine";
 import { PERM_MODES, encodeQr, parseEvent, qrText, type CheckpointInfo, type EngineEvent, type PermMode } from "@navvied/protocol";
 import type { Options } from "../args.ts";
 import { MODE_LABEL, renderBanner } from "../banner.ts";
-import { accountPath, configPath, devicesPath, hostedModelsPath, isConfigured, loadConfig, updateConfig, updateStampPath } from "../config.ts";
+import { accountPath, configPath, devicesPath, hostedModelsPath, isConfigured, loadConfig, rememberBashPattern, updateConfig, updateStampPath } from "../config.ts";
 import { DEFAULT_SERVER, readAccount, writeHostedModels, type Account } from "../account.ts";
 import { AccountError, fetchModels } from "../account-client.ts";
 import { connectThisComputer, disconnectThisComputer, relayUrlFor } from "../computer.ts";
@@ -29,19 +29,24 @@ import { RelayHost } from "../relay-host.ts";
 import { ensureFile, memoryPathsFor, memoryRows } from "../memory-ui.ts";
 import { VERSION } from "../help.ts";
 import type { Dock, IO } from "../io.ts";
-import { expandMentions } from "../mentions.ts";
-import { Renderer, paint } from "../render.ts";
+import { expandMentions, extractAttachments, previewChips } from "../mentions.ts";
+import { Renderer, ago, paint } from "../render.ts";
 import { ACCENTS, THEMES, currentTheme, isThemeName, parseAccent, resolveTheme, setTheme } from "../theme.ts";
 import { setupModel } from "./init.ts";
 import { EXIT } from "./run.ts";
 
-/** Every step of a turn in detail: what it did, how long it took, what it ran, and what it printed (`room` lines at most per step). */
-function stepsText(log: readonly { title: string; mark: string; ms?: number; input: string; output: string }[], color: boolean, room: number): string {
+/** The file-op verbs already name the file in the title, so repeating the path below it would only be noise. */
+const NAMES_ITS_OWN_FILE = /^(Read|Wrote|Changed|Could not (read|write|change))\b/;
+
+/** Every step of a turn in detail: what it did, how long it took, what it ran, what it printed (`room` lines at most per step), and navvied's own quiet notes about it (a folder it left, a job left running). */
+function stepsText(log: readonly { title: string; mark: string; ms?: number; input: string; output: string; notes?: string[] }[], color: boolean, room: number): string {
   return log.map((st, i) => {
     const lines = st.output.trimEnd().split("\n");
     const shown = lines.slice(0, room).map((l) => `      ${paint(color, "dim", !Number.isFinite(room) ? l : l.length > 160 ? `${l.slice(0, 159)}…` : l)}`).join("\n");
     const more = lines.length > room ? `\n      ${paint(color, "faint", `… ${lines.length - room} more lines (Ctrl+O or /output shows everything)`)}` : "";
-    return `${paint(color, "bold", `${i + 1}. ${st.mark} ${st.title}`)}${st.ms !== undefined ? paint(color, "dim", `  ${st.ms < 100 ? "<0.1" : (st.ms / 1000).toFixed(1)} s`) : ""}\n   ${paint(color, "dim", "ran:")} ${st.input.replace(/\s+/g, " ").slice(0, 200)}${st.output.trim() ? `\n${shown}${more}` : ""}`;
+    const ran = st.input && !NAMES_ITS_OWN_FILE.test(st.title) ? `\n   ${paint(color, "dim", "ran:")} ${st.input.replace(/\s+/g, " ").slice(0, 200)}` : "";
+    const notes = (st.notes ?? []).map((n) => `\n      ${paint(color, "faint", n)}`).join("");
+    return `${paint(color, "bold", `${i + 1}. ${st.mark} ${st.title}`)}${st.ms !== undefined ? paint(color, "dim", `  ${st.ms < 100 ? "<0.1" : (st.ms / 1000).toFixed(1)} s`) : ""}${ran}${st.output.trim() ? `\n${shown}${more}` : ""}${notes}`;
   }).join("\n\n");
 }
 
@@ -76,6 +81,8 @@ export async function chatCommand(initial: string | undefined, options: Options,
   let effortFlag = options.effort;
   let listed: CheckpointInfo[] = [];
   let restoring: string | undefined;
+  /** Set when this screen asked for the checkpoint list to open a picker, not just to print it. */
+  let checkpointsAsked = false;
   /** Set when this screen asked for the list of conversations, so a list another window asked for does not open a menu here. */
   let listAsked = false;
   /** The words this screen searched for, so a result another window asked for does not open a menu here. */
@@ -119,14 +126,24 @@ export async function chatCommand(initial: string | undefined, options: Options,
     if (e.ev === "usage") { context = { ctx: e.ctx, win: e.win }; dock?.refresh(); }
     if (e.ev === "approval") { approval = e.id; if (presenter && io.choose) void answerApproval(e); }
     if (e.ev === "plan_proposal") proposed = true;
-    if (e.ev === "checkpoints") listed = e.items;
+    if (e.ev === "checkpoints") { listed = e.items; if (checkpointsAsked) { checkpointsAsked = false; void chooseCheckpoint(e.items); } }
     if (e.ev === "found" && searchAsked === e.query) { searchAsked = undefined; void chooseHit(e.query, e.items); }
     menus?.onEvent(e);
     if (e.ev === "sessions" && listAsked) { listAsked = false; void menus?.conversations(e.items); }
     if (e.ev === "session") current = hub.created() ?? current;
     if (e.ev === "loaded") current = hub.created() ?? current;
     if (e.ev === "loaded") say(`${paint(io.color, "cyan", "✓")} Opened ${e.items ? `a conversation of ${e.items.length} step${e.items.length === 1 ? "" : "s"}` : "a conversation"}. Your next message continues it.${e.items?.length ? `\n${e.items.slice(-4).map((i) => paint(io.color, "dim", `  ${i.k === "user" ? "you" : i.k === "assistant" ? "navvied" : "tool"}: ${i.text.replace(/\s+/g, " ").slice(0, 100)}`)).join("\n")}` : ""}`);
-    if (e.ev === "restore" && e.preview && e.changes.length) { restoring = e.id; say(`restore ${e.changes.length} file${e.changes.length === 1 ? "" : "s"}? [y/n]`); }
+    if (e.ev === "restore" && e.preview && e.changes.length) {
+      restoring = e.id;
+      if (presenter && io.choose) void confirmRestore(e);
+      else say(`restore ${e.changes.length} file${e.changes.length === 1 ? "" : "s"}? [y/n]`);
+    }
+    if (e.ev === "restore" && !e.preview) {
+      say(e.changes.length
+        ? `${paint(io.color, "cyan", "✓")} Restored ${e.changes.length} file${e.changes.length === 1 ? "" : "s"}.${e.undoId ? " The checkpoint from just before is kept too, so /checkpoints can get back to this." : ""}`
+        : paint(io.color, "dim", "Nothing changed."));
+      marker();
+    }
     if (e.ev === "done") { busy = false; approval = undefined; switching = false; if (proposed && mode === "plan" && presenter && io.choose) void answerPlan(); else marker(); }
   };
 
@@ -167,18 +184,18 @@ export async function chatCommand(initial: string | undefined, options: Options,
   hub.attach({ send: (line) => { const parsed = parseEvent(String(line)); if (parsed.ok) emit(parsed.value); } }, 0);
   const start = (): boolean => {
     const restarted = hub.restart();
-    if (!restarted.ok) { say(`error: ${restarted.error}`); return false; }
+    if (!restarted.ok) { say(`${paint(io.color, "yellow", "!")} ${restarted.error}`); return false; }
     current = hub.created();
     return true;
   };
   if (isConfigured(options, io)) {
-    if (!hub.created()) { say(`error: ${hub.error()}`); return EXIT.usage; }
+    if (!hub.created()) { say(`${paint(io.color, "yellow", "!")} ${hub.error()}`); return EXIT.usage; }
     current = hub.created();
   }
   const welcome = (): void => {
     io.stderr.write(`${renderBanner({
-      version: VERSION, cwd: current?.cwd ?? cwd, mode, modes, home: io.env.HOME ?? io.env.USERPROFILE, ...(options.kind === "chat" ? { chat: true } : {}),
-      ...(current ? { model: { name: current.modelName, where: current.where }, ...(current.notes.length ? { rules: current.notes } : {}) } : {}),
+      version: VERSION, cwd: current?.cwd ?? cwd, mode, home: io.env.HOME ?? io.env.USERPROFILE, ...(options.kind === "chat" ? { chat: true } : {}),
+      ...(current ? { model: { name: current.modelName, where: current.where }, ...(current.notes.length ? { rules: current.notes } : {}) } : { pickerNext: Boolean(io.choose) }),
     }, io.color, process.stderr.columns)}\n`);
   };
   const footer = (): string => {
@@ -217,6 +234,10 @@ export async function chatCommand(initial: string | undefined, options: Options,
   const answerApproval = async (e: Extract<EngineEvent, { ev: "approval" }>): Promise<void> => {
     const answer = await askApproval(io, e, presenter?.pendingTool, current?.cwd ?? cwd, process.stdout.columns ?? 80);
     approval = undefined;
+    if (answer.pattern) {
+      const saved = rememberBashPattern(configPath(io.env, options.config), answer.pattern);
+      say(saved.ok ? `${paint(io.color, "cyan", "✓")} Will always allow "${answer.pattern}" from now on.` : `${paint(io.color, "yellow", "!")} Could not save that: ${saved.error}`);
+    }
     current?.engine.handle({ cmd: "approve", id: e.id, optionId: answer.optionId, ...(answer.input !== undefined ? { input: answer.input } : {}) });
   };
 
@@ -227,6 +248,14 @@ export async function chatCommand(initial: string | undefined, options: Options,
     marker();
   };
 
+  /** What an `@mention` of a picture or a file comes to: the text without it, the attachment itself, and a line to say about it.
+   * Whether the model can see a picture at all is the engine's call (`caps.vision`, or a refusal it already met): it says so with its own `notice`. */
+  const attach = (text: string, cwd: string): { text: string; images?: { mime: string; data: string }[]; files?: { name: string; mime: string; data: string }[] } => {
+    const a = extractAttachments(text, cwd);
+    for (const n of a.notes) say(n);
+    return { text: expandMentions(a.text, cwd), ...(a.images.length ? { images: a.images } : {}), ...(a.files.length ? { files: a.files } : {}) };
+  };
+
   const send = (text: string): void => {
     if (!current) return;
     busy = true;
@@ -234,7 +263,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
     proposed = false;
     const qid = crypto.randomUUID();
     shown.set(qid, text);
-    current.engine.handle({ cmd: "prompt", text: expandMentions(text, current.cwd), qid, mode, ...(effortFlag ? { effort: effortFlag } : {}) });
+    current.engine.handle({ cmd: "prompt", ...attach(text, current.cwd), qid, mode, ...(effortFlag ? { effort: effortFlag } : {}) });
   };
 
   const setMode = (m: PermMode): void => { mode = m; if (m !== "plan") before = m; };
@@ -249,18 +278,21 @@ export async function chatCommand(initial: string | undefined, options: Options,
       case "help": say(CHAT_HELP); break;
       case "exit": case "quit": requestQuit(); break;
       case "mode":
-        if (PERM_MODES.includes(arg as PermMode)) { setMode(arg as PermMode); say(`mode: ${mode}`); }
-        else say(`usage: /mode <${PERM_MODES.join("|")}>  (now: ${mode})`);
+        if (PERM_MODES.includes(arg as PermMode)) { setMode(arg as PermMode); say(`Mode: ${MODE_LABEL[mode]}`); }
+        else say(`Mode now: ${MODE_LABEL[mode]}. Press Shift+Tab to switch, or type one of: ${PERM_MODES.join(", ")}.`);
         break;
       case "go":
         if (!proposed) { say("there is no plan to approve"); break; }
         setMode(before); send("The plan is approved. Implement it now."); return;
       case "compact": current?.engine.handle({ cmd: "compact" }); busy = true; working(); return;
-      case "checkpoints": current?.engine.handle({ cmd: "checkpoints" }); break;
+      case "checkpoints":
+        if (io.choose) checkpointsAsked = true;
+        current?.engine.handle({ cmd: "checkpoints" });
+        break;
       case "restore": {
         const target = listed[Number(arg) - 1];
-        if (!listed.length) say("run /checkpoints first, then /restore <number>");
-        else if (!target) say(`there is no checkpoint ${arg || "(none given)"} — pick a number from /checkpoints`);
+        if (!listed.length) say("Run /checkpoints first to see the list, then /restore <number>.");
+        else if (!target) say(`There is no checkpoint ${arg || "(none given)"}. Pick a number from /checkpoints.`);
         else current?.engine.handle({ cmd: "restore", id: target.id, preview: true });
         break;
       }
@@ -333,12 +365,35 @@ export async function chatCommand(initial: string | undefined, options: Options,
     hub.command(JSON.stringify({ cmd: "load", id: picked.id }), () => undefined);
   };
 
+  /** `/checkpoints`: a snapshot sits before each of your messages; choosing one previews what restoring it would change. */
+  const chooseCheckpoint = async (items: readonly CheckpointInfo[]): Promise<void> => {
+    if (!io.choose) { marker(); return; }
+    if (!items.length) { say("No checkpoints yet. One is made automatically before each of your messages."); marker(); return; }
+    const rows = items.map((cp) => ({ label: cp.label || cp.id, hint: `${ago(cp.at)}, ${cp.repos.join(", ")}` }));
+    const head = [paint(io.color, "cyan", paint(io.color, "bold", "Checkpoints")), paint(io.color, "dim", "Pick one to see what restoring it would change.")];
+    const answer = await io.choose("Which checkpoint?", rows, 0, { heading: head });
+    const picked = typeof answer === "number" ? items[answer] : undefined;
+    if (!picked) { marker(); return; }
+    current?.engine.handle({ cmd: "restore", id: picked.id, preview: true });
+  };
+
+  /** What `/restore` (or picking a checkpoint) asks before it changes a file: a list of what would happen, then Yes or No. */
+  const confirmRestore = async (e: Extract<EngineEvent, { ev: "restore" }>): Promise<void> => {
+    const verb = { revert: "Revert", recreate: "Bring back", remove: "Delete" } as const;
+    const body = e.changes.slice(0, 12).map((c) => `${verb[c.change]}  ${c.path}`);
+    if (e.changes.length > 12) body.push(`… and ${e.changes.length - 12} more`);
+    const head = [paint(io.color, "cyan", paint(io.color, "bold", "Restore this checkpoint?")), paint(io.color, "dim", "This changes files in your project; it never touches the conversation.")];
+    const answer = await io.choose?.(`Restore ${e.changes.length} file${e.changes.length === 1 ? "" : "s"}?`, [{ label: "Yes, restore" }, { label: "No, keep it as it is" }], 1, { heading: head, body });
+    restoring = undefined;
+    if (answer === 0) current?.engine.handle({ cmd: "restore", id: e.id });
+    else marker();
+  };
+
   const chooseModel = async (): Promise<void> => {
     if (!current || !io.choose) return connect();
     const file = loadConfig(configPath(io.env, options.config), io.env);
     const rows = modelRows(capsNow, current.entry, file.ok ? file.value : null);
-    const head = [paint(io.color, "cyan", paint(io.color, "bold", "Choose a model")), paint(io.color, "dim", "Pick with ↑ ↓ and Enter. Nothing to type.")];
-    const answer = await io.choose("Which model do you want to use?", rows, Math.max(0, rows.findIndex((r) => r.action.kind === "current")), { heading: head, ...(busy ? { notice: ["A task is running. Choosing another model stops it first."] } : {}) });
+    const answer = await io.choose("Which model do you want to use?", rows, Math.max(0, rows.findIndex((r) => r.action.kind === "current")), { numbered: false, ...(busy ? { notice: ["A task is running. Choosing another model stops it first."] } : {}) });
     const action = typeof answer === "number" ? rows[answer]?.action : undefined;
     if (!action || action.kind === "current") { marker(); return; }
     if (action.kind === "connect") return connect();
@@ -362,7 +417,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
   const chooseEffort = async (): Promise<void> => {
     if (!capsNow?.efforts?.length) { say("This model has no effort setting. Effort is offered only for models that support it."); marker(); return; }
     const rows = effortRows(capsNow.efforts);
-    if (!io.choose) { say(`usage: /effort <${rows.map((r) => r.level).join("|")}>`); marker(); return; }
+    if (!io.choose) { say(`Levels: ${rows.map((r) => r.level).join(", ")}. Type /effort <level> to choose one.`); marker(); return; }
     const head = [paint(io.color, "cyan", paint(io.color, "bold", "Effort")), paint(io.color, "dim", "Pick with ↑ ↓ and Enter. Applies from your next message.")];
     const answer = await io.choose("How hard should it think?", rows, Math.max(0, rows.findIndex((r) => r.level === (capsNow?.effort ?? "auto"))), { heading: head });
     const row = typeof answer === "number" ? rows[answer] : undefined;
@@ -396,7 +451,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
   };
   const pairDevice = async (): Promise<void> => {
     const made = await relay().pair(`Device ${devices.list().filter((d) => d.kind === "relay").length + 1}`).catch((e: Error) => e);
-    if (made instanceof Error) say(`error: ${made.message}`);
+    if (made instanceof Error) say(`${paint(io.color, "yellow", "!")} ${made.message}`);
     else {
       const c = io.color;
       say(`${paint(c, "cyan", "✓")} Open this address on the other device. It carries the key, so keep it private:\n\n  ${paint(c, "bold", made.link)}${qrUnder(made.link)}\n\n  Check that it shows this code: ${paint(c, "bold", made.code)}\n  ${paint(c, "dim", `It works for ${Math.round(made.expiresInSeconds / 60)} minutes. You will be asked here before it connects.`)}`);
@@ -437,7 +492,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
   const openPage = async (): Promise<void> => {
     if (web) { io.system.open(web.link); say(`The page is open. It shows this conversation: ${paint(io.color, "dim", web.site)}`); marker(); return; }
     const opened = await openWeb(options, io, hub, devices);
-    if (!opened.ok) say(`error: ${opened.error}`);
+    if (!opened.ok) say(`${paint(io.color, "yellow", "!")} ${opened.error}`);
     else {
       web = opened.opened;
       say(`Opening ${paint(io.color, "bold", web.site)} in your browser. It will ask you here before it connects.\nIt shows this same conversation, so you can keep going there.`);
@@ -448,11 +503,11 @@ export async function chatCommand(initial: string | undefined, options: Options,
   const look = (name: string, arg: string): void => {
     const path = configPath(io.env, options.config);
     const theme = currentTheme();
-    if (name === "theme" && !isThemeName(arg)) { say(`themes: ${Object.entries(THEMES).map(([n, t]) => `${n} (${t.hint})`).join(" · ")}\nnow: ${theme.name} — use /theme <name>`); return; }
-    if (name === "accent" && arg !== "reset" && !parseAccent(arg)) { say(`accents: ${Object.keys(ACCENTS).join(" · ")} or a #rrggbb colour — use /accent <name>, or /accent reset\nnow: ${theme.accent}`); return; }
+    if (name === "theme" && !isThemeName(arg)) { say(`Themes: ${Object.entries(THEMES).map(([n, t]) => `${n} (${t.hint})`).join(", ")}.\nNow using ${theme.name}. Type /theme <name> to switch.`); return; }
+    if (name === "accent" && arg !== "reset" && !parseAccent(arg)) { say(`Accents: ${Object.keys(ACCENTS).join(", ")}, or a #rrggbb colour.\nNow using ${theme.accent}. Type /accent <name>, or /accent reset to go back to the theme's own.`); return; }
     const patch = name === "theme" ? { theme: arg } : { accent: arg === "reset" ? undefined : parseAccent(arg) };
     const saved = updateConfig(path, patch);
-    if (!saved.ok) { say(`error: ${saved.error}`); return; }
+    if (!saved.ok) { say(`${paint(io.color, "yellow", "!")} ${saved.error}`); return; }
     setTheme(resolveTheme(saved.value, io.env));
     say(`${paint(io.color, "cyan", "●")} ${name} is now ${arg}`);
   };
@@ -478,7 +533,13 @@ export async function chatCommand(initial: string | undefined, options: Options,
       }
       if (pending !== undefined) send(pending); else marker();
     }
-    else if (!quit) { say("Not connected. Type /connect to try again, or run navvied init."); marker(); }
+    else if (!quit) {
+      if (io.choose) {
+        const again = await io.choose("Not connected yet", [{ label: "Try again" }, { label: "Not now" }], 0, { notice: ["Setup was closed before a model was chosen."] });
+        if (again === 0) return connect(pending);
+      } else say("Not connected. Run navvied init to try again.");
+      marker();
+    }
   };
 
   const offKeys = io.keys?.((key) => {
@@ -517,14 +578,16 @@ export async function chatCommand(initial: string | undefined, options: Options,
       const qid = crypto.randomUUID();
       shown.set(qid, line);
       presenter?.queue(qid, line);
-      current?.engine.handle({ cmd: "prompt", text: current ? expandMentions(line, current.cwd) : line, qid, mode });
+      current?.engine.handle({ cmd: "prompt", ...(current ? attach(line, current.cwd) : { text: line }), qid, mode });
     }
     else send(line);
   };
 
   const echo = (line: string): string | undefined => (line.startsWith("/") || !current ? `${promptMark}${paint(io.color, "dim", line)}\n` : undefined);
-  const input = io.lines({ suggest: makeSuggest(SLASH_COMMANDS, current?.cwd ?? cwd), ...(presenter ? { echo } : {}) })[Symbol.asyncIterator]();
-  if (initial) { if (current) send(initial); else await connect(initial); } else marker();
+  const input = io.lines({ suggest: makeSuggest(SLASH_COMMANDS, current?.cwd ?? cwd), chips: (text) => previewChips(text, current?.cwd ?? cwd), ...(presenter ? { echo } : {}) })[Symbol.asyncIterator]();
+  if (initial) { if (current) send(initial); else await connect(initial); }
+  else if (!current && io.choose) await connect();
+  else marker();
   while (!quit) {
     const next = await Promise.race([input.next(), quitSignal]); // a Ctrl+C must not wait for the next keystroke
     if (next === QUIT || next.done) break;

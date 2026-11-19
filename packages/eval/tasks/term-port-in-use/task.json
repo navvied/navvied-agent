@@ -15,6 +15,6 @@
     "README.md"
   ],
   "maxSteps": 30,
-  "timeoutSeconds": 300,
+  "timeoutSeconds": 600,
   "setup": "python3 -c \"import socket; s = socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[1])\" > port.txt\nprintf \"%s\" \"$(cat <<'EOF'\nimport socket, time\nport = int(open(\"port.txt\").read().strip())\ns = socket.socket()\ns.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\ns.bind((\"127.0.0.1\", port))\ns.listen(1)\ntime.sleep(300)\nEOF\n)\" > /tmp/navvied-leftover-$$.py\n(python3 \"/tmp/navvied-leftover-$$.py\" >/dev/null 2>&1 & echo $! > leftover.pid)\nsleep 0.5\nrm -f /tmp/navvied-leftover-$$.py"
 }

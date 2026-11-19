@@ -14,7 +14,7 @@ export type Rand = () => number;
 export const pick = <T>(r: Rand, xs: readonly T[]): T => xs[Math.floor(r() * xs.length)]!;
 export const int = (r: Rand, max: number): number => Math.floor(r() * max);
 
-const WORDS = ["cmd", "ev", "text", "mode", "effort", "qid", "id", "images", "paths", "type", "subtype", "message", "content", "usage", "input", "output", "status", "name", "plan", "models", "model", "baseUrl", "command", "args", "window", "preview", "optionId", "mime", "data", "__proto__", "constructor", "", " "];
+const WORDS = ["cmd", "ev", "text", "mode", "effort", "qid", "id", "images", "files", "paths", "type", "subtype", "message", "content", "usage", "input", "output", "status", "name", "plan", "models", "model", "baseUrl", "command", "args", "window", "preview", "optionId", "mime", "data", "__proto__", "constructor", "", " "];
 const STRINGS = ["", "prompt", "cancel", "approve", "restore", "ask", "auto", "plan", "high", "image/png", "x".repeat(300), "\u0000", "日本語", "\n", "{}", "null", "tool_use", "text_delta", "assistant", "user", "result", "success", "error", "-1", "1e9", "http://h/v1", "NaN"];
 
 /** A random JSON-compatible value, biased toward the field names and values the program actually looks at. */

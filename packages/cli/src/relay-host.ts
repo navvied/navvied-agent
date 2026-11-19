@@ -52,6 +52,9 @@ const REPLACED = 4000;
 
 const HELLO_WAIT = "The device is waiting to be allowed on the computer.";
 
+/** A connection with nothing arriving at all, for this many of its own ping intervals, is given up on sooner than a dead TCP socket otherwise would be noticed. */
+const DEAD_AFTER_PINGS = 2.5;
+
 class Link {
   #socket: SocketLike | undefined;
   #peers = new Map<number, Peer>();
@@ -61,6 +64,8 @@ class Link {
   #delay: number;
   #approved: boolean;
   #ephemeral = false;
+  /** The last time anything at all arrived on this connection: a ping that the relay never answers is a connection gone quiet, not one still there. */
+  #lastSeen = 0;
   ready = false;
 
   constructor(private readonly host: RelayHost, readonly device: Device, private readonly pairing: Pairing, private readonly code: string) {
@@ -72,12 +77,16 @@ class Link {
     if (this.#stopped) return;
     const socket = this.host.open(this.host.url);
     this.#socket = socket;
+    this.#lastSeen = this.host.now();
     socket.onopen = () => {
       socket.send(JSON.stringify({ t: "hello", role: "engine", c: this.pairing.channel, h: this.pairing.proofHash }));
-      this.#ping = setInterval(() => { try { socket.send(JSON.stringify({ t: "ping" })); } catch { /* closing */ } }, this.host.pingMs);
+      this.#ping = setInterval(() => {
+        if (this.host.now() - this.#lastSeen > this.host.pingMs * DEAD_AFTER_PINGS) { try { socket.close(); } catch { /* already closing */ } return; }
+        try { socket.send(JSON.stringify({ t: "ping" })); } catch { /* closing */ }
+      }, this.host.pingMs);
       (this.#ping as { unref?: () => void }).unref?.();
     };
-    socket.onmessage = (e) => this.#message(String(e.data));
+    socket.onmessage = (e) => { this.#lastSeen = this.host.now(); this.#message(String(e.data)); };
     socket.onclose = (e) => this.#closed(socket, (e as { code?: number } | undefined)?.code);
     socket.onerror = () => undefined;
   }

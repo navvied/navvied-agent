@@ -1,4 +1,5 @@
-import { rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { LineSplitter, parseEvent } from "@navvied/protocol";
 import type { Adapter } from "./adapter.ts";
 import { instantiate } from "./adapter.ts";
@@ -23,6 +24,8 @@ export interface RunOptions {
   agent?: Adapter;
   /** The key the agent is given for the counter, where it takes one. */
   key?: string;
+  /** A folder to keep what the agent printed (its events) and what it said on its error output, one pair of files per run, for reading why a run went as it did. A key is cut out of it. */
+  trace?: string;
 }
 
 /** How the agent misused the terminal: calls the tools refused as wrong, waits that only polled, and a `cd` put in front of a command that could have used `cwd`. */
@@ -66,6 +69,8 @@ export interface TaskResult {
   firstRequestMs?: number;
   /** For a run that did not solve the task: what the agent last said, the steps it took, and the tail of what the check printed. */
   why?: { said: string; steps: string[]; check: string };
+  /** When the time ran out: whether the check passed all the same (the task was done, the agent was still waiting for its last answer). */
+  checkedAtTimeout?: boolean;
   /** How the agent misused the terminal tools (ours only: another agent is measured from outside). */
   misuse?: Misuse;
   /** How many requests the model answered with a server error or not at all. */
@@ -134,6 +139,13 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
   const timer = setTimeout(() => { timedOut = true; proc.kill("SIGKILL"); }, task.timeoutSeconds * 1000);
   const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
   const exitCode = await proc.exited;
+  if (opts.trace) {
+    const hide = [opts.env?.NAVVIED_API_KEY, opts.key].filter((k): k is string => !!k && k.length >= 8 && k !== "none");
+    const clean = (t: string): string => hide.reduce((x, k) => x.split(k).join("[key]"), t);
+    mkdirSync(opts.trace, { recursive: true });
+    writeFileSync(join(opts.trace, `${task.id}.events.jsonl`), clean(stdout));
+    writeFileSync(join(opts.trace, `${task.id}.stderr.txt`), clean(stderr));
+  }
   clearTimeout(timer);
   const peak = memory.stop();
   const hits = opts.meter ? await opts.meter.take(runId) : [];
@@ -143,7 +155,8 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
   const metrics = opts.agent ? { modelCalls: 0, toolCalls: 0, outTokens: 0, peakContext: 0 } as Metrics : measure(stdout);
   const after = protectedHashes(dir, task.protect);
   const tampered = JSON.stringify(Object.entries(before).sort()) !== JSON.stringify(Object.entries(after).sort());
-  const result = timedOut ? undefined : await check(dir, task, 120_000, secret);
+  // The check is made also when time ran out: an agent that had done the task and was only waiting for its last answer is told apart.
+  const result = await check(dir, task, 120_000, secret);
   const left = leftovers(dir);
   killProcesses(left);
   if (task.teardown) await shell(dir, task.teardown, secret).catch(() => undefined);
@@ -161,6 +174,7 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
       largest: ((big) => ({ requestBytes: big.requestBytes, inTokens: big.inTokens, status: big.status }))(hits.reduce((a, h) => (h.requestBytes > a.requestBytes ? h : a), hits[0]!)),
       prompt: { systemChars: hits[0]!.systemChars, tools: hits[0]!.tools, toolChars: hits[0]!.toolChars, requestBytes: hits[0]!.requestBytes },
     } : {}),
+    ...(timedOut ? { checkedAtTimeout: result.ok } : {}),
     ...(metrics.misuse ? { misuse: metrics.misuse } : {}),
     ...(peak ? { peakMb: peak.agentMb, peakTreeMb: peak.treeMb } : {}),
     ...(reason !== "solved" ? { why: { said: clean(metrics.said ?? "").slice(-300), steps: (metrics.steps ?? []).slice(0, 40), check: clean(result?.output ?? "").slice(-400) } } : {}),

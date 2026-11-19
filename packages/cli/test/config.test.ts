@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkpointsDir, configPath, loadConfig, resolveModel, sessionsDir, type ConfigFile } from "../src/config.ts";
+import { checkpointsDir, configPath, loadConfig, rememberBashPattern, resolveModel, sessionsDir, type ConfigFile } from "../src/config.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-cfg-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -62,6 +62,17 @@ describe("loadConfig", () => {
     expect(r.ok && r.value).toEqual({ default: "a", models: { a: { baseUrl: "http://h/v1", model: "m", window: 4000, reasoning: "none", apiKeyEnv: "K", headers: { "x-a": "b" } } } });
   });
 
+  test("whether a model sees pictures and whether its service reads PDFs is kept when it is a yes or no, and reaches the resolved model", () => {
+    const p = write("vision.json", { default: "a", models: { a: { baseUrl: "http://h/v1", model: "m", vision: true, pdf: true }, b: { baseUrl: "http://h/v1", model: "m", vision: false }, c: { baseUrl: "http://h/v1", model: "m", vision: "yes", pdf: 1 } } });
+    const r = loadConfig(p);
+    expect(r.ok && r.value?.models).toEqual({ a: { baseUrl: "http://h/v1", model: "m", vision: true, pdf: true }, b: { baseUrl: "http://h/v1", model: "m", vision: false }, c: { baseUrl: "http://h/v1", model: "m" } });
+    if (!r.ok || !r.value) throw new Error("not read");
+    const seen = (name: string) => { const m = resolveModel(name, r.value, {}, p); return m.ok ? [m.value.vision, m.value.pdf] : "error"; };
+    expect(seen("a")).toEqual([true, true]);
+    expect(seen("b")).toEqual([false, undefined]);
+    expect(seen("c")).toEqual([undefined, undefined]);
+  });
+
   test.each([
     ["broken JSON", "{nope", /config\.json|bad\.json/],
     ["no models", { x: 1 }, /expected \{ "models"/],
@@ -104,6 +115,27 @@ describe("permission rules in the file", () => {
       expect(r.ok).toBe(false);
       expect(!r.ok && r.error).toContain("permissions");
     }
+  });
+});
+
+describe("remembering a command pattern from the approval screen", () => {
+  test("a pattern becomes a Bash(...) rule, added to whatever the file already allows", () => {
+    const p = write("remember.json", { models: {}, permissions: { allow: ["Edit(src/**)"] } });
+    const r = rememberBashPattern(p, "npm test *");
+    expect(r.ok && r.value?.permissions?.allow).toEqual(["Edit(src/**)", "Bash(npm test *)"]);
+    const reloaded = loadConfig(p);
+    expect(reloaded.ok && reloaded.value?.permissions?.allow).toEqual(["Edit(src/**)", "Bash(npm test *)"]);
+  });
+  test("remembering the same pattern twice does not duplicate the rule", () => {
+    const p = write("remember2.json", { models: {} });
+    rememberBashPattern(p, "git status *");
+    const r = rememberBashPattern(p, "git status *");
+    expect(r.ok && r.value?.permissions?.allow).toEqual(["Bash(git status *)"]);
+  });
+  test("a broken file is reported, not silently overwritten", () => {
+    const p = write("broken.json", "{oops");
+    const r = rememberBashPattern(p, "npm test *");
+    expect(r.ok).toBe(false);
   });
 });
 
@@ -214,9 +246,9 @@ describe("resolveModel", () => {
     const r = R(undefined, null, { NAVVIED_BASE_URL: "http://local/v1", NAVVIED_MODEL: "qwen", NAVVIED_API_KEY: "k", NAVVIED_WINDOW: "32768" });
     expect(r.ok && r.value).toMatchObject({ name: "qwen", window: 32768, provider: { baseUrl: "http://local/v1", model: "qwen", apiKey: "k" } });
   });
-  test("nothing configured: a message that says how to fix it", () => {
+  test("nothing configured: a message that points at the pressable setup", () => {
     const r = R(undefined, null);
-    expect(!r.ok && r.error).toMatch(/no model is configured\. Create \/cfg\.json .*NAVVIED_BASE_URL/);
+    expect(!r.ok && r.error).toBe("no model is connected yet. Run navvied init to connect one.");
   });
 });
 

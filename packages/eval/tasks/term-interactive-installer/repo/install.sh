@@ -8,6 +8,7 @@ ask() {
 ask "Project name:" name
 ask "Port:" port
 ask "Enable metrics (y/n):" metrics
+case "$metrics" in y|n) ;; *) echo "answer y or n" >&2; exit 1 ;; esac
 token=$(python3 -c "import hashlib,os; print(hashlib.sha1((os.environ.get('BENCH_SECRET','') + 'inst').encode()).hexdigest()[:12])")
 printf "name=%s\nport=%s\nmetrics=%s\ntoken=%s\n" "$name" "$port" "$metrics" "$token" > config.ini
 echo "wrote config.ini"

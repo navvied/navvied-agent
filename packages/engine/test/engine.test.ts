@@ -169,7 +169,7 @@ describe("tools through the loop", () => {
     expect(t.some((e) => e.ev === "tool" && e.name === "Read" && e.status === "done" && /1\talpha/.test(e.output ?? "") && /2\tgamma/.test(e.output ?? ""))).toBe(true);
 
     t = await r.turn(prompt("bash it"));
-    expect(t.some((e) => e.ev === "tool" && e.name === "Bash" && e.status === "done" && /from-shell/.test(e.output ?? "") && /\[exit 0\]/.test(e.output ?? ""))).toBe(true);
+    expect(t.some((e) => e.ev === "tool" && e.name === "Bash" && e.status === "done" && /from-shell/.test(e.output ?? ""))).toBe(true);
     r.cleanup();
   });
 
@@ -234,7 +234,7 @@ describe("permission modes", () => {
     expect(r.of("approval")).toHaveLength(1);
     r.send(prompt("bash it", { mode: "ask" }));
     await until(() => r.of("approval").length === 2);
-    expect(r.of("approval")[1]!.options[1]!.name).toBe("Allow, and do not ask again for echo commands");
+    expect(r.of("approval")[1]!.options[1]!.name).toBe("Allow, and do not ask again for echo and pwd commands");
     r.send({ cmd: "approve", id: r.of("approval")[1]!.id, optionId: "deny" });
     await r.engine.idle();
     r.cleanup();

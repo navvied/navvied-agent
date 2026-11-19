@@ -42,7 +42,7 @@ describe("random input never breaks the protocol layer", () => {
 
   test("an accepted command only ever carries known fields", () => {
     const r = prng(3);
-    const known = new Set(["cmd", "text", "qid", "images", "effort", "mode", "paths", "id", "optionId", "preview"]);
+    const known = new Set(["cmd", "text", "qid", "images", "files", "effort", "mode", "paths", "id", "optionId", "preview", "input"]);
     for (let i = 0; i < RUNS; i++) {
       const base = { cmd: pick(r, ["prompt", "cancel", "approve", "compact", "load", "checkpoints", "restore"]), text: pick(r, ["hi", "", "x"]), id: "a", optionId: "o", ...(value(r) as object) };
       const result = validateCommand(base);

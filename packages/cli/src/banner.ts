@@ -3,7 +3,6 @@ import { paint } from "./render.ts";
 import { currentTheme, fg, mix } from "./theme.ts";
 
 export const MODE_LABEL: Record<PermMode, string> = { auto: "Auto", ask: "Ask first", edits: "Accept edits", plan: "Plan only", bypass: "Bypass permissions" };
-const MODE_SHORT: Record<PermMode, string> = { ask: "Ask", edits: "Edits", plan: "Plan", auto: "Auto", bypass: "Bypass" };
 const MODE_NOTE: Record<PermMode, string> = {
   auto: "asks only for what cannot be undone",
   ask: "asks before changing files or running commands",
@@ -19,8 +18,6 @@ export interface BannerInfo {
   version: string;
   cwd: string;
   mode: PermMode;
-  /** The modes this model can work in; the hint about switching lists these. */
-  modes?: readonly PermMode[];
   /** Absent when no model is connected yet. */
   model?: { name: string; where: string };
   /** Instruction files in effect. */
@@ -28,6 +25,8 @@ export interface BannerInfo {
   home?: string;
   /** A chat: a conversation with a folder of its own, not a project. */
   chat?: boolean;
+  /** No model yet, and a pressable list to connect one opens right after this banner. */
+  pickerNext?: boolean;
 }
 
 const GLYPHS: Record<string, string[]> = {
@@ -72,14 +71,6 @@ const tidy = (cwd: string, home: string | undefined, width: number): string => {
   return short.length > width ? `…${short.slice(short.length - width + 1)}` : short;
 };
 
-export interface Keys { key: string; does: string }
-
-/** Key and meaning rows, aligned. */
-export function keyRows(rows: Keys[], color: boolean): string[] {
-  const w = Math.max(...rows.map((r) => r.key.length)) + 3;
-  return rows.map((r) => `  ${paint(color, "cyan", paint(color, "bold", r.key.padEnd(w)))}${paint(color, "dim", r.does)}`);
-}
-
 /**
  * The welcome screen. It says what this is, what is connected and what to do next; it is shown at the start of a
  * session and scrolls away once the conversation begins.
@@ -92,22 +83,12 @@ export function renderBanner(info: BannerInfo, color: boolean, columns = 100): s
   const title = `  ${mark(color)}  ${accent(bold("navvied"))}`;
   const version = paint(color, "faint", `v${info.version}`);
   const gap = Math.max(1, Math.max(columns, 60) - 1 - visible(title) - visible(version));
-  const modes = info.modes ?? (["ask", "edits", "plan", "auto", "bypass"] as const);
   const intro = wrap(info.chat ? "Your assistant. Ask anything. It can search the web and make files for you, in a folder of its own." : "Your coding assistant. Describe what to build or fix, and it does the work in this folder.", width - 7).map((l) => `     ${dim(l)}`);
   const lines: string[] = ["", `${title}${" ".repeat(gap)}${version}`, ...intro, ""];
 
   if (!info.model) {
     lines.push(`  ${paint(color, "yellow", "●")} ${bold("No model connected yet")}`);
-    lines.push(...wrap("A model is the AI that does the thinking. Choose one to get started.", width - 6).map((l) => `    ${dim(l)}`));
-    lines.push("", `  ${bold("Get started")}`);
-    const step = (n: string, parts: [string, boolean][]): string => `  ${accent(n)}  ${parts.map(([t, hot]) => (hot ? accent(bold(t)) : dim(t))).join("")}`;
-    lines.push(step("1", [["Press ", false], ["Enter", true], [" to see how to connect one.", false]]));
-    lines.push(step("2", [["Use ", false], ["↑ ↓", true], [" to choose, and ", false], ["Enter", true], [" to confirm. Nothing to type.", false]]));
-    lines.push(step("3", [["Then just describe what you want done.", false]]));
-    lines.push("", `  ${paint(color, "faint", "Nothing to install: the free models of navvied.com (no account, pick them in the list),")}`);
-    lines.push(`  ${paint(color, "faint", "or sign in with a free navvied account for more.")}`);
-    lines.push(`  ${paint(color, "faint", "Free and private: a model running on this computer (Ollama, LM Studio).")}`);
-    lines.push(`  ${paint(color, "faint", "Subscription: a program you are signed in to.   Pay per use: an API key.")}`, "");
+    lines.push(...wrap(info.pickerNext ? "A model is the AI that does the thinking. Pick one below." : "A model is the AI that does the thinking. Type /connect to pick one.", width - 6).map((l) => `    ${dim(l)}`), "");
     return lines.join("\n");
   }
 
@@ -117,12 +98,6 @@ export function renderBanner(info: BannerInfo, color: boolean, columns = 100): s
   if (!info.chat) lines.push(field("Mode", MODE_LABEL[info.mode], MODE_NOTE[info.mode]));
   if (info.rules?.length) lines.push(field("Rules", info.rules.join(", "), "your project instructions"));
   lines.push("", `  ${bold("Try it")}`, `  ${paint(color, "faint", "Type a request in plain words, for example:")}`);
-  lines.push(...(info.chat ? [`    ${dim('"plan a week in Bali for two"')}`, `    ${dim('"explain compound interest, then make a table I can keep"')}`] : [`    ${dim('"add a contact page to the website"')}`, `    ${dim('"why does the build fail?"')}`]), "", `  ${bold("Handy keys")}`);
-  lines.push(...keyRows([
-    { key: "/", does: "Show every command" },
-    { key: "@", does: "Attach a file to your message" },
-    ...(modes.length > 1 ? [{ key: "Shift+Tab", does: `Switch mode: ${modes.map((m) => MODE_SHORT[m]).join(", ")}` }] : []),
-    { key: "Esc", does: "Stop what it is doing" },
-  ], color), "");
+  lines.push(`    ${dim(info.chat ? '"plan a week in Bali for two"' : '"add a contact page to the website"')}`, "");
   return lines.join("\n");
 }

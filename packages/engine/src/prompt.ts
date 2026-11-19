@@ -9,6 +9,10 @@ export interface PromptInfo {
   date: string;
   persona?: string;
   instructions?: string;
+  /** Commands in the background that ended since the model last heard of them, one line each. */
+  finished?: string[];
+  /** Tools that exist and are not offered in this request: named, without their definitions. */
+  also?: string[];
   /** What to say about the program itself, for a request that asks. */
   reference?: string;
   /** The names of the tools offered in this request, so the prompt names only those. */
@@ -56,7 +60,9 @@ export function systemPrompt(info: PromptInfo, mode: PermMode): string {
       `You are a coding assistant working in ${info.cwd} on ${info.platform}.`,
       SMALL_RULES,
       mode === "plan" ? PLAN_NOTE : "",
+      info.also?.length ? `Also available, by name: ${info.also.join(", ")}.` : "",
       info.reference,
+      info.finished?.length ? info.finished.join("\n") : "",
       info.skills,
       info.instructions ? `Standing instructions from the user. Follow them:\n\n${info.instructions}` : "",
     ].filter(Boolean).join("\n\n");
@@ -66,7 +72,9 @@ export function systemPrompt(info: PromptInfo, mode: PermMode): string {
     `Working directory: ${info.cwd}. Platform: ${info.platform}. Date: ${info.date}.`,
     `Work carefully: read before you edit, make the smallest correct change, run the tests or the program to check it, and say what you verified. Be concise. Never claim to have done what you did not. Prefer Read, Glob and Grep to the shell for looking at code.${info.tools?.includes("TodoWrite") ? " Use TodoWrite for work in several steps." : ""} If a tool call is denied, do not retry it: ask what they prefer.`,
     mode === "plan" ? PLAN_NOTE : "",
+    info.also?.length ? `Also available, by name: ${info.also.join(", ")}.` : "",
     info.reference,
+    info.finished?.length ? info.finished.join("\n") : "",
     info.skills,
     info.instructions ? `The user keeps standing instructions for this work. Follow them unless the current request says otherwise.\n\n${info.instructions}` : "",
   ].filter(Boolean).join("\n\n");

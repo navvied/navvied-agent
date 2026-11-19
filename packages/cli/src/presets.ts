@@ -52,6 +52,9 @@ interface Service {
   page: string;
   baseUrl: string;
   api?: "messages";
+  /** Every model of the service can see pictures, and (messages API) reads a PDF given as a file. */
+  vision?: true;
+  pdf?: true;
   window: number;
   headers(key: string): Record<string, string>;
   keep?(id: string): boolean;
@@ -59,13 +62,13 @@ interface Service {
 
 const ANTHROPIC: Service = {
   name: "Anthropic", env: "ANTHROPIC_API_KEY", prefix: "sk-ant-", page: "https://console.anthropic.com/settings/keys",
-  baseUrl: "https://api.anthropic.com/v1", api: "messages", window: 200_000,
+  baseUrl: "https://api.anthropic.com/v1", api: "messages", vision: true, pdf: true, window: 200_000,
   headers: (key) => ({ "x-api-key": key, "anthropic-version": "2023-06-01" }),
 };
 
 const OPENAI: Service = {
   name: "OpenAI", env: "OPENAI_API_KEY", prefix: "sk-", not: ["sk-ant-", "sk-or-"], page: "https://platform.openai.com/api-keys",
-  baseUrl: "https://api.openai.com/v1", window: 128_000, headers: (key) => ({ authorization: `Bearer ${key}` }),
+  baseUrl: "https://api.openai.com/v1", vision: true, window: 128_000, headers: (key) => ({ authorization: `Bearer ${key}` }),
   keep: (id) => /^(gpt|o\d|chatgpt)/.test(id) && !/(audio|realtime|tts|whisper|embed|image|moderation|transcribe|search|instruct)/.test(id),
 };
 
@@ -154,7 +157,7 @@ const hosted = (svc: Service, label: string, hint: string): Preset => ({
       const model = await chooseModel(s, () => listModels(s, svc.baseUrl, svc.headers(secret), svc.keep));
       if (model === "back") return "back";
       if (typeof model === "object") { s.say(`${svc.name} did not accept that key (${model.unauthorised}). Check it and try again.`); continue; }
-      return { name: slug(model), entry: { baseUrl: svc.baseUrl, ...(svc.api ? { api: svc.api } : {}), model, window: svc.window, ...key } };
+      return { name: slug(model), entry: { baseUrl: svc.baseUrl, ...(svc.api ? { api: svc.api } : {}), model, window: svc.window, ...(svc.vision ? { vision: true } : {}), ...(svc.pdf ? { pdf: true } : {}), ...key } };
     }
   },
 });
@@ -277,7 +280,7 @@ async function claudeModel(s: Screen, path: string): Promise<Result | "back"> {
   const chosen = CLAUDE_MODELS[at]!;
   // navvied runs the work itself (its own tools, skills, rules and memory) and uses only the model of the sign-in. The program is kept for when the sign-in cannot be read.
   if (loginReadable(s, "claude")) {
-    return { name: "claude", entry: { api: "messages", baseUrl: "https://api.anthropic.com/v1", model: CLAUDE_NATIVE[chosen.id] ?? "claude-sonnet-5-5", signIn: { provider: "claude" }, window: 200_000, display: { name: chosen.id === "default" ? "Claude" : `Claude ${chosen.name}` } } };
+    return { name: "claude", entry: { api: "messages", baseUrl: "https://api.anthropic.com/v1", model: CLAUDE_NATIVE[chosen.id] ?? "claude-sonnet-5-5", signIn: { provider: "claude" }, vision: true, pdf: true, window: 200_000, display: { name: chosen.id === "default" ? "Claude" : `Claude ${chosen.name}` } } };
   }
   return { name: "claude", entry: { command: path, window: 200_000, ...(chosen.id === "default" ? {} : { model: chosen.id }), models: CLAUDE_MODELS, efforts: ["low", "medium", "high", "xhigh", "max"] } };
 }
@@ -451,7 +454,7 @@ const codexSubscription: Preset = {
       const [version, status] = await Promise.all([versionOf(s, path), codexStatus(s, path)]);
       const program = `Codex${version ? ` ${version}` : ""}`;
       const entry: Result = loginReadable(s, "chatgpt")
-        ? { name: "codex", entry: { api: "responses", baseUrl: "https://chatgpt.com/backend-api/codex", model: "gpt-5.5", signIn: { provider: "chatgpt" }, window: 200_000, display: { name: "ChatGPT" } } }
+        ? { name: "codex", entry: { api: "responses", baseUrl: "https://chatgpt.com/backend-api/codex", model: "gpt-5.5", signIn: { provider: "chatgpt" }, vision: true, window: 200_000, display: { name: "ChatGPT" } } }
         : { name: "codex", entry: { command: path, adapter: "codex", window: 200_000, efforts: ["low", "medium", "high", "xhigh"] } };
       if (status.loggedIn && !switching) {
         const at = await s.pick("Codex is ready", [{ label: "Use it", hint: `${program}, signed in with ${status.method}.` }, { label: "Sign in with a different account" }]);

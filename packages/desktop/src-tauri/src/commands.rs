@@ -47,6 +47,19 @@ pub fn page_action(app: AppHandle, webview: Webview, shell: State<Arc<Shell>>, a
     shell::page_action(&app, &shell, &action)
 }
 
+/// The page's own fallback for a paste that carried no `File`: WebKitGTK does not expose a raw image clipboard
+/// target to the page at all (confirmed with the real WebKit remote inspector — `clipboardData` comes back
+/// with no types whatsoever for an image copied the ordinary way), so the page, finding its own `paste` event
+/// empty, asks here directly. Answers `null` when the clipboard holds no image, never an error, so a plain-text
+/// paste (already working on its own) is never slowed down by this.
+#[tauri::command]
+pub fn clipboard_image(webview: Webview, shell: State<Arc<Shell>>) -> Result<Value, String> {
+    if !from_loopback(&webview, &shell) {
+        return Err("not allowed".into());
+    }
+    shell::clipboard_image()
+}
+
 #[tauri::command]
 pub fn relay_pair(app: AppHandle, webview: Webview, shell: State<Arc<Shell>>, label: Option<String>) -> Result<Value, String> {
     if !from_loopback(&webview, &shell) {

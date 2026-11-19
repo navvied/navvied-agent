@@ -10,7 +10,7 @@ export const SLASH_COMMANDS: readonly CommandInfo[] = [
   { name: "logout", desc: "Sign out of your navvied account" },
   { name: "model", desc: "Choose or switch the model" },
   { name: "effort", desc: "Choose how hard it thinks" },
-  { name: "mode", args: "<ask|edits|plan|auto|bypass>", desc: "Ask: approve each change. Edits: let file edits through. Plan: research first. Auto: act freely, ask only about what cannot be undone. Bypass: ask nothing" },
+  { name: "mode", args: "<name>", desc: "Switch mode (or press Shift+Tab). Ask approves each change, Edits lets file edits through, Plan researches first, Auto acts freely and asks only about what cannot be undone, Bypass asks nothing" },
   { name: "go", desc: "Approve the proposed plan and start implementing it" },
   { name: "compact", desc: "Summarise the earlier messages to free up room" },
   { name: "checkpoints", desc: "List the code snapshots taken before each of your messages" },

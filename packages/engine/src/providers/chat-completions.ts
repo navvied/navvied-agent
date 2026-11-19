@@ -22,10 +22,12 @@ export class ProviderError extends Error {
 }
 
 const part = (p: Part) => (p.type === "text" ? { type: "text", text: p.text } : { type: "image_url", image_url: { url: `data:${p.mime};base64,${p.data}` } });
+/** A file part is a PDF for a service that reads them; this API has no place for one, and its text is already in the message. */
+const sendable = (p: Part): boolean => p.type !== "file";
 
 export function toWire(m: Message): Record<string, unknown> {
   if (m.role === "tool") return { role: "tool", tool_call_id: m.toolCallId, content: typeof m.content === "string" ? m.content : "" };
-  const content = m.content === undefined ? null : typeof m.content === "string" ? m.content : m.content.map(part);
+  const content = m.content === undefined ? null : typeof m.content === "string" ? m.content : m.content.filter(sendable).map(part);
   const out: Record<string, unknown> = { role: m.role, content };
   if (m.toolCalls?.length) out.tool_calls = m.toolCalls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.arguments } }));
   return out;

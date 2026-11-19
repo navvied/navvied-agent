@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { LineEditor } from "../src/tui/editor.ts";
 import { composeFrame, maxInputRows, viewportRows } from "../src/tui/frame.ts";
 import { KeyParser, type Key } from "../src/tui/keys.ts";
-import { Menu, Secret, suggestionLines, workLines } from "../src/tui/menu.ts";
+import { Menu, Secret, chipLines, suggestionLines, workLines } from "../src/tui/menu.ts";
 import { Tui } from "../src/tui/terminal.ts";
 import { Transcript, sanitize } from "../src/tui/transcript.ts";
 import { clip, visibleWidth, wrap } from "../src/tui/wrap.ts";
@@ -79,6 +79,16 @@ describe("wrapping", () => {
 
   test("a word longer than the line is cut", () => {
     expect(wrap("abcdefghijklmnopqrstuvwxyz", 10)).toEqual(["abcdefghij", "klmnopqrst", "uvwxyz"]);
+  });
+
+  test("a long path with no spaces breaks at a slash, not mid-name, when one is in reach", () => {
+    expect(wrap("/tmp/navvied-cli-preview-abcdef/navvied-eval-fix-off-by-one-preview/src/range.ts (6 lines).", 40)).toEqual([
+      "/tmp/navvied-cli-preview-abcdef/",
+      "navvied-eval-fix-off-by-one-preview/src/",
+      "range.ts (6 lines).",
+    ]);
+    // No slash in reach at all: it still falls back to a hard cut, same as any other unbroken word.
+    expect(wrap("a".repeat(12), 5)).toEqual(["aaaaa", "aaaaa", "aa"]);
   });
 
   test("colour carries over a break and is closed at the end of each row", () => {
@@ -407,6 +417,15 @@ describe("menu", () => {
   test("every row fits the width", () => {
     for (const r of new Menu("A very long title that goes on and on", items, 0, true).lines(20, 10)) expect(visibleWidth(r)).toBeLessThanOrEqual(20);
   });
+
+  test("numbered: false drops the digits (the title already makes the choice obvious) and the digit jump with them", () => {
+    const m = new Menu("Which model?", items, 0, false, { numbered: false });
+    const rows = m.lines(60, 20);
+    expect(rows.some((r) => /›\s+alpha/.test(r))).toBe(true);
+    expect(rows.some((r) => /\d\s+alpha/.test(r))).toBe(false);
+    m.apply(text("3"));
+    expect(m.apply(named("enter"))).toEqual({ done: 0 });
+  });
 });
 
 describe("secret field", () => {
@@ -436,6 +455,36 @@ describe("suggestion rows", () => {
     expect(rows[1]).toBe("    /mode <x>   Switch mode");
     expect(rows.at(-1)).toMatch(/Enter run/);
     expect(suggestionLines(list, 1, 60, 10, false).at(-1)).toMatch(/Enter complete/);
+  });
+
+  test("a hint is a quick cue, the first sentence, cut at a word when even that is too wide (not mid-word)", () => {
+    const long = [{ label: "/mode <name>", hint: "Switch mode (or press Shift+Tab). Ask approves each change, Edits lets file edits through.", insert: "/mode ", run: false }];
+    const row = suggestionLines(long, 0, 60, 10, false)[0]!;
+    expect(row).toContain("Switch mode (or press Shift+Tab).");
+    expect(row).not.toContain("Ask approves");
+    const narrow = suggestionLines([{ label: "/x", hint: "a very long cue with no period anywhere in it at all", insert: "/x", run: false }], 0, 20, 10, false)[0]!;
+    expect(narrow.endsWith("…")).toBe(true);
+    expect(visibleWidth(strip(narrow))).toBeLessThanOrEqual(20);
+  });
+
+  test("a list cut short says how many more there are, like the menu does", () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({ label: `/cmd${i}`, insert: `/cmd${i}`, run: true }));
+    const rows = suggestionLines(many, 0, 60, 6, false);
+    expect(rows.some((r) => /\d+ of 20/.test(r))).toBe(true);
+    expect(suggestionLines(list, 0, 60, 10, false).some((r) => / of /.test(r))).toBe(false);
+  });
+});
+
+describe("the chip row (files an @mention would attach)", () => {
+  test("one chip per file, as a plain row, and a reminder of how to remove one", () => {
+    const rows = chipLines([{ name: "photo.png" }, { name: "report.pdf" }], 60, false);
+    expect(rows[0]).toBe("  photo.png   report.pdf");
+    expect(rows[1]).toContain("2 attached");
+    expect(rows[1]).toContain("Backspace");
+  });
+
+  test("nothing mentioned, nothing shown", () => {
+    expect(chipLines([], 60, false)).toEqual([]);
   });
 });
 
