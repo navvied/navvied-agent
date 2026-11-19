@@ -1,0 +1,181 @@
+/**
+ * Hand-written validation (no dependencies). A parsed command is rebuilt from the known, checked fields only —
+ * nothing the peer sent is ever forwarded verbatim.
+ */
+import { EFFORTS, PERM_MODES, SESSION_KINDS, type Command, type Effort, type ImageInput, type PermMode, type Result, type SessionKind } from "./types.ts";
+
+export const LIMITS = {
+  text: 1_000_000,
+  images: 8,
+  imageData: 20_000_000,
+  paths: 100,
+  pathLength: 4096,
+  id: 200,
+} as const;
+
+type Obj = Record<string, unknown>;
+const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
+const fail = <T>(error: string): Result<T> => ({ ok: false, error });
+const ok = <T>(value: T): Result<T> => ({ ok: true, value });
+const isId = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= LIMITS.id;
+
+function images(v: unknown): Result<ImageInput[]> {
+  if (!Array.isArray(v)) return fail("images must be an array");
+  if (v.length > LIMITS.images) return fail(`at most ${LIMITS.images} images per prompt`);
+  const out: ImageInput[] = [];
+  for (const [i, im] of v.entries()) {
+    if (!isObj(im) || typeof im.mime !== "string" || typeof im.data !== "string") return fail(`images[${i}] needs mime and data`);
+    if (!/^image\/[a-z0-9.+-]+$/i.test(im.mime)) return fail(`images[${i}].mime must be an image type`);
+    if (im.data.length > LIMITS.imageData) return fail(`images[${i}] is too large`);
+    out.push({ mime: im.mime, data: im.data });
+  }
+  return ok(out);
+}
+
+export function validateCommand(raw: unknown): Result<Command> {
+  const one = validateOne(raw);
+  if (!one.ok || !isObj(raw) || raw.kind === undefined) return one;
+  if (!SESSION_KINDS.includes(raw.kind as SessionKind)) return fail(`kind must be one of ${SESSION_KINDS.join(", ")}`);
+  return ok({ ...one.value, kind: raw.kind as SessionKind });
+}
+
+function validateOne(raw: unknown): Result<Command> {
+  if (!isObj(raw)) return fail("a command must be a JSON object");
+  switch (raw.cmd) {
+    case "prompt": {
+      if (typeof raw.text !== "string") return fail("prompt.text must be a string");
+      if (raw.text.length > LIMITS.text) return fail("prompt.text is too long");
+      const cmd: Command = { cmd: "prompt", text: raw.text };
+      if (raw.qid !== undefined) { if (!isId(raw.qid)) return fail("prompt.qid must be a short string"); cmd.qid = raw.qid; }
+      if (raw.images !== undefined) { const r = images(raw.images); if (!r.ok) return r; if (r.value.length) cmd.images = r.value; }
+      if (raw.effort !== undefined) { if (!EFFORTS.includes(raw.effort as Effort)) return fail(`prompt.effort must be one of ${EFFORTS.join(", ")}`); cmd.effort = raw.effort as Effort; }
+      if (raw.mode !== undefined) { if (!PERM_MODES.includes(raw.mode as PermMode)) return fail(`prompt.mode must be one of ${PERM_MODES.join(", ")}`); cmd.mode = raw.mode as PermMode; }
+      if (raw.paths !== undefined) {
+        if (!Array.isArray(raw.paths) || raw.paths.some((p) => typeof p !== "string" || p.length > LIMITS.pathLength)) return fail("prompt.paths must be an array of paths");
+        cmd.paths = (raw.paths as string[]).slice(0, LIMITS.paths);
+      }
+      if (!cmd.text.trim() && !cmd.images?.length) return fail("a prompt needs text or an image");
+      return ok(cmd);
+    }
+    case "cancel": return ok({ cmd: "cancel" });
+    case "job.stop":
+      if (!isId(raw.id)) return fail("job.stop needs an id");
+      return ok({ cmd: "job.stop", id: raw.id });
+    case "compact": return ok({ cmd: "compact" });
+    case "model":
+      if (!isId(raw.id)) return fail("model needs an id");
+      return ok({ cmd: "model", id: raw.id });
+    case "effort":
+      if (raw.level !== "auto" && !EFFORTS.includes(raw.level as Effort)) return fail(`effort.level must be auto or one of ${EFFORTS.join(", ")}`);
+      return ok({ cmd: "effort", level: raw.level as Effort | "auto" });
+    case "approve":
+      if (!isId(raw.id) || !isId(raw.optionId)) return fail("approve needs id and optionId");
+      if (raw.input !== undefined && (typeof raw.input !== "string" || raw.input.length > 20_000)) return fail("approve.input must be text of at most 20000 characters");
+      return ok({ cmd: "approve", id: raw.id, optionId: raw.optionId, ...(typeof raw.input === "string" ? { input: raw.input } : {}) });
+    case "load":
+      if (!isId(raw.id)) return fail("load needs an id");
+      return ok({ cmd: "load", id: raw.id });
+    case "sessions": return ok({ cmd: "sessions", ...(raw.archived === true ? { archived: true } : {}) });
+    case "receive": {
+      if (!isId(raw.id)) return fail("receive needs an id");
+      if (typeof raw.title !== "string" || raw.title.length > 200) return fail("receive.title must be text");
+      if (typeof raw.updated !== "number" || !Number.isFinite(raw.updated)) return fail("receive.updated must be a number");
+      if (!Number.isInteger(raw.part) || !Number.isInteger(raw.parts) || (raw.parts as number) < 1 || (raw.parts as number) > 60 || (raw.part as number) < 0 || (raw.part as number) >= (raw.parts as number)) return fail("receive.part must be below receive.parts (at most 60)");
+      if (!Array.isArray(raw.items) || raw.items.length > 150) return fail("receive.items must be a list of at most 150 items");
+      const items: { k: "user" | "assistant" | "tool"; text: string }[] = [];
+      for (const i of raw.items) {
+        if (!isObj(i) || (i.k !== "user" && i.k !== "assistant" && i.k !== "tool") || typeof i.text !== "string" || i.text.length > 4000) return fail("a received item must be { k, text } with text of at most 4000 characters");
+        items.push({ k: i.k, text: i.text });
+      }
+      return ok({ cmd: "receive", id: raw.id, title: raw.title, ...(typeof raw.project === "string" && raw.project ? { project: raw.project.slice(0, 80) } : {}), updated: raw.updated, part: raw.part as number, parts: raw.parts as number, items });
+    }
+    case "schedules": return ok({ cmd: "schedules" });
+    case "plugins": return ok({ cmd: "plugins" });
+    case "tools": return ok({ cmd: "tools" });
+    case "drafts": return ok({ cmd: "drafts" });
+    case "draft":
+      if (typeof raw.key !== "string" || !/^(new|[A-Za-z0-9_-]{1,80})$/.test(raw.key)) return fail("draft needs the id of a conversation, or new");
+      if (typeof raw.text !== "string" || raw.text.length > 20_000) return fail("draft.text must be text of at most 20000 characters");
+      return ok({ cmd: "draft", key: raw.key, text: raw.text });
+    case "tool.toggle":
+      if (typeof raw.name !== "string" || !/^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(raw.name)) return fail("tool.toggle needs the name of a tool");
+      if (typeof raw.enabled !== "boolean") return fail("tool.toggle.enabled must be true or false");
+      return ok({ cmd: "tool.toggle", name: raw.name, enabled: raw.enabled });
+    case "terminal.use":
+      if (raw.backend !== "local" && raw.backend !== "docker" && raw.backend !== "ssh") return fail("terminal.use.backend must be local, docker or ssh");
+      return ok({ cmd: "terminal.use", backend: raw.backend });
+    case "artifacts":
+      if (raw.id !== undefined && !isId(raw.id)) return fail("artifacts.id must be an id");
+      return ok({ cmd: "artifacts", ...(typeof raw.id === "string" ? { id: raw.id } : {}) });
+    case "artifact.read":
+      if (!isId(raw.id)) return fail("artifact.read needs an id");
+      return ok({ cmd: "artifact.read", id: raw.id });
+    case "plugin.toggle":
+      if (!isId(raw.id)) return fail("plugin.toggle needs an id");
+      if (typeof raw.enabled !== "boolean") return fail("plugin.toggle.enabled must be true or false");
+      return ok({ cmd: "plugin.toggle", id: raw.id, enabled: raw.enabled });
+    case "schedule.add": case "schedule.update": {
+      const add = raw.cmd === "schedule.add";
+      const out: Record<string, unknown> = { cmd: raw.cmd };
+      if (!add) { if (!isId(raw.id)) return fail("schedule.update needs an id"); out.id = raw.id; }
+      if (raw.title !== undefined) { if (typeof raw.title !== "string" || raw.title.length > 80) return fail("title must be text of at most 80 characters"); out.title = raw.title; }
+      if (add || raw.cron !== undefined) { if (typeof raw.cron !== "string" || !raw.cron.trim() || raw.cron.length > 100) return fail("cron must be the five fields of a schedule"); out.cron = raw.cron.trim(); }
+      if (add || raw.prompt !== undefined) { if (typeof raw.prompt !== "string" || !raw.prompt.trim() || raw.prompt.length > 4000) return fail("prompt must be 1 to 4000 characters"); out.prompt = raw.prompt; }
+      if (raw.mode !== undefined) { if (raw.mode !== "plan" && raw.mode !== "auto") return fail("mode must be plan or auto"); out.mode = raw.mode; }
+      if (raw.folder !== undefined) { if (!isId(raw.folder)) return fail("folder must be an id"); out.folder = raw.folder; }
+      if (!add && raw.enabled !== undefined) { if (typeof raw.enabled !== "boolean") return fail("enabled must be true or false"); out.enabled = raw.enabled; }
+      return ok(out as unknown as Command);
+    }
+    case "schedule.remove": case "schedule.run":
+      if (!isId(raw.id)) return fail(`${raw.cmd} needs an id`);
+      return ok({ cmd: raw.cmd, id: raw.id } as Command);
+    case "fork":
+      if (!isId(raw.id)) return fail("fork needs an id");
+      return ok({ cmd: "fork", id: raw.id });
+    case "archive":
+      if (!isId(raw.id)) return fail("archive needs an id");
+      if (typeof raw.archived !== "boolean") return fail("archive.archived must be true or false");
+      return ok({ cmd: "archive", id: raw.id, archived: raw.archived });
+    case "mark": {
+      if (!isId(raw.id)) return fail("mark needs an id");
+      if ((raw.read !== undefined && typeof raw.read !== "boolean") || (raw.done !== undefined && typeof raw.done !== "boolean") || (raw.read === undefined && raw.done === undefined)) return fail("mark needs read and/or done, as true or false");
+      return ok({ cmd: "mark", id: raw.id, ...(raw.read !== undefined ? { read: raw.read as boolean } : {}), ...(raw.done !== undefined ? { done: raw.done as boolean } : {}) });
+    }
+    case "new":
+      if (raw.folder !== undefined && !isId(raw.folder)) return fail("new.folder must be an id");
+      return ok({ cmd: "new", ...(typeof raw.folder === "string" ? { folder: raw.folder } : {}) });
+    case "import": {
+      if (raw.ids === undefined) return ok({ cmd: "import" });
+      if (!Array.isArray(raw.ids) || raw.ids.length > 50 || raw.ids.some((x) => !isId(x))) return fail("import.ids must be up to 50 ids");
+      return ok({ cmd: "import", ids: raw.ids as string[] });
+    }
+    case "move": case "copy":
+      if (!isId(raw.id) || !isId(raw.to)) return fail(`${raw.cmd} needs id and to`);
+      return ok({ cmd: raw.cmd, id: raw.id, to: raw.to });
+    case "rename": {
+      if (!isId(raw.id)) return fail("rename needs an id");
+      if (typeof raw.title !== "string" || !raw.title.trim() || raw.title.length > 200) return fail("rename.title must be 1 to 200 characters");
+      return ok({ cmd: "rename", id: raw.id, title: raw.title.trim() });
+    }
+    case "remove":
+      if (!isId(raw.id)) return fail("remove needs an id");
+      return ok({ cmd: "remove", id: raw.id });
+    case "pin":
+      if (!isId(raw.id)) return fail("pin needs an id");
+      if (typeof raw.pinned !== "boolean") return fail("pin.pinned must be true or false");
+      return ok({ cmd: "pin", id: raw.id, pinned: raw.pinned });
+    case "search": {
+      if (typeof raw.query !== "string" || !raw.query.trim() || raw.query.length > 200) return fail("search needs words to look for (1 to 200 characters)");
+      if (raw.limit !== undefined && !(Number.isInteger(raw.limit) && (raw.limit as number) >= 1 && (raw.limit as number) <= 50)) return fail("search.limit must be a whole number from 1 to 50");
+      return ok({ cmd: "search", query: raw.query.trim(), ...(raw.limit !== undefined ? { limit: raw.limit as number } : {}), ...(raw.includeArchived === true ? { includeArchived: true } : {}) });
+    }
+    case "checkpoints": return ok({ cmd: "checkpoints" });
+    case "restore": {
+      if (!isId(raw.id)) return fail("restore needs an id");
+      if (raw.preview !== undefined && typeof raw.preview !== "boolean") return fail("restore.preview must be true or false");
+      return ok({ cmd: "restore", id: raw.id, ...(raw.preview === true ? { preview: true } : {}) });
+    }
+    default:
+      return fail(typeof raw.cmd === "string" ? `unknown command "${raw.cmd.slice(0, 40)}"` : "missing cmd");
+  }
+}

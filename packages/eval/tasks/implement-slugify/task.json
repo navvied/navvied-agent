@@ -1,0 +1,11 @@
+{
+  "id": "implement-slugify",
+  "title": "Implement slugify from its tests",
+  "prompt": "src/slug.ts has a stub for slugify. Implement it so that all tests pass. Do not change the tests.",
+  "check": "bun test",
+  "protect": [
+    "tests/**"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 300
+}

@@ -1,0 +1,18 @@
+{
+  "name": "navvied-agent",
+  "private": true,
+  "version": "0.2.0",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "description": "A provider-agnostic coding-agent core: one event protocol, one engine, many front-ends (CLI, web, desktop).",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "bun test packages",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "typescript": "^5.9.3"
+  }
+}

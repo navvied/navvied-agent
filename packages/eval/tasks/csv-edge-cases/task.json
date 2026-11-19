@@ -1,0 +1,11 @@
+{
+  "id": "csv-edge-cases",
+  "title": "The CSV parser breaks on edge cases",
+  "prompt": "The tests in this project fail. Find the bug in the source code and fix it. Do not change the tests.",
+  "check": "bun test",
+  "protect": [
+    "tests/**"
+  ],
+  "maxSteps": 40,
+  "timeoutSeconds": 300
+}

@@ -1,0 +1,182 @@
+name: desktop
+# The desktop app: tests on the three systems, the real window on a virtual screen, and the installers.
+#   push to main (desktop, CLI or web files changed), pull requests, a tag v*, or by hand: test and build, keep the installers as artifacts.
+#   a tag v*: the installers are also attached to that release (unsigned until the signing accounts exist; see docs/DESKTOP.md).
+# No secrets are needed today. Signing and notarising are the commented variables on the "Build" step.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: ["packages/desktop/**", "packages/cli/**", "packages/web/**", ".github/workflows/desktop.yml"]
+  pull_request:
+    paths: ["packages/desktop/**", "packages/cli/**", "packages/web/**", ".github/workflows/desktop.yml"]
+  workflow_dispatch:
+# One group per commit, so a push never cancels another push's run. (With one group per branch GitHub keeps a single waiting run and
+# cancels the older waiting one whenever a newer push arrives: with frequent pushes nothing ever finished.) Only a newer commit on the
+# same pull request cancels the older run.
+concurrency:
+  group: desktop-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  CARGO_TERM_COLOR: never
+  NAVVIED_REQUIRE_REAL: "1"
+jobs:
+  core:
+    if: ${{ github.repository == 'navvied/navvied-agent' || github.event_name == 'workflow_dispatch' }}
+    name: core tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/desktop
+      - run: bun install --frozen-lockfile
+      - name: Build the program that goes inside the app
+        run: |
+          ext=""; [ "$RUNNER_OS" = "Windows" ] && ext=".exe"
+          bun build --compile packages/cli/src/main.ts --outfile "$RUNNER_TEMP/navvied$ext"
+          echo "NAVVIED_BIN=$RUNNER_TEMP/navvied$ext" >> "$GITHUB_ENV"
+      - name: Test the supervisor, the key handling, the notices and the real program together
+        working-directory: packages/desktop
+        run: bash scripts/ci-run.sh "core tests" cargo test --locked -p navvied-desktop-core --no-fail-fast
+      - name: Lint
+        working-directory: packages/desktop
+        run: bash scripts/ci-run.sh "clippy" cargo clippy --locked -p navvied-desktop-core --all-targets -- -D warnings
+
+  window:
+    if: ${{ github.repository == 'navvied/navvied-agent' || github.event_name == 'workflow_dispatch' }}
+    name: the real app on a virtual screen (linux)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/desktop
+      - name: Libraries and the virtual screen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb xdotool dbus-x11 curl iproute2
+      - run: bun install --frozen-lockfile
+      - name: The program that goes inside the app
+        run: |
+          bun build --compile packages/cli/src/main.ts --outfile "$RUNNER_TEMP/navvied"
+          mkdir -p packages/desktop/src-tauri/binaries
+          cp "$RUNNER_TEMP/navvied" "packages/desktop/src-tauri/binaries/navvied-$(rustc -vV | sed -n 's/^host: //p')"
+      - name: Build the app for the window checks (the key switch exists only in this build, which is never published)
+        working-directory: packages/desktop
+        run: bash scripts/ci-run.sh "app build" cargo build --locked -p navvied-desktop --features test-hooks
+      - name: Where may the key be, and where must it not be
+        working-directory: packages/desktop
+        run: bash scripts/ci-run.sh "window checks" bash scripts/window-check.sh "$RUNNER_TEMP/navvied"
+
+  bundle:
+    if: ${{ github.repository == 'navvied/navvied-agent' || github.event_name == 'workflow_dispatch' }}
+    name: installer (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64, os: ubuntu-22.04, bundles: "deb,appimage" }
+          - { name: macos-arm64, os: macos-latest, bundles: "dmg" }
+          - { name: macos-x64, os: macos-15-intel, bundles: "dmg" }
+          - { name: windows-x64, os: windows-latest, bundles: "nsis" }
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.name == 'windows-x64' || matrix.name == 'macos-x64' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/desktop
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: bun install --frozen-lockfile
+      - name: A release tag must name the version in the code
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: test "v$(bun -p "require('./packages/desktop/package.json').version")" = "$GITHUB_REF_NAME"
+      - name: The program that goes inside the app, named the way Tauri expects
+        run: |
+          triple=$(rustc -vV | sed -n 's/^host: //p')
+          ext=""; [ "$RUNNER_OS" = "Windows" ] && ext=".exe"
+          mkdir -p packages/desktop/src-tauri/binaries
+          bun build --compile packages/cli/src/main.ts --outfile "packages/desktop/src-tauri/binaries/navvied-$triple$ext"
+      - name: The Tauri command line program
+        uses: actions/cache@v4
+        id: tauricli
+        with:
+          path: |
+            ~/.cargo/bin/cargo-tauri
+            ~/.cargo/bin/cargo-tauri.exe
+          key: tauri-cli-2-${{ runner.os }}-${{ runner.arch }}
+      - if: steps.tauricli.outputs.cache-hit != 'true'
+        run: bash packages/desktop/scripts/ci-run.sh "tauri cli" cargo install tauri-cli --version "^2" --locked
+      # Signing and notarising, once the signing accounts exist, are these secrets on the next step (docs/DESKTOP.md):
+      #   APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
+      #   WINDOWS_CERTIFICATE (base64 .pfx), WINDOWS_CERTIFICATE_PASSWORD
+      #   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD (updates), with `--features updater` and the public key in a merged config
+      # Without them the app is built unsigned. On macOS an ad-hoc signature ("-") is applied, which Apple silicon needs to start a program at all.
+      - name: Build the installer (unsigned)
+        working-directory: packages/desktop/src-tauri
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
+        run: bash ../scripts/ci-run.sh "installer build" cargo tauri build --bundles ${{ matrix.bundles }}
+      - name: Name the installers
+        run: |
+          ver=$(bun -p "require('./packages/desktop/package.json').version")
+          b=packages/desktop/target/release/bundle
+          find "$b" -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' -o -name '*-setup.exe' \) | sort
+          mkdir -p out
+          case "${{ matrix.name }}" in
+            linux-x64) cp "$b"/deb/*.deb "out/navvied-desktop-$ver-linux-x64.deb"; cp "$b"/appimage/*.AppImage "out/navvied-desktop-$ver-linux-x64.AppImage" ;;
+            macos-*) cp "$b"/dmg/*.dmg "out/navvied-desktop-$ver-${{ matrix.name }}.dmg" ;;
+            windows-x64) cp "$b"/nsis/*-setup.exe "out/navvied-desktop-$ver-windows-x64-setup.exe" ;;
+          esac
+          ls -l out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: navvied-desktop-${{ matrix.name }}
+          if-no-files-found: error
+          path: out/*
+
+  publish:
+    name: attach the installers to the release
+    needs: [bundle]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && github.repository == 'navvied/navvied-agent' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: navvied-desktop-*
+          merge-multiple: true
+          path: out
+      - name: Checksums
+        working-directory: out
+        run: |
+          ls -l
+          sha256sum navvied-desktop-* > SHA256SUMS-desktop
+          cat SHA256SUMS-desktop
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*

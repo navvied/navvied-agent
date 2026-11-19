@@ -1,0 +1,42 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": [
+      "ES2023"
+    ],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "skipLibCheck": true,
+    "types": [
+      "bun"
+    ],
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@navvied/protocol": [
+        "packages/protocol/src/index.ts"
+      ],
+      "@navvied/engine": [
+        "packages/engine/src/index.ts"
+      ],
+      "@navvied/cli": [
+        "packages/cli/src/index.ts"
+      ],
+      "@navvied/stream-engine": [
+        "packages/stream-engine/src/index.ts"
+      ],
+      "@navvied/eval": [
+        "packages/eval/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "packages/*/src",
+    "packages/*/test"
+  ]
+}

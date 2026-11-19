@@ -1,0 +1,11 @@
+{
+  "id": "deep-merge",
+  "title": "Implement deepMerge from its tests",
+  "prompt": "src/merge.ts has a stub for deepMerge(a, b). Implement it so that all tests pass. Do not change the tests.",
+  "check": "bun test",
+  "protect": [
+    "tests/**"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 300
+}

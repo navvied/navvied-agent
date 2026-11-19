@@ -1,0 +1,69 @@
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadAgents, parseAgent } from "../src/index.ts";
+import { cleanupAll, prompt, rig } from "./helpers.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "navvied-agents-"));
+afterAll(() => { rmSync(dir, { recursive: true, force: true }); cleanupAll(); });
+
+const reviewer = "---\nname: reviewer\ndescription: Reviews a change for bugs\ntools: Read, Grep\n---\nYou review code. Be strict.\n";
+
+describe("helpers the person defined", () => {
+  test("a Markdown file with a description and its instructions is a helper; the tools are a list", () => {
+    expect(parseAgent(reviewer, "reviewer.md")).toEqual({ name: "reviewer", description: "Reviews a change for bugs", tools: ["Read", "Grep"], prompt: "You review code. Be strict." });
+    expect(parseAgent("---\ndescription: x\n---\nDo x.", "Do-X.md")).toEqual({ name: "do-x", description: "x", prompt: "Do x." });
+  });
+  test("a file without a description, instructions or a simple name is not a helper", () => {
+    expect(parseAgent("---\nname: a\n---\nbody", "a.md")).toBeUndefined();
+    expect(parseAgent("---\ndescription: d\n---\n", "a.md")).toBeUndefined();
+    expect(parseAgent("---\nname: Bad Name!\ndescription: d\n---\nbody", "x.md")).toBeUndefined();
+    expect(parseAgent("no front matter", "a.md")).toBeUndefined();
+  });
+  test("later folders win over earlier ones with the same name, and a missing folder is fine", () => {
+    const own = join(dir, "own"), project = join(dir, "project");
+    mkdirSync(own); mkdirSync(project);
+    writeFileSync(join(own, "reviewer.md"), reviewer);
+    writeFileSync(join(own, "other.md"), "---\ndescription: other\n---\nOther.");
+    writeFileSync(join(project, "reviewer.md"), reviewer.replace("Be strict.", "Be kind."));
+    const found = loadAgents([own, join(dir, "nowhere"), project]);
+    expect(found.map((a) => a.name).sort()).toEqual(["other", "reviewer"]);
+    expect(found.find((a) => a.name === "reviewer")!.prompt).toContain("Be kind.");
+  });
+});
+
+describe("in the engine", () => {
+  const defs = [{ name: "reviewer", description: "Reviews a change for bugs", tools: ["Read", "Grep"], prompt: "You review code. Be strict." }];
+  const asks = (...agents: { agent?: string; prompt: string }[]) => (req: { messages: { role: string }[]; system?: string }, n: number) =>
+    req.system?.includes('the helper "reviewer"') ? { text: "review done" } : n === 0 && req.messages.length === 1 ? { calls: agents.map((a) => ({ name: "Agent", args: { description: "x", ...a } })) } : { text: "all done" };
+
+  test("the agent sees what each helper is for, and a named one works with its own instructions", async () => {
+    const r = rig(asks({ agent: "reviewer", prompt: "check a.ts" }), { agents: defs });
+    await r.turn(prompt("review it", { mode: "auto" }));
+    const first = r.provider.requests[0]!;
+    expect(JSON.stringify(first.tools)).toContain("reviewer: Reviews a change for bugs");
+    const helperCall = r.provider.requests.find((q) => q.system.includes('the helper "reviewer"'))!;
+    expect(helperCall.system).toContain("You review code. Be strict.");
+    expect(helperCall.tools.map((t) => t.name).sort()).toEqual(["Grep", "Read"]);
+    r.cleanup();
+  });
+  test("an unknown helper is refused in plain words", async () => {
+    const r = rig(asks({ agent: "nobody", prompt: "x" }), { agents: defs });
+    await r.turn(prompt("go", { mode: "auto" }));
+    expect(r.events.some((e) => e.ev === "tool" && e.status === "error" && /no helper "nobody"/.test(e.output ?? ""))).toBe(true);
+    r.cleanup();
+  });
+  test("two helpers asked for in one step work at the same time", async () => {
+    const r = rig((req, n) => {
+      if (req.system.includes("helper")) return { text: "found", delayMs: 300 };
+      return n === 0 && req.messages.length === 1 ? { calls: [{ name: "Agent", args: { prompt: "one" } }, { name: "Agent", args: { prompt: "two" } }] } : { text: "both back" };
+    }, { agents: defs });
+    const t0 = Date.now();
+    r.engine.handle(prompt("look twice", { mode: "auto" }));
+    await r.engine.idle();
+    expect(Date.now() - t0).toBeLessThan(560); // one after the other would take at least 600
+    expect(r.of("text").map((e) => e.text).join("")).toContain("both back");
+    r.cleanup();
+  });
+});
