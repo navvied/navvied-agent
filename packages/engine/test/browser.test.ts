@@ -1,9 +1,11 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { browser, closeBrowser, findChrome } from "../src/index.ts";
 import { devToolsEndpoint } from "../src/tools/browser.ts";
+import { stopAllJobs } from "../src/index.ts";
+import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const chrome = findChrome();
 const site = Bun.serve({
@@ -91,7 +93,7 @@ describe.skipIf(!chrome)("using the browser", () => {
 
 describe.skipIf(!chrome || process.platform === "win32")("a browser that stops while starting", () => {
   const dir = mkdtempSync(join(tmpdir(), "navvied-fakechrome-"));
-  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  afterAll(hook("browser removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }));
   const withBrowser = async <T,>(script: string, body: () => Promise<T>): Promise<T> => {
     const file = join(dir, `chrome-${Math.random().toString(36).slice(2)}`);
     writeFileSync(file, `#!/bin/sh\n${script}\n`);
@@ -126,7 +128,7 @@ describe.skipIf(!chrome || process.platform === "win32")("a browser that stops w
 
   test("a port file that is there before it is whole (empty, or the port without its address) is waited for, not used", async () => {
     // The browser writes the file in more than one step; this one leaves it empty for a moment and then starts the real browser.
-    const script = `for a in "$@"; do case "$a" in --user-data-dir=*) d="\${a#--user-data-dir=}";; esac; done\n: > "$d/DevToolsActivePort"\nsleep 0.7\nprintf '9' > "$d/DevToolsActivePort"\nsleep 0.7\nexec "${chrome}" "$@"`;
+    const script = `for a in "$@"; do case "$a" in --user-data-dir=*) d="\${a#--user-data-dir=}"; esac; done\n: > "$d/DevToolsActivePort"\nsleep 0.7\nprintf '9' > "$d/DevToolsActivePort"\nsleep 0.7\nexec "${chrome}" "$@"`;
     const out = await withBrowser(script, () => run({ action: "open", url: home }));
     expect(out).toContain("Welcome to the shop");
   }, 45_000);

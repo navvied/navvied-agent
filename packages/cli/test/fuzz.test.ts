@@ -1,14 +1,15 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "../src/args.ts";
 import { loadConfig, resolveModel } from "../src/config.ts";
 import { expandMentions } from "../src/mentions.ts";
 import { garbage, int, mutate, pick, prng, value } from "../../protocol/test/prng.ts";
+import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-fuzz-"));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(hook("fuzz removes what it made", async () => { await removeTree(dir); }));
 
 const VALID = { default: "a", models: { a: { baseUrl: "http://h/v1", model: "m", window: 4000, reasoning: "none", headers: { x: "y" } }, b: { command: "agent", args: ["--x"], env: { K: "v" } } } };
 

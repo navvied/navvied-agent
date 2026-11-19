@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Checkpoints, spawnGit } from "../src/index.ts";
 import { cleanupAll, prompt, rig, type Step } from "./helpers.ts";
+import { stopAllJobs } from "../src/index.ts";
+import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const dirs: string[] = [];
 const tmp = () => { const d = realpathSync(mkdtempSync(join(tmpdir(), "navvied-cp-"))); dirs.push(d); return d; };
-afterAll(() => { cleanupAll(); dirs.forEach((d) => rmSync(d, { recursive: true, force: true })); });
+afterAll(hook("checkpoints removes what it made", async () => { await stopAllJobs(); await cleanupAll(); await removeTrees(dirs); }));
 
 const git = (cwd: string, ...args: string[]) => { const r = spawnGit(cwd, args); if (!r.ok) throw new Error(`git ${args.join(" ")} failed`); return r.out; };
 const put = (dir: string, name: string, text: string) => { mkdirSync(join(dir, name, ".."), { recursive: true }); writeFileSync(join(dir, name), text); };

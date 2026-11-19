@@ -5,9 +5,11 @@ import { join } from "node:path";
 import { Jobs, defaultTools } from "../src/index.ts";
 import type { ToolContext } from "../src/types.ts";
 import { until } from "./helpers.ts";
+import { stopAllJobs } from "../src/index.ts";
+import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-quiet-"));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(hook("bash-quiet removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }));
 const bash = defaultTools().find((t) => t.name === "Bash")!;
 const ctx = (extra: Partial<ToolContext> = {}): ToolContext => ({ cwd: dir, signal: new AbortController().signal, emit: () => undefined, allowPrivateNetwork: false, jobs: new Jobs(() => undefined), ...extra });
 const posix = process.platform !== "win32";

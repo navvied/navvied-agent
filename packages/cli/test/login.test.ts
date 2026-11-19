@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AccountError, createAccount, fetchModels, signIn } from "../src/account-client.ts";
@@ -7,9 +7,10 @@ import { clearAccount, hostedEntries, readAccount, readHostedModels, writeAccoun
 import { accountPath, hostedModelsPath, loadConfig, resolveModel } from "../src/config.ts";
 import type { Choice, Frame, IO } from "../src/io.ts";
 import { login, signOutScreen } from "../src/login-ui.ts";
+import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-login-"));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(hook("login removes what it made", async () => { await removeTree(dir); }));
 let n = 0;
 const fresh = (): string => { const d = join(dir, `c${n++}`); mkdirSync(d, { recursive: true }); return d; };
 

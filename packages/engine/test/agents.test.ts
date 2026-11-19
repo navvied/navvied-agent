@@ -1,12 +1,14 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadAgents, parseAgent } from "../src/index.ts";
 import { cleanupAll, prompt, rig } from "./helpers.ts";
+import { stopAllJobs } from "../src/index.ts";
+import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-agents-"));
-afterAll(() => { rmSync(dir, { recursive: true, force: true }); cleanupAll(); });
+afterAll(hook("agents removes what it made", async () => { await stopAllJobs(); await removeTree(dir); await cleanupAll(); }));
 
 const reviewer = "---\nname: reviewer\ndescription: Reviews a change for bugs\ntools: Read, Grep\n---\nYou review code. Be strict.\n";
 

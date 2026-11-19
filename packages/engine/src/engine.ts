@@ -250,6 +250,12 @@ export class Engine implements AgentEngine {
   /** Aborted when the engine is closed: what is still being connected (see `connectMcp`) is stopped then. */
   get closing(): AbortSignal { return this.#closing.signal; }
 
+  /** Closes the engine and waits until what it started has exited, so the folder it worked in can be removed. */
+  async shutdown(): Promise<void> {
+    this.close();
+    await this.#jobs.stopped();
+  }
+
   close(): void {
     this.#closing.abort();
     this.#cancel();

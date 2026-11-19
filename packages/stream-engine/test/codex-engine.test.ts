@@ -1,13 +1,14 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EngineEvent } from "@navvied/protocol";
 import { CodexEngine, codexArgv } from "../src/codex-engine.ts";
+import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const dirs: string[] = [];
 const temp = (): string => { const d = mkdtempSync(join(tmpdir(), "navvied-codex-")); dirs.push(d); return d; };
-afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
+afterAll(hook("codex-engine removes what it made", async () => { await removeTrees(dirs); }));
 
 const SCRIPT = `
 const fs = require("fs");

@@ -5,10 +5,12 @@ import { join } from "node:path";
 import { INSTRUCTION_FILE, loadInstructions } from "../src/index.ts";
 import { systemPrompt } from "../src/prompt.ts";
 import { cleanupAll, prompt, rig } from "./helpers.ts";
+import { stopAllJobs } from "../src/index.ts";
+import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const dirs: string[] = [];
 const tmp = () => { const d = realpathSync(mkdtempSync(join(tmpdir(), "navvied-instr-"))); dirs.push(d); return d; };
-afterAll(() => { cleanupAll(); dirs.forEach((d) => rmSync(d, { recursive: true, force: true })); });
+afterAll(hook("instructions removes what it made", async () => { await stopAllJobs(); await cleanupAll(); await removeTrees(dirs); }));
 const put = (dir: string, text: string) => { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, INSTRUCTION_FILE), text); };
 
 describe("loadInstructions", () => {

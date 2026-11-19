@@ -1,14 +1,16 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { zip } from "./make-files.ts";
 import { read } from "../src/tools/read.ts";
 import { readDocument } from "../src/tools/documents.ts";
+import { stopAllJobs } from "../src/index.ts";
+import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-docs-"));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(hook("documents removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }));
 
 const docx = zip({
   "[Content_Types].xml": "<Types/>",

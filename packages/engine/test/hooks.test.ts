@@ -1,12 +1,14 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { commandHooks } from "../src/index.ts";
 import { cleanupAll, prompt, rig, until } from "./helpers.ts";
+import { stopAllJobs } from "../src/index.ts";
+import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-hooks-"));
-afterAll(() => { rmSync(dir, { recursive: true, force: true }); cleanupAll(); });
+afterAll(hook("hooks removes what it made", async () => { await stopAllJobs(); await removeTree(dir); await cleanupAll(); }));
 
 // Forward slashes: on Windows the hook runs in Git Bash, which takes a word for a program's path only when it has a slash.
 const slashed = (p: string): string => p.replaceAll(sep, "/");

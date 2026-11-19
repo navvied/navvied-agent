@@ -6,9 +6,11 @@ import { Jobs, defaultTools } from "../src/index.ts";
 import { forget } from "../src/tools/shell-state.ts";
 import { run } from "../src/tools/util.ts";
 import type { ToolContext } from "../src/types.ts";
+import { stopAllJobs } from "../src/index.ts";
+import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "navvied-terminal2-")));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(hook("terminal-2 removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }));
 const bash = defaultTools().find((t) => t.name === "Bash")!;
 const posix = process.platform !== "win32";
 const rig = (extra: Partial<ToolContext> = {}) => {

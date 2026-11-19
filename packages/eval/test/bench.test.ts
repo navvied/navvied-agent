@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFileSync, writeFileSync } from "node:fs";
 import { main } from "../src/main.ts";
 import { loadTasks, parseAdapter, runTask, startMeter, startMock, type Behaviour, type Meter, type Mock, type Task } from "../src/index.ts";
+import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const TASKS = join(import.meta.dir, "../tasks");
 const CLI = join(import.meta.dir, "../../cli/src/main.ts");
@@ -15,7 +16,7 @@ const tasks = loadTasks(TASKS);
 let behaviour: Behaviour = "oracle";
 let mock: Mock, meter: Meter;
 beforeAll(() => { mock = startMock(tasks, () => behaviour); meter = startMeter(mock.url); });
-afterAll(() => { meter.stop(); mock.stop(); rmSync(home, { recursive: true, force: true }); });
+afterAll(hook("bench removes what it made", async () => { meter.stop(); mock.stop(); await removeTree(home); }));
 
 const world = { HOME: home, XDG_STATE_HOME: home, XDG_CONFIG_HOME: home, NAVVIED_MODEL: "scripted", NAVVIED_WINDOW: "100000" };
 const run = (task: Task, how: Behaviour) => { behaviour = how; mock.requests.length = 0; return runTask(task, { command: ["bun", CLI], label: `mock:${how}`, env: world, meter, agentEnv: (base) => ({ NAVVIED_BASE_URL: base }) }); };

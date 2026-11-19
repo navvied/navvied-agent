@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EngineEvent } from "@navvied/protocol";
@@ -7,9 +7,11 @@ import { Jobs, defaultTools } from "../src/index.ts";
 import { toolsFor } from "../src/permissions.ts";
 import type { Tool, ToolContext } from "../src/types.ts";
 import { until, wait } from "./helpers.ts";
+import { stopAllJobs } from "../src/index.ts";
+import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-jobs-"));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(hook("jobs removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }));
 
 const node = (code: string): string[] => [process.execPath, "-e", code];
 const tool = (name: string): Tool => defaultTools().find((t) => t.name === name)!;

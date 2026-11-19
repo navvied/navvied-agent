@@ -1,13 +1,15 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Jobs, defaultTools } from "../src/index.ts";
 import type { ToolContext } from "../src/types.ts";
+import { stopAllJobs } from "../src/index.ts";
+import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const made: string[] = [];
 const temp = (): string => { const d = mkdtempSync(join(tmpdir(), "navvied-ci3os-")); made.push(d); return d; };
-afterAll(() => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
+afterAll(hook("ci-3os removes what it made", async () => { await stopAllJobs(); await removeTrees(made); }));
 const tool = (name: string) => defaultTools().find((t) => t.name === name)!;
 const ctx = (cwd: string, more: Partial<ToolContext> = {}): ToolContext => ({ cwd, signal: new AbortController().signal, emit: () => undefined, allowPrivateNetwork: false, jobs: new Jobs(() => undefined), ...more });
 const unix = process.platform !== "win32";

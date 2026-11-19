@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Command, EngineEvent } from "@navvied/protocol";
-import { Engine, type EngineOptions } from "../src/index.ts";
+import { Engine, stopAllJobs, type EngineOptions } from "../src/index.ts";
+import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 import { estimateTokens } from "../src/context.ts";
 import type { ModelRequest, Provider, StreamHandlers, ToolCall } from "../src/types.ts";
 
@@ -67,7 +68,13 @@ export interface Rig {
 }
 
 const made: string[] = [];
-export const cleanupAll = () => { for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true }); };
+const open: Engine[] = [];
+/** Closes the engines that were made, waits until what they started has exited, then removes their folders. */
+export const cleanupAll = hook("the engine tests remove their folders", async () => {
+  await Promise.all(open.splice(0).map((e) => e.shutdown()));
+  await stopAllJobs();
+  await removeTrees(made.splice(0));
+});
 
 export function rig(script: (req: ModelRequest, n: number, dir: string) => Step, opts: Partial<EngineOptions> = {}): Rig {
   const dir = mkdtempSync(join(tmpdir(), "navvied-engine-"));
@@ -75,6 +82,7 @@ export function rig(script: (req: ModelRequest, n: number, dir: string) => Step,
   const events: EngineEvent[] = [];
   const provider = new ScriptedProvider((req, n) => script(req, n, dir));
   const engine = new Engine({ provider, cwd: dir, window: 100_000, emit: (e) => events.push(e), heartbeatMs: 0, ...opts });
+  open.push(engine);
   const turn = async (cmd: Command, timeoutMs = 10_000) => {
     const from = events.length;
     engine.handle(cmd);
@@ -86,7 +94,8 @@ export function rig(script: (req: ModelRequest, n: number, dir: string) => Step,
     engine, provider, events, dir, turn, of,
     send: (cmd) => engine.handle(cmd),
     text: (from = 0) => of("text", from).map((e) => e.text).join(""),
-    cleanup: () => { engine.close(); rmSync(dir, { recursive: true, force: true }); },
+    // The folder is removed now when it can be; when a program of the engine still holds it (Windows), `cleanupAll` removes it once that has exited.
+    cleanup: () => { engine.close(); try { rmSync(dir, { recursive: true, force: true }); } catch { /* removed later */ } },
   };
 }
 
