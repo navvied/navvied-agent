@@ -16,7 +16,7 @@ export { isConfined, profileTools } from "./profiles.ts";
 export { defaultTools, PLAN_TOOL_NAME } from "./tools/index.ts";
 export { isPrivateHost } from "./tools/web-fetch.ts";
 export type { Message, ModelReply, ModelRequest, Part, Provider, Recall, SessionStore, StreamHandlers, Tool, ToolCall, ToolContext, ToolSpec } from "./types.ts";
-export { killTree, shellFor, usesProcessGroups, type Shell } from "./platform.ts";
+export { killTree, launch, shellFor, usesProcessGroups, type Shell } from "./platform.ts";
 export { dockerBackend, localBackend, sshBackend, type Backend } from "./backend.ts";
 export { Jobs, type JobStatus, type JobView } from "./jobs.ts";
 export { SMALL_WINDOW } from "./engine.ts";

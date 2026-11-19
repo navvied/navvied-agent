@@ -1,5 +1,5 @@
 import { chmodSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { VERSION } from "../help.ts";
 import type { IO } from "../io.ts";
 import { paint } from "../render.ts";
@@ -89,9 +89,12 @@ export async function updateProgram(t: UpdateTarget, progress: (p: UpdateProgres
   writeFileSync(staged, bytes);
   chmodSync(staged, 0o755);
   if (t.os === "windows") {
-    // a running .exe cannot be overwritten, but it can be renamed
-    rmSync(`${t.exe}.old`, { force: true });
-    renameSync(t.exe, `${t.exe}.old`);
+    // A running .exe cannot be overwritten or removed, but it can be renamed. The copy left by the last update may still be running
+    // (another window): it is cleared when it can be, and the one being replaced goes to a name of its own when it cannot.
+    const old = `${t.exe}.old`;
+    for (const name of readdirSync(dirname(t.exe))) if (name.startsWith(`${basename(t.exe)}.old.`)) try { rmSync(join(dirname(t.exe), name), { force: true }); } catch { /* still running */ }
+    try { rmSync(old, { force: true }); } catch { /* still running: left where it is */ }
+    renameSync(t.exe, existsSync(old) ? `${old}.${Date.now()}` : old);
   }
   renameSync(staged, t.exe);
   return "updated";

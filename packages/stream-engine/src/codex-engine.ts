@@ -6,7 +6,7 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { LineSplitter, RecentIds, type Command, type Effort, type EngineEvent, type ModelInfo, type PermMode, type PromptCommand } from "@navvied/protocol";
-import { killTree, usesProcessGroups, type AgentEngine } from "@navvied/engine";
+import { killTree, launch, usesProcessGroups, type AgentEngine } from "@navvied/engine";
 import { CodexTranslator, friendlyFailure } from "./codex-translate.ts";
 import { DEFAULT_MODEL } from "./stream-engine.ts";
 
@@ -150,7 +150,8 @@ export class CodexEngine implements AgentEngine {
     const argv = codexArgv({ command: this.#o.command, ...(this.#o.args ? { args: this.#o.args } : {}), ...(this.#model ? { model: this.#model } : {}), ...(this.#effort ? { effort: this.#effort } : {}), mode: this.#mode, ...(this.#tr.threadId ? { thread: this.#tr.threadId } : {}) });
     let child: ChildProcess;
     try {
-      child = spawn(argv[0]!, argv.slice(1), { cwd: this.#o.cwd, env: { ...process.env, ...this.#o.env }, detached: usesProcessGroups(), windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+      const [program, ...args] = launch(argv);
+      child = spawn(program!, args, { cwd: this.#o.cwd, env: { ...process.env, ...this.#o.env }, detached: usesProcessGroups(), windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     } catch (e) {
       this.#emit({ ev: "error", msg: `Could not start "${this.#o.command}": ${e instanceof Error ? e.message : String(e)}` });
       this.#finish("error");

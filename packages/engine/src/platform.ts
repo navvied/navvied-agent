@@ -1,21 +1,61 @@
 import type { ChildProcess } from "node:child_process";
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { win32 } from "node:path";
 
 export type Which = (command: string) => string | null;
 const defaultWhich: Which = (command) => Bun.which(command, { PATH: process.env.PATH ?? "" });
 
 export interface Shell { name: "bash" | "sh" | "PowerShell" | "cmd"; argv: (command: string) => string[] }
 
+/** The `bash` Windows ships is only a door into WSL: it runs commands in a Linux machine that cannot see the project's drive paths. */
+const isWslDoor = (path: string): boolean => /[\\/](windows[\\/]system32|windowsapps)[\\/]/i.test(path);
+
+/**
+ * A command as PowerShell must be given it. One that starts with a quoted program path (`"C:\\tools\\a.exe" arg`) is only a string
+ * there, so it is called with `&`. And a program's own exit code is passed on: -Command turns every code but 0 into 1, which would
+ * turn a hook's "stop this" (2) into "it failed".
+ */
+const powershellScript = (command: string): string => `${/^\s*["']/.test(command) ? "& " : ""}${command}\nif ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }`;
+
+/** Git's own bash: next to the `git` on the path, else where Git for Windows installs. */
+function gitBash(which: Which, env: NodeJS.ProcessEnv, exists: (path: string) => boolean): string | undefined {
+  const git = which("git");
+  const roots = [git && win32.dirname(win32.dirname(git)), git && win32.dirname(win32.dirname(win32.dirname(git))), env.ProgramFiles && win32.join(env.ProgramFiles, "Git"), env.ProgramW6432 && win32.join(env.ProgramW6432, "Git"), env["ProgramFiles(x86)"] && win32.join(env["ProgramFiles(x86)"], "Git"), env.LOCALAPPDATA && win32.join(env.LOCALAPPDATA, "Programs", "Git")];
+  for (const root of roots) {
+    const bash = root ? win32.join(root, "bin", "bash.exe") : undefined;
+    if (bash && exists(bash)) return bash;
+  }
+  return undefined;
+}
+
 /**
  * The shell that runs the agent's commands. Unix: bash, else sh. Windows: Git Bash if installed (the closest to what
- * models expect), else PowerShell, else cmd.
+ * models expect; never the WSL door that is also called bash), else PowerShell, else cmd.
  */
-export function shellFor(platform: NodeJS.Platform = process.platform, which: Which = defaultWhich): Shell {
+export function shellFor(platform: NodeJS.Platform = process.platform, which: Which = defaultWhich, env: NodeJS.ProcessEnv = process.env, exists: (path: string) => boolean = existsSync): Shell {
   if (platform !== "win32") return which("bash") ? { name: "bash", argv: (c) => ["bash", "-c", c] } : { name: "sh", argv: (c) => ["sh", "-c", c] };
-  if (which("bash")) return { name: "bash", argv: (c) => ["bash", "-c", c] };
+  const found = which("bash");
+  const bash = found && !isWslDoor(found) ? found : gitBash(which, env, exists);
+  if (bash) return { name: "bash", argv: (c) => [bash, "-c", c] };
   const ps = which("pwsh") ?? which("powershell");
-  if (ps) return { name: "PowerShell", argv: (c) => [ps, "-NoProfile", "-NonInteractive", "-Command", c] };
+  if (ps) return { name: "PowerShell", argv: (c) => [ps, "-NoProfile", "-NonInteractive", "-Command", powershellScript(c)] };
   return { name: "cmd", argv: (c) => ["cmd.exe", "/d", "/s", "/c", c] };
+}
+
+/**
+ * What to start for a program and its arguments. Windows starts only real programs: a `.cmd` or `.bat` (npx, and most programs
+ * installed with npm) must go through cmd.exe, which reads quotes and `%` itself, so text that cmd would read as something else is
+ * refused with a sentence rather than passed on. Elsewhere, and for a real program, the argument list is returned as it is.
+ */
+export function launch(argv: string[], platform: NodeJS.Platform = process.platform, which: Which = defaultWhich): string[] {
+  const [program, ...args] = argv;
+  if (platform !== "win32" || !program) return argv;
+  const found = which(program);
+  if (!found || !/\.(cmd|bat)$/i.test(found)) return found ? [found, ...args] : argv;
+  const unsafe = args.find((a) => /["%\r\n]/.test(a));
+  if (unsafe !== undefined) throw new Error(`${win32.basename(found)} is a batch file, and Windows would read the quotes, percent signs or line breaks in ${JSON.stringify(unsafe.slice(0, 40))} as its own. Install the program as an .exe, or avoid them.`);
+  return ["cmd.exe", "/d", "/s", "/c", `"${[found, ...args].map((a) => `"${a}"`).join(" ")}"`];
 }
 
 /** Whether child processes get their own process group (so the whole tree can be stopped). */

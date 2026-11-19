@@ -1,5 +1,5 @@
-import { isAbsolute, relative, resolve } from "node:path";
-import { splitCommand } from "./rules.ts";
+import nativePath, { isAbsolute } from "node:path";
+import { caselessFor, splitCommand, type Paths } from "./rules.ts";
 
 /**
  * What is asked about even when the person said "do not ask again", and in Auto mode: things that can be done, but not undone.
@@ -82,16 +82,19 @@ function ofBash(command: string, depth = 0): Risk | undefined {
 /** Files the agent should not change without the person's say-so: what sets up their shell and keys, git's own records, and navvied's setup. */
 const PROTECTED = /(^|\/)(\.git\/(?!info\/exclude$)|\.ssh\/|\.gnupg\/|\.aws\/|\.bashrc$|\.bash_profile$|\.zshrc$|\.zprofile$|\.profile$|\.gitconfig$|\.npmrc$|\.netrc$|\.mcp\.json$|\.husky\/|\.config\/navvied\/|\.navvied\/(hooks|settings)[^/]*$)/;
 
-function ofPath(file: string, cwd: string): Risk | undefined {
-  const full = (isAbsolute(file) ? resolve(file) : resolve(cwd, file)).replace(/\\/g, "/");
-  const inside = relative(resolve(cwd), full).replace(/\\/g, "/");
-  return PROTECTED.test(full) || PROTECTED.test(inside) ? risk("protected-path", "This changes a file that sets up your shell, your keys, git itself or navvied.", "changes to setup files") : undefined;
+const PROTECTED_CASELESS = new RegExp(PROTECTED.source, "i");
+
+function ofPath(file: string, cwd: string, p: Paths): Risk | undefined {
+  const full = p.resolve(cwd, file).replace(/\\/g, "/");
+  const inside = p.relative(p.resolve(cwd), full).replace(/\\/g, "/");
+  const protectedPath = caselessFor(p) ? PROTECTED_CASELESS : PROTECTED;
+  return protectedPath.test(full) || protectedPath.test(inside) ? risk("protected-path", "This changes a file that sets up your shell, your keys, git itself or navvied.", "changes to setup files") : undefined;
 }
 
 /** The risk of a tool call, or nothing when there is none worth asking about. */
-export function riskOf(tool: string, args: Record<string, unknown>, cwd: string): Risk | undefined {
+export function riskOf(tool: string, args: Record<string, unknown>, cwd: string, p: Paths = nativePath): Risk | undefined {
   if (tool === "Bash" && typeof args.command === "string") return ofBash(args.command);
-  if ((tool === "Write" || tool === "Edit") && typeof args.file_path === "string") return ofPath(args.file_path, cwd);
+  if ((tool === "Write" || tool === "Edit") && typeof args.file_path === "string") return ofPath(args.file_path, cwd, p);
   return undefined;
 }
 

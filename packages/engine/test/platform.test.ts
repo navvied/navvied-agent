@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Jobs, killTree, shellFor, usesProcessGroups } from "../src/index.ts";
-import { inTerminal } from "../src/platform.ts";
+import { inTerminal, launch } from "../src/platform.ts";
 
 const has = (...names: string[]) => (cmd: string): string | null => (names.includes(cmd) ? `/found/${cmd}` : null);
 
@@ -17,10 +17,26 @@ describe("shellFor", () => {
   });
   test("windows: Git Bash if installed, else PowerShell (pwsh first), else cmd", () => {
     expect(shellFor("win32", has("bash", "pwsh")).name).toBe("bash");
-    expect(shellFor("win32", has("pwsh", "powershell")).argv("dir")).toEqual(["/found/pwsh", "-NoProfile", "-NonInteractive", "-Command", "dir"]);
+    const exit = "\nif ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }";
+    expect(shellFor("win32", has("pwsh", "powershell")).argv("dir")).toEqual(["/found/pwsh", "-NoProfile", "-NonInteractive", "-Command", `dir${exit}`]);
+    expect(shellFor("win32", has("powershell")).argv('"C:\\Program Files\\bun.exe" "C:\\x.js"')[4]).toBe(`& "C:\\Program Files\\bun.exe" "C:\\x.js"${exit}`);
+    expect(shellFor("win32", has("powershell")).argv("  'a b.exe' x")[4]).toBe(`&   'a b.exe' x${exit}`);
     expect(shellFor("win32", has("powershell")).name).toBe("PowerShell");
     expect(shellFor("win32", has())).toMatchObject({ name: "cmd" });
     expect(shellFor("win32", has()).argv("dir")).toEqual(["cmd.exe", "/d", "/s", "/c", "dir"]);
+  });
+  test("windows: the bash that is a door into WSL is never used; Git's own bash is found beside git or where Git installs", () => {
+    const where = (found: Record<string, string>) => (cmd: string): string | null => found[cmd] ?? null;
+    const wsl = "C:\\Windows\\System32\\bash.exe";
+    const git = "C:\\Program Files\\Git\\bin\\bash.exe";
+    const exists = (...paths: string[]) => (p: string): boolean => paths.includes(p);
+    expect(shellFor("win32", where({ bash: wsl }), {}, exists()).name).toBe("cmd");
+    expect(shellFor("win32", where({ bash: wsl, powershell: "C:\\ps.exe" }), {}, exists()).name).toBe("PowerShell");
+    expect(shellFor("win32", where({ bash: "C:\\Users\\me\\AppData\\Local\\Microsoft\\WindowsApps\\bash.exe" }), {}, exists()).name).toBe("cmd");
+    expect(shellFor("win32", where({ bash: wsl, git: "C:\\Program Files\\Git\\cmd\\git.exe" }), {}, exists(git)).argv("ls")).toEqual([git, "-c", "ls"]);
+    expect(shellFor("win32", where({ bash: wsl }), { ProgramFiles: "C:\\Program Files" }, exists(git)).argv("ls")[0]).toBe(git);
+    expect(shellFor("win32", where({ bash: wsl }), { LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local" }, exists("C:\\Users\\me\\AppData\\Local\\Programs\\Git\\bin\\bash.exe")).name).toBe("bash");
+    expect(shellFor("win32", where({ bash: "C:\\Program Files\\Git\\usr\\bin\\bash.exe" }), {}, exists()).argv("ls")[0]).toBe("C:\\Program Files\\Git\\usr\\bin\\bash.exe");
   });
   test("this machine has a working shell", () => {
     const shell = shellFor();
@@ -129,5 +145,25 @@ describe("a terminal for a program you type to", () => {
     expect(jobs.list()[0]).toMatchObject({ status: "done", code: 0 });
     expect(await leftAfter(seen)).toBe("");
     jobs.close();
+  });
+});
+
+describe("starting a program", () => {
+  const where = (found: Record<string, string>) => (cmd: string): string | null => found[cmd] ?? null;
+  test("outside Windows the arguments are left as they are", () => {
+    expect(launch(["npx", "-y", "pkg"], "linux", where({ npx: "/usr/bin/npx" }))).toEqual(["npx", "-y", "pkg"]);
+  });
+  test("on Windows a real program is started by the path it was found at", () => {
+    expect(launch(["agent", "-p", 'say "hi"'], "win32", where({ agent: "C:\\bin\\agent.exe" }))).toEqual(["C:\\bin\\agent.exe", "-p", 'say "hi"']);
+    expect(launch(["nothing", "x"], "win32", where({}))).toEqual(["nothing", "x"]);
+  });
+  test("on Windows a .cmd program (npx, and programs from npm) goes through cmd.exe, each word quoted", () => {
+    expect(launch(["npx", "-y", "@scope/pkg", "C:\\my dir"], "win32", where({ npx: "C:\\Program Files\\nodejs\\npx.cmd" })))
+      .toEqual(["cmd.exe", "/d", "/s", "/c", '""C:\\Program Files\\nodejs\\npx.cmd" "-y" "@scope/pkg" "C:\\my dir""']);
+  });
+  test("what cmd would read as its own is refused with a sentence, not passed on", () => {
+    const cmd = where({ tool: "C:\\n\\tool.cmd" });
+    for (const bad of ['--settings={"a":1}', "%PATH%", "line\nbreak"]) expect(() => launch(["tool", bad], "win32", cmd)).toThrow(/batch file/);
+    expect(() => launch(["tool", "a&b|c>d^e"], "win32", cmd)).not.toThrow();
   });
 });
