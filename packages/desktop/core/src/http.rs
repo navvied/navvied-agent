@@ -32,6 +32,24 @@ pub fn get(port: u16, path: &str, bearer: Option<&str>, timeout: Duration) -> io
     parse_reply(&String::from_utf8_lossy(&raw))
 }
 
+/// One POST with a JSON body and the key in a header, never in the address. Used for the handful of app-control
+/// calls the shell itself makes into its own sidecar (relay pairing today): never for a page's own requests, which
+/// go straight from the page to the sidecar without passing through this client at all.
+pub fn post(port: u16, path: &str, bearer: Option<&str>, body: &str, timeout: Duration) -> io::Result<Reply> {
+    let mut stream = TcpStream::connect_timeout(&loopback(port), timeout)?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
+    let auth = bearer.map(|b| format!("Authorization: Bearer {b}\r\n")).unwrap_or_default();
+    write!(
+        stream,
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{auth}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )?;
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw)?;
+    parse_reply(&String::from_utf8_lossy(&raw))
+}
+
 fn parse_reply(text: &str) -> io::Result<Reply> {
     let bad = || io::Error::new(io::ErrorKind::InvalidData, "not an HTTP reply");
     let (head, body) = text.split_once("\r\n\r\n").ok_or_else(bad)?;

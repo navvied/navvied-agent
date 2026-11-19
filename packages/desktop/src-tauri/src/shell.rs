@@ -2,7 +2,7 @@
 
 use crate::{cards, tray};
 use navvied_desktop_core::events::{Settings as NoticeSettings, Tracker, Update};
-use navvied_desktop_core::http::Info;
+use navvied_desktop_core::http::{self, Info};
 use navvied_desktop_core::intent::{self, Intent};
 use navvied_desktop_core::logs::Logger;
 use navvied_desktop_core::redact::Redactor;
@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt as _};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
@@ -105,7 +105,11 @@ pub fn run() {
             crate::commands::shell_answer,
             crate::commands::shell_settings_get,
             crate::commands::shell_settings_set,
-            crate::commands::page_action
+            crate::commands::page_action,
+            crate::commands::relay_pair,
+            crate::commands::relay_status,
+            crate::commands::relay_forget,
+            crate::commands::relay_answer
         ])
         .setup(|app| {
             setup(app.handle())?;
@@ -477,8 +481,16 @@ fn start_listener(app: AppHandle, sh: Arc<Shell>) {
                     while !sh.quitting.load(Ordering::SeqCst) && sh.port.load(Ordering::SeqCst) == port {
                         match reader.next(Duration::from_millis(500)) {
                             Ok(Some(line)) => {
-                                if let Some(seq) = serde_json::from_str::<Value>(&line).ok().and_then(|j| j.get("seq").and_then(Value::as_u64)) {
+                                let parsed = serde_json::from_str::<Value>(&line).ok();
+                                if let Some(seq) = parsed.as_ref().and_then(|j| j.get("seq").and_then(Value::as_u64)) {
                                     last_seq = seq;
+                                }
+                                // The relay side-channel (`{"relay": "ask"|"replaced", ...}`, sent by the sidecar's
+                                // own `createRelayBridge`): no `ev` field, so `Tracker::feed` below already ignores
+                                // it safely; forward the whole line to the webview as-is, so a page can listen for
+                                // `relay` events without the shell needing to understand what any one of them means.
+                                if parsed.as_ref().is_some_and(|j| j.get("relay").is_some()) {
+                                    let _ = app.emit("relay", &parsed);
                                 }
                                 let updates = lock(&sh.tracker).feed(&line, sh.started.elapsed());
                                 for u in updates {
@@ -526,6 +538,46 @@ pub fn stop_task(app: &AppHandle) {
     if let Some(w) = lock(&shell_of(app).writer).as_ref() {
         let _ = w.send_text(r#"{"cmd":"cancel"}"#);
     }
+}
+
+const RELAY_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn relay_call(app: &AppHandle, method_post_body: Option<&str>, path: &str) -> Result<Value, String> {
+    let sh = shell_of(app);
+    let port = sh.port.load(Ordering::SeqCst);
+    if port == 0 {
+        return Err("navvied is not running yet".into());
+    }
+    let reply = match method_post_body {
+        Some(body) => http::post(port, path, Some(sh.token.expose()), body, RELAY_TIMEOUT),
+        None => http::get(port, path, Some(sh.token.expose()), RELAY_TIMEOUT),
+    }
+    .map_err(|e| e.to_string())?;
+    let value: Value = serde_json::from_str(&reply.body).map_err(|e| e.to_string())?;
+    if reply.status >= 400 {
+        return Err(value.get("error").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| format!("the program answered {}", reply.status)));
+    }
+    Ok(value)
+}
+
+/// Makes a link and a code for navvied.com to pair with, the same way `/remote` does in the terminal.
+pub fn relay_pair(app: &AppHandle, label: Option<String>) -> Result<Value, String> {
+    relay_call(app, Some(&serde_json::json!({ "label": label }).to_string()), "/api/relay/pair")
+}
+
+/// What is connected over the relay right now, and the one question waiting for a decision, if there is one.
+pub fn relay_status(app: &AppHandle) -> Result<Value, String> {
+    relay_call(app, None, "/api/relay/status")
+}
+
+/// Stops sharing with one device, named by the id `relay_status` or `relay_pair` gave.
+pub fn relay_forget(app: &AppHandle, id: String) -> Result<Value, String> {
+    relay_call(app, Some(&serde_json::json!({ "id": id }).to_string()), "/api/relay/forget")
+}
+
+/// Answers the question a `relay` event asked (`"once"`, `"always"` or `"no"`), by its `id`.
+pub fn relay_answer(app: &AppHandle, id: String, choice: String) -> Result<Value, String> {
+    relay_call(app, Some(&serde_json::json!({ "id": id, "choice": choice }).to_string()), "/api/relay/answer")
 }
 
 pub fn quit(app: &AppHandle) {

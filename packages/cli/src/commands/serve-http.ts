@@ -7,16 +7,90 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import type { Options } from "../args.ts";
+import { relayUrlFor } from "../computer.ts";
 import { DeviceStore } from "../devices.ts";
 import { devicesPath } from "../config.ts";
 import { createPairing, type Decision } from "../pairing.ts";
 import { configPath, loadConfig } from "../config.ts";
 import { discover, listModels, saveModel, useModel } from "../model-setup.ts";
 import { createHub, type Hub } from "./hub.ts";
+import { RelayHost } from "../relay-host.ts";
+import { DEFAULT_SITE } from "./web.ts";
 import { VERSION } from "../help.ts";
 import type { IO } from "../io.ts";
 import { EXIT } from "./run.ts";
 import { WEB_ASSETS } from "../web-assets.ts";
+
+/** How long an unanswered relay question waits before it is treated as refused, same as local pairing's own default. */
+const RELAY_ASK_WAIT_MS = 120_000;
+
+interface PendingAsk { deviceId: string; origin: string; code: string; resolve: (d: Decision) => void; timer: ReturnType<typeof setTimeout> }
+
+/**
+ * Lets the sidecar be paired to navvied.com the same way the interactive terminal's `/remote` does (same
+ * `RelayHost`, reused rather than copied), but answered over HTTP instead of a TTY: there is no terminal here, only
+ * a shell (desktop, or later mobile) that is told or asks. A question is held until it is answered, forgotten with
+ * the device that asked it, or left too long, in which case it is refused by itself, the same as the terminal's own
+ * `askToPair` would eventually time out a person who never looks at it.
+ */
+function createRelayBridge(hub: Hub, store: DeviceStore, io: IO, site: string, publish: (line: string) => void, waitMs = RELAY_ASK_WAIT_MS) {
+  let host: RelayHost | undefined;
+  const pendingAsks = new Map<string, PendingAsk>();
+
+  const settle = (id: string, choice: Decision): void => {
+    const entry = pendingAsks.get(id);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    pendingAsks.delete(id);
+    entry.resolve(choice);
+  };
+
+  const ask = (q: { id: string; origin: string; code: string }): Promise<Decision> =>
+    new Promise((resolve) => {
+      const id = randomBytes(8).toString("hex");
+      const timer = setTimeout(() => settle(id, "no"), waitMs);
+      timer.unref?.();
+      pendingAsks.set(id, { deviceId: q.id, origin: q.origin, code: q.code, resolve, timer });
+      publish(JSON.stringify({ relay: "ask", id, origin: q.origin, code: q.code }));
+    });
+
+  const relay = (): RelayHost =>
+    (host ??= new RelayHost({ url: io.env.NAVVIED_RELAY_URL ?? relayUrlFor(site), site, hub, store, ask, replaced: () => publish(JSON.stringify({ relay: "replaced" })) }));
+
+  // A device paired before (by this process or an earlier one, since the store is a file) reconnects by itself.
+  if (store.list().some((d) => d.kind === "relay")) void relay().start().catch(() => undefined);
+
+  return {
+    async pair(label: string) {
+      return relay().pair(label);
+    },
+    status() {
+      return {
+        connected: host?.connected ?? 0,
+        devices: store.list().filter((d) => d.kind === "relay").map(({ id, label, createdAt, lastUsed, pending: p }) => ({ id, label, createdAt, lastUsed, pending: !!p })),
+        waiting: [...pendingAsks.entries()].map(([id, { origin, code }]) => ({ id, origin, code })),
+      };
+    },
+    forget(id: string) {
+      // A device that was never paired here needs no `RelayHost` made just to be told to forget it.
+      host?.forget(id);
+      if (!host) store.remove(id);
+      for (const [askId, entry] of pendingAsks) if (entry.deviceId === id) settle(askId, "no");
+    },
+    /** `true` once a pending question with this id existed and was answered; `false` for an id that is not (or no longer) waiting. */
+    answer(id: string, choice: Decision): boolean {
+      if (!pendingAsks.has(id)) return false;
+      settle(id, choice);
+      return true;
+    },
+    stop() {
+      // Nothing is left waiting on an answer that will now never come (the timer is unref'd, so it was never
+      // what kept the process alive, but the promise itself would otherwise hang until it fires on its own).
+      for (const id of [...pendingAsks.keys()]) settle(id, "no");
+      host?.stop();
+    },
+  };
+}
 
 const MAX_FRAME = 16 * 1024 * 1024;
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
@@ -64,6 +138,10 @@ export interface HttpDeps {
   hub?: Hub;
   /** Asks the person whether a website may use this engine. Without it the answer is no. */
   ask?: (question: { origin: string; code: string }) => Promise<Decision>;
+  /** The site a relay pairing link opens (a test's own relay, standing in for navvied.com). */
+  relaySite?: string;
+  /** How long an unanswered relay question waits before it is refused by itself (a test's own, far shorter). */
+  relayAskWaitMs?: number;
 }
 
 export async function startHttpServer(options: Options, io: IO, deps: HttpDeps = {}): Promise<{ ok: true; server: HttpServer } | { ok: false; error: string }> {
@@ -83,6 +161,9 @@ export async function startHttpServer(options: Options, io: IO, deps: HttpDeps =
   const hub = deps.hub ?? createHub(options, io, { schedule: true });
   const store = deps.store ?? new DeviceStore(devicesPath(io.env));
   const pairing = createPairing({ store, allowed, ask: deps.ask ?? (async () => "no") });
+  let publishRelay: (line: string) => void = () => undefined;
+  const relaySite = deps.relaySite ?? options.site ?? io.env.NAVVIED_WEB_URL ?? DEFAULT_SITE;
+  const relay = createRelayBridge(hub, store, io, relaySite, (line) => publishRelay(line), deps.relayAskWaitMs);
 
   const loopbackOnly = LOOPBACK.has(host);
   const hostOk = (req: Request): boolean => {
@@ -101,8 +182,11 @@ export async function startHttpServer(options: Options, io: IO, deps: HttpDeps =
   };
   const KEY_PROTOCOL = "navvied-key.";
   const protocolKey = (req: Request): string | undefined => (req.headers.get("sec-websocket-protocol") ?? "").split(",").map((p) => p.trim()).find((p) => p.startsWith(KEY_PROTOCOL));
+  const givenToken = (url: URL, req: Request): string => url.searchParams.get("token") ?? /^Bearer (.+)$/.exec(req.headers.get("authorization") ?? "")?.[1] ?? protocolKey(req)?.slice(KEY_PROTOCOL.length) ?? "";
+  /** The app's own token, never a paired website's or device's: those are let in by `authorised` too, but must never reach anything that controls pairing itself, or a device could approve, forget or exhaust-answer another. */
+  const isApp = (url: URL, req: Request): boolean => same(givenToken(url, req), token);
   const authorised = (url: URL, req: Request): boolean => {
-    const given = url.searchParams.get("token") ?? /^Bearer (.+)$/.exec(req.headers.get("authorization") ?? "")?.[1] ?? protocolKey(req)?.slice(KEY_PROTOCOL.length) ?? "";
+    const given = givenToken(url, req);
     return same(given, token) || (given.length > 0 && pairing.accepts(given));
   };
   const reply = (body: ConstructorParameters<typeof Response>[0], status: number, type: string, extra: Record<string, string> = {}): Response =>
@@ -173,11 +257,11 @@ export async function startHttpServer(options: Options, io: IO, deps: HttpDeps =
     return reply("not found\n", 404, "text/plain", cors(req));
   };
 
-  const server = Bun.serve<{ since: number; detach?: () => void }>({
+  const server = Bun.serve<{ since: number; isApp: boolean; detach?: () => void }>({
     port: options.port ?? 8787,
     hostname: host,
     maxRequestBodySize: MAX_FRAME,
-    fetch(req, srv) {
+    async fetch(req, srv) {
       const url = new URL(req.url);
       if (!hostOk(req)) return reply("forbidden\n", 403, "text/plain");
       if (url.pathname === "/ws") {
@@ -185,7 +269,7 @@ export async function startHttpServer(options: Options, io: IO, deps: HttpDeps =
         if (!originOk(req)) return reply("forbidden\n", 403, "text/plain");
         const since = Number(url.searchParams.get("since"));
         const chosen = protocolKey(req);
-        return srv.upgrade(req, { data: { since: Number.isFinite(since) && since > 0 ? since : 0 }, ...(chosen ? { headers: { "sec-websocket-protocol": chosen } } : {}) }) ? undefined : reply("expected a WebSocket\n", 426, "text/plain");
+        return srv.upgrade(req, { data: { since: Number.isFinite(since) && since > 0 ? since : 0, isApp: isApp(url, req) }, ...(chosen ? { headers: { "sec-websocket-protocol": chosen } } : {}) }) ? undefined : reply("expected a WebSocket\n", 426, "text/plain");
       }
       if (req.method === "OPTIONS") {
         const origin = req.headers.get("origin");
@@ -215,6 +299,43 @@ export async function startHttpServer(options: Options, io: IO, deps: HttpDeps =
         if (!authorised(url, req)) return reply("unauthorised\n", 401, "text/plain", cors(req));
         return store.remove(revoked[1]!) ? reply(null, 204, "text/plain", cors(req)) : reply("not found\n", 404, "text/plain", cors(req));
       }
+      // Every relay route below checks `isApp`, never `authorised`: pairing, answering and forgetting control who
+      // can reach this computer at all, so a website or device already let in for ordinary use (`authorised`'s
+      // other half, `pairing.accepts`) must never also be able to approve another one, read what one is waiting
+      // for, or remove one — only the app itself, on its own token.
+      if (url.pathname === "/api/relay/pair" && req.method === "POST") {
+        if (!originOk(req)) return reply("forbidden\n", 403, "text/plain");
+        if (!isApp(url, req)) return reply("unauthorised\n", 401, "text/plain", cors(req));
+        if (Number(req.headers.get("content-length") ?? 0) > 65_536) return reply("too big\n", 413, "text/plain", cors(req));
+        let body: unknown;
+        try { const text = await req.text(); body = text ? JSON.parse(text) : {}; } catch { return json({ error: "send a JSON object" }, 400, req); }
+        const label = typeof (body as { label?: unknown }).label === "string" && (body as { label: string }).label ? (body as { label: string }).label : `Device ${store.list().filter((d) => d.kind === "relay").length + 1}`;
+        return relay.pair(label).then((made) => json(made, 200, req), (e: unknown) => json({ error: e instanceof Error ? e.message : "could not make a link" }, 502, req));
+      }
+      if (url.pathname === "/api/relay/status" && req.method === "GET") {
+        if (!originOk(req)) return reply("forbidden\n", 403, "text/plain");
+        if (!isApp(url, req)) return reply("unauthorised\n", 401, "text/plain", cors(req));
+        return json(relay.status(), 200, req);
+      }
+      if (url.pathname === "/api/relay/forget" && req.method === "POST") {
+        if (!originOk(req)) return reply("forbidden\n", 403, "text/plain");
+        if (!isApp(url, req)) return reply("unauthorised\n", 401, "text/plain", cors(req));
+        if (Number(req.headers.get("content-length") ?? 0) > 65_536) return reply("too big\n", 413, "text/plain", cors(req));
+        let body: unknown;
+        try { const text = await req.text(); body = text ? JSON.parse(text) : {}; } catch { return json({ error: "send a JSON object" }, 400, req); }
+        relay.forget(String((body as { id?: unknown }).id ?? ""));
+        return json({ ok: true }, 200, req);
+      }
+      if (url.pathname === "/api/relay/answer" && req.method === "POST") {
+        if (!originOk(req)) return reply("forbidden\n", 403, "text/plain");
+        if (!isApp(url, req)) return reply("unauthorised\n", 401, "text/plain", cors(req));
+        if (Number(req.headers.get("content-length") ?? 0) > 65_536) return reply("too big\n", 413, "text/plain", cors(req));
+        let body: unknown;
+        try { const text = await req.text(); body = text ? JSON.parse(text) : {}; } catch { return json({ error: "send a JSON object" }, 400, req); }
+        const choice = (body as { choice?: unknown }).choice;
+        if (choice !== "once" && choice !== "always" && choice !== "no") return json({ error: "choice must be once, always or no" }, 400, req);
+        return json({ ok: relay.answer(String((body as { id?: unknown }).id ?? ""), choice) }, 200, req);
+      }
       if (url.pathname.startsWith("/api/setup")) {
         if (!originOk(req)) return reply("forbidden\n", 403, "text/plain");
         if (!authorised(url, req)) return reply("unauthorised\n", 401, "text/plain", cors(req));
@@ -232,14 +353,21 @@ export async function startHttpServer(options: Options, io: IO, deps: HttpDeps =
       maxPayloadLength: MAX_FRAME,
       sendPings: true,
       idleTimeout: 120,
-      open(ws) { ws.data.detach = hub.attach(ws, ws.data.since); },
+      // Only the app's own connection hears the relay side-channel: a paired website or device's socket (the same
+      // kind `pairing.accepts` lets open this connection for ordinary use) must never see another one's pairing
+      // code, the same reason the HTTP routes above check `isApp`, not `authorised`.
+      open(ws) { ws.data.detach = hub.attach(ws, ws.data.since); if (ws.data.isApp) ws.subscribe("relay"); },
       message(ws, frame) {
         if (typeof frame !== "string") { ws.send(JSON.stringify({ ev: "error", msg: "bad command: send text frames" })); return; }
         hub.command(frame, (text) => ws.send(text));
       },
-      close(ws) { ws.data.detach?.(); },
+      close(ws) { ws.data.detach?.(); if (ws.data.isApp) ws.unsubscribe("relay"); },
     },
   });
+  // A pending relay question reaches a connected shell at once, over the socket it already has open for notices
+  // (`events::Tracker` on the Rust side ignores a line with no "ev" field, so this rides the same channel safely);
+  // `/api/relay/status` is there too, for a shell that opens its settings page without one open yet.
+  publishRelay = (line) => { server.publish("relay", line); };
 
   const shown = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
   return {
@@ -250,6 +378,7 @@ export async function startHttpServer(options: Options, io: IO, deps: HttpDeps =
       port: server.port ?? 0,
       token,
       async stop() {
+        relay.stop();
         await server.stop(true);
         if (!deps.hub) await hub.stop();
       },
