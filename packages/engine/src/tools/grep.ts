@@ -88,15 +88,20 @@ export const grep: Tool = {
     const insensitive = a.ignore_case === true;
     const path = process.env.PATH ?? "";
     if (!Bun.which("rg", { PATH: path }) && !Bun.which("grep", { PATH: path })) { const found = searchHere(root, pattern, insensitive, a.glob ? str(a.glob) : undefined); return typeof found === "string" ? found : found.lines.length ? clip(shortened(found.lines, found.partial)) : "No matches."; }
+    // The search runs in the folder searched, on ".", so each line starts with a short path of its own: a long temporary or project path in every line
+    // would fill the output the search is allowed (400,000 characters) with nothing but paths, and the count of what was left out would be wrong.
+    const directory = statSync(root).isDirectory();
+    const base = directory ? root : dirname(root), target = directory ? "." : basename(root);
     const argv = Bun.which("rg", { PATH: path })
-      ? ["rg", "-nH", "--no-heading", "--max-columns", "300", ...(insensitive ? ["-i"] : []), ...(a.glob ? ["-g", str(a.glob)] : []), "-e", pattern, root]
-      : ["grep", "-rnHE", ...(insensitive ? ["-i"] : []), ...(a.glob ? ["--include", str(a.glob)] : []), "--exclude-dir=node_modules", "--exclude-dir=.git", "-e", pattern, root];
-    const r = await run(argv, { cwd: ctx.cwd, signal: ctx.signal, timeoutMs: 30_000 });
+      ? ["rg", "-nH", "--no-heading", "--max-columns", "300", ...(insensitive ? ["-i"] : []), ...(a.glob ? ["-g", str(a.glob)] : []), "-e", pattern, target]
+      : ["grep", "-rnHE", ...(insensitive ? ["-i"] : []), ...(a.glob ? ["--include", str(a.glob)] : []), "--exclude-dir=node_modules", "--exclude-dir=.git", "-e", pattern, target];
+    const r = await run(argv, { cwd: base, signal: ctx.signal, timeoutMs: 30_000 });
     const text = r.output.trim();
     if (!text) return "No matches.";
-    // Each line names its file (also when one file is searched), relative to the folder searched.
-    const base = statSync(root).isDirectory() ? root : dirname(root);
-    const lines = text.split("\n").map((l) => l.replace(`${base}/`, "").replace(`${base}\\`, "")).map((l) => (l.length > 300 ? `${l.slice(0, 300)}…` : l));
+    // Only lines that are matches (`file:line:text`) are matches: what the program says about a file it could not read, or a binary file, is not.
+    const all = text.split("\n").map((l) => l.replace(/^\.[\\/]/, ""));
+    const lines = all.filter((l) => /^.+?:\d+:/.test(l)).map((l) => (l.length > 300 ? `${l.slice(0, 300)}…` : l));
+    if (!lines.length) return /^No matches/.test(text) ? "No matches." : `Error: ${text.slice(0, 300)}`;
     return clip(shortened(lines, r.output.length >= OUTPUT_LIMIT));
   },
 };

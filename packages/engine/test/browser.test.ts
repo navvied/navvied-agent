@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { browser, closeBrowser, findChrome } from "../src/index.ts";
+import { devToolsEndpoint } from "../src/tools/browser.ts";
 
 const chrome = findChrome();
 const site = Bun.serve({
@@ -122,4 +123,24 @@ describe.skipIf(!chrome || process.platform === "win32")("a browser that stops w
     const out = await withBrowser(`if [ ! -e "${marker}" ]; then : > "${marker}"; echo "crashed" >&2; exit 139; fi\nexec "${chrome}" "$@"`, () => run({ action: "open", url: home }));
     expect(out).toContain("Welcome to the shop");
   }, 45_000);
+
+  test("a port file that is there before it is whole (empty, or the port without its address) is waited for, not used", async () => {
+    // The browser writes the file in more than one step; this one leaves it empty for a moment and then starts the real browser.
+    const script = `for a in "$@"; do case "$a" in --user-data-dir=*) d="\${a#--user-data-dir=}";; esac; done\n: > "$d/DevToolsActivePort"\nsleep 0.7\nprintf '9' > "$d/DevToolsActivePort"\nsleep 0.7\nexec "${chrome}" "$@"`;
+    const out = await withBrowser(script, () => run({ action: "open", url: home }));
+    expect(out).toContain("Welcome to the shop");
+  }, 45_000);
+});
+
+describe("where the browser says it listens", () => {
+  const file = join(mkdtempSync(join(tmpdir(), "navvied-port-")), "DevToolsActivePort");
+  const write = (text: string): void => writeFileSync(file, text);
+  test("only a file with the port and the address is an answer", () => {
+    expect(devToolsEndpoint(join(tmpdir(), "navvied-no-such-file"))).toBeUndefined();
+    for (const half of ["", "9222", "9222\n", "\n/devtools/browser/x", "abc\n/devtools/browser/x"]) { write(half); expect(devToolsEndpoint(file), JSON.stringify(half)).toBeUndefined(); }
+    write("9222\n/devtools/browser/4f2a-91");
+    expect(devToolsEndpoint(file)).toEqual({ port: "9222", path: "/devtools/browser/4f2a-91" });
+    write("38211\r\n/devtools/browser/abc\r\n");
+    expect(devToolsEndpoint(file)).toEqual({ port: "38211", path: "/devtools/browser/abc" });
+  });
 });

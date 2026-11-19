@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
@@ -50,8 +50,11 @@ export function endedIn(state: ShellState): string | undefined {
   try { const text = readFileSync(file, "utf8").trim(); rmSync(file, { force: true }); return text || undefined; } catch { return undefined; }
 }
 
+/** A folder as the system spells it (links followed): a shell reports where it is that way, and the folder it was started in may be spelt through a link (a temporary folder on macOS lies behind /var). */
+export const realPath = (p: string): string => { try { return realpathSync.native(p); } catch { return resolve(p); } };
+
 /** Whether `dir` is `root` or inside it. */
-export const inside = (root: string, dir: string): boolean => { const rel = relative(resolve(root), resolve(dir)); return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel)); };
+export const inside = (root: string, dir: string): boolean => { const rel = relative(realPath(root), realPath(dir)); return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel)); };
 
 export function forget(state: ShellState): void {
   if (state.folder && existsSync(state.folder)) rmSync(state.folder, { recursive: true, force: true });

@@ -5,7 +5,7 @@ import type { Jobs } from "../jobs.ts";
 import type { Tool } from "../types.ts";
 import { relative, resolve } from "node:path";
 import { redact } from "../redact.ts";
-import { endedIn, inside, remembering, type ShellState } from "./shell-state.ts";
+import { endedIn, inside, realPath, remembering, type ShellState } from "./shell-state.ts";
 import { cleanOutput, clip, num, outputBudget, place, run, spill, str } from "./util.ts";
 
 const shell = shellFor();
@@ -93,11 +93,11 @@ export const bash: Tool = {
 function whereNow(state: ShellState, working: string): string {
   const end = endedIn(state);
   if (!end) return "";
-  const before = state.dir ?? working;
-  if (!inside(working, end)) return `[stays in ${relative(working, before) || "the working folder"}: a cd outside it lasts one command]`;
-  if (resolve(end) === resolve(before)) return "";
-  state.dir = resolve(end) === resolve(working) ? undefined : end;
-  return `[now in ${relative(working, end) || "the working folder"}]`;
+  const top = realPath(working), now = realPath(end), before = realPath(state.dir ?? working);
+  if (!inside(top, now)) return `[stays in ${relative(top, before) || "the working folder"}: a cd outside it lasts one command]`;
+  if (now === before) return "";
+  state.dir = now === top ? undefined : end;
+  return `[now in ${relative(top, now) || "the working folder"}]`;
 }
 
 /** A call as the model writes it, for a message that shows what to send instead. */
