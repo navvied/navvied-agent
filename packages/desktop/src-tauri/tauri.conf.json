@@ -23,5 +23,11 @@
     "windows": { "webviewInstallMode": { "type": "embedBootstrapper" }, "nsis": { "installMode": "currentUser", "displayLanguageSelector": false } },
     "linux": { "deb": { "depends": ["libwebkit2gtk-4.1-0", "libayatana-appindicator3-1"] } }
   },
-  "plugins": { "deep-link": { "desktop": { "schemes": ["navvied"] } } }
+  "plugins": {
+    "deep-link": { "desktop": { "schemes": ["navvied"] } },
+    "updater": {
+      "pubkey": "REPLACE-ME: run `cargo tauri signer generate`, see docs/DESKTOP.md",
+      "endpoint": ["https://github.com/navvied/navvied-agent/releases/latest/download/latest.json"]
+    }
+  }
 }

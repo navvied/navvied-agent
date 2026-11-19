@@ -21,7 +21,7 @@ const USAGE = `navvied-eval — measure a coding agent on real tasks
   navvied-eval validate [--tasks a,b] [--slow]      every task must fail untouched and pass with its reference solution
   navvied-eval run --model <name> [--model <name> …] [--tasks a,b] [--repeat n] [--out results.jsonl] [--cli "<command>"]
   navvied-eval run --mock oracle|lazy|tamper|leave|crash|hang [--tasks a,b] …   a scripted model: tries the tasks and the harness
-  navvied-eval run --upstream <base address> --upstream-model <id> [--upstream-key-file <file>] [--upstream-window <tokens>] …   a real model, seen through the counter
+  navvied-eval run --upstream <base address> --upstream-model <id> [--upstream-key-file <file>] [--upstream-window <tokens>] [--trace <folder>] …   a real model, seen through the counter
                                                                 the key is read from the file into the environment, never shown or put on a command line
   navvied-eval run --agent <label|file> …                      another agent, described by a file of yours (docs/EVAL.md): it needs --upstream or --mock to be counted
   navvied-eval agents                                          the agent files found in your folder
@@ -54,7 +54,7 @@ export async function main(argv: string[]): Promise<number> {
     case "validate": return validate(chosen());
     case "run": {
       const mockName = option(rest, "mock")[0], upstream = option(rest, "upstream")[0];
-      const BEHAVIOURS = ["oracle", "lazy", "tamper", "leave", "leak", "crash", "hang"];
+      const BEHAVIOURS = ["oracle", "lazy", "tamper", "leave", "leak", "stall", "crash", "hang"];
       if (mockName && !BEHAVIOURS.includes(mockName)) { process.stderr.write(`error: --mock is one of ${BEHAVIOURS.join(", ")}\n`); return 2; }
       const agentName = option(rest, "agent")[0];
       let agent: Adapter | undefined;
@@ -93,7 +93,7 @@ export async function main(argv: string[]): Promise<number> {
           if (broken >= 2) { process.stderr.write("stopped: the model failed on two runs in a row (server errors or no answer); not asked again\n"); break; }
           for (const model of label && meter ? [label] : models) {
             for (let i = 0; i < repeat; i++) {
-              const r = await runTask(task, { command, ...(meter ? { label: model, ...(agent ? { model: modelId! } : {}), env: world, meter, key: key ?? "none", ...(agent ? { agent } : { agentEnv: (base: string) => ({ NAVVIED_BASE_URL: base }) }) } : { model }) });
+              const r = await runTask(task, { command, ...(meter ? { label: model, ...(agent ? { model: modelId! } : {}), env: world, meter, key: key ?? "none", ...(option(rest, "trace")[0] ? { trace: resolve(option(rest, "trace")[0]!) } : {}), ...(agent ? { agent } : { agentEnv: (base: string) => ({ NAVVIED_BASE_URL: base }) }) } : { model }) });
               results.push(r);
               broken = r.modelErrors || r.reason === "timeout" ? broken + 1 : 0;
               if (out) appendFileSync(out, `${JSON.stringify(r)}\n`);

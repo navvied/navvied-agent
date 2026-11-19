@@ -19,6 +19,8 @@ export class FallbackProvider implements Provider {
     if (!chain.length) throw new Error("a fallback chain needs at least one model");
   }
 
+  get readsPdf(): boolean { return this.chain[0]!.provider.readsPdf === true; }
+
   async stream(req: ModelRequest, signal: AbortSignal, on: StreamHandlers): Promise<ModelReply> {
     let last: unknown;
     for (const [i, link] of this.chain.entries()) {

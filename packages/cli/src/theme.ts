@@ -57,8 +57,8 @@ export const bg = (hex: string, truecolor: boolean): string => {
 export type Rgb = readonly [number, number, number];
 
 const SURFACES = {
-  dark: { you: [44, 44, 58], code: [36, 36, 46], addBg: [30, 62, 44], addFg: [150, 235, 180], delBg: [70, 36, 40], delFg: [245, 150, 150], ok: [110, 220, 150], bad: [240, 120, 120], warn: [240, 200, 100] },
-  light: { you: [232, 232, 244], code: [238, 238, 246], addBg: [214, 240, 222], addFg: [20, 100, 50], delBg: [250, 222, 222], delFg: [150, 40, 40], ok: [30, 140, 70], bad: [190, 50, 50], warn: [170, 110, 0] },
+  dark: { code: [36, 36, 46], addBg: [30, 62, 44], addFg: [150, 235, 180], delBg: [70, 36, 40], delFg: [245, 150, 150], ok: [110, 220, 150], bad: [240, 120, 120], warn: [240, 200, 100] },
+  light: { code: [238, 238, 246], addBg: [214, 240, 222], addFg: [20, 100, 50], delBg: [250, 222, 222], delFg: [150, 40, 40], ok: [30, 140, 70], bad: [190, 50, 50], warn: [170, 110, 0] },
 } as const satisfies Record<string, Record<string, Rgb>>;
 
 /** The colours of the blocks in the conversation: the person's message, code, added and removed lines, and the status marks. */

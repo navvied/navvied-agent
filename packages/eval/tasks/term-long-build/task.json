@@ -14,5 +14,5 @@
     "build.sh"
   ],
   "maxSteps": 30,
-  "timeoutSeconds": 400
+  "timeoutSeconds": 600
 }

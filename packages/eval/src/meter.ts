@@ -21,6 +21,7 @@ export interface Hit {
   outTokens: number;
   /** The answer carried no token counts: these are characters divided by four. */
   estimated: boolean;
+  /** What the model answered with; 499 when the one who asked gave up before it did (the agent was stopped), which is not the model failing. */
   status: number;
   /** From the request to the end of the answer. */
   ms: number;
@@ -89,8 +90,10 @@ export function startMeter(upstream: string): Meter {
         res = await fetch(`${target.origin}${path}${url.search}`, { method: req.method, headers, ...(raw ? { body: raw } : {}), signal: req.signal });
       } catch (e) {
         release();
-        record(run, { at: started, path, stream: false, requestBytes: raw?.length ?? 0, ...weigh(path, parsed), inTokens: Math.ceil((raw?.length ?? 0) / 4), outTokens: 0, estimated: true, status: 502, ms: Date.now() - started });
-        return new Response(`the counter could not reach the model: ${e instanceof Error ? e.message : String(e)}`, { status: 502 });
+        // The agent was stopped (its time was up, or it was told to stop) while the model had not answered: the model did not fail.
+        const gaveUp = req.signal.aborted;
+        record(run, { at: started, path, stream: false, requestBytes: raw?.length ?? 0, ...weigh(path, parsed), inTokens: Math.ceil((raw?.length ?? 0) / 4), outTokens: 0, estimated: true, status: gaveUp ? 499 : 502, ms: Date.now() - started });
+        return new Response(`the counter could not reach the model: ${e instanceof Error ? e.message : String(e)}`, { status: gaveUp ? 499 : 502 });
       }
       const out = new Headers(res.headers);
       for (const h of ["content-encoding", "content-length", "transfer-encoding"]) out.delete(h);

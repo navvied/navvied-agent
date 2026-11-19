@@ -2,16 +2,31 @@
  * Hand-written validation (no dependencies). A parsed command is rebuilt from the known, checked fields only —
  * nothing the peer sent is ever forwarded verbatim.
  */
-import { EFFORTS, PERM_MODES, SESSION_KINDS, type Command, type Effort, type ImageInput, type PermMode, type Result, type SessionKind } from "./types.ts";
+import { EFFORTS, PERM_MODES, SESSION_KINDS, type Command, type Effort, type FileInput, type ImageInput, type PermMode, type Result, type SessionKind } from "./types.ts";
 
 export const LIMITS = {
   text: 1_000_000,
   images: 8,
   imageData: 20_000_000,
+  /** Images and files together, per prompt. */
+  attachments: 8,
+  /** Base64 characters of one file: about 15 MB of content. */
+  fileData: 20_000_000,
+  fileName: 255,
   paths: 100,
   pathLength: 4096,
   id: 200,
 } as const;
+
+/** The largest a prompt command's own JSON can be: its text plus every attachment at the limit (images and files share one cap). */
+export const MAX_PROMPT_BYTES = LIMITS.text + LIMITS.attachments * LIMITS.fileData;
+
+/**
+ * The largest a sealed prompt can be on the wire. Sealing (AES-GCM, then base64url) re-encodes the whole thing, about 4/3
+ * its size; the extra 15,000,000 covers the envelope JSON around it and the small amount of JSON structure already inside
+ * the prompt (field names, `cmd`, `qid`, each file's `name`/`mime`, …), which `MAX_PROMPT_BYTES` does not count.
+ */
+export const MAX_SEALED_FRAME = Math.ceil((MAX_PROMPT_BYTES * 4) / 3) + 15_000_000;
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -32,6 +47,20 @@ function images(v: unknown): Result<ImageInput[]> {
   return ok(out);
 }
 
+function files(v: unknown): Result<FileInput[]> {
+  if (!Array.isArray(v)) return fail("files must be an array");
+  if (v.length > LIMITS.attachments) return fail(`at most ${LIMITS.attachments} images and files per prompt`);
+  const out: FileInput[] = [];
+  for (const [i, f] of v.entries()) {
+    if (!isObj(f) || typeof f.name !== "string" || typeof f.mime !== "string" || typeof f.data !== "string") return fail(`files[${i}] needs name, mime and data`);
+    if (!f.name.trim() || f.name.length > LIMITS.fileName) return fail(`files[${i}].name must be a short name`);
+    if (f.mime.length > 200) return fail(`files[${i}].mime is too long`);
+    if (f.data.length > LIMITS.fileData) return fail(`files[${i}] is too large (15 MB at most)`);
+    out.push({ name: f.name, mime: f.mime, data: f.data });
+  }
+  return ok(out);
+}
+
 export function validateCommand(raw: unknown): Result<Command> {
   const one = validateOne(raw);
   if (!one.ok || !isObj(raw) || raw.kind === undefined) return one;
@@ -48,13 +77,15 @@ function validateOne(raw: unknown): Result<Command> {
       const cmd: Command = { cmd: "prompt", text: raw.text };
       if (raw.qid !== undefined) { if (!isId(raw.qid)) return fail("prompt.qid must be a short string"); cmd.qid = raw.qid; }
       if (raw.images !== undefined) { const r = images(raw.images); if (!r.ok) return r; if (r.value.length) cmd.images = r.value; }
+      if (raw.files !== undefined) { const r = files(raw.files); if (!r.ok) return r; if (r.value.length) cmd.files = r.value; }
+      if ((cmd.images?.length ?? 0) + (cmd.files?.length ?? 0) > LIMITS.attachments) return fail(`at most ${LIMITS.attachments} images and files per prompt`);
       if (raw.effort !== undefined) { if (!EFFORTS.includes(raw.effort as Effort)) return fail(`prompt.effort must be one of ${EFFORTS.join(", ")}`); cmd.effort = raw.effort as Effort; }
       if (raw.mode !== undefined) { if (!PERM_MODES.includes(raw.mode as PermMode)) return fail(`prompt.mode must be one of ${PERM_MODES.join(", ")}`); cmd.mode = raw.mode as PermMode; }
       if (raw.paths !== undefined) {
         if (!Array.isArray(raw.paths) || raw.paths.some((p) => typeof p !== "string" || p.length > LIMITS.pathLength)) return fail("prompt.paths must be an array of paths");
         cmd.paths = (raw.paths as string[]).slice(0, LIMITS.paths);
       }
-      if (!cmd.text.trim() && !cmd.images?.length) return fail("a prompt needs text or an image");
+      if (!cmd.text.trim() && !cmd.images?.length && !cmd.files?.length) return fail("a prompt needs text, an image or a file");
       return ok(cmd);
     }
     case "cancel": return ok({ cmd: "cancel" });

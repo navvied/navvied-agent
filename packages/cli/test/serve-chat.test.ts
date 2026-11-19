@@ -71,7 +71,7 @@ describe("serve --stdio", () => {
     const f = fakeIO({ env: { HOME: tempDir() } });
     expect(await main(["serve", "--stdio"], f.io)).toBe(2);
     expect(events(f.out())[0]).toMatchObject({ ev: "error" });
-    expect(f.err()).toMatch(/no model is configured/);
+    expect(f.err()).toMatch(/no model is connected yet/);
   });
 
   test("closing stdin mid-turn lets the turn finish first", async () => {
@@ -97,10 +97,9 @@ describe("interactive session", () => {
     expect(await done).toBe(0);
     expect(f.err()).toMatch(/Model\s+mock-model/);
     expect(f.err()).toMatch(/Mode\s+Auto/);
-    expect(f.err()).toContain("Handy keys");
     expect(f.err()).toContain("Commands");
-    expect(f.err()).toContain("mode: ask");
-    expect(f.err()).toMatch(/usage: \/mode <ask\|edits\|plan\|auto\|bypass>/);
+    expect(f.err()).toContain("Mode: Ask first");
+    expect(f.err()).toMatch(/Mode now: Ask first\. Press Shift\+Tab to switch, or type one of: ask, edits, plan, auto, bypass\./);
     expect(f.err()).toMatch(/unknown command \/nonsense/);
     expect(f.err()).toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/); // the session id
   });
@@ -231,7 +230,7 @@ describe("interactive session", () => {
     expect(await main(["chat"], f.io)).toBe(0);
     expect(f.err()).toContain("Which one do you use?");
     expect(f.err()).not.toContain("No model is connected yet.");
-    expect(f.err()).toContain("Type /connect to try again");
+    expect(f.err()).toContain("Not connected. Run navvied init to try again.");
   });
 
   test("a blank line is ignored, not sent as a message", async () => {

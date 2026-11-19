@@ -47,17 +47,20 @@ export function wrap(line: string, cols: number): string[] {
 
   while (start < all.length) {
     const room = rows.length ? cols - lead : cols;
-    let used = 0, end = start, soft = -1, seenText = false;
+    // A slash is a break point too (for long paths with no spaces), but a lower-priority one than a space.
+    let used = 0, end = start, soft = -1, slash = -1, seenText = false;
     for (; end < all.length; end++) {
       const c = all[end]!;
       if (c.ch === undefined) continue;
       if (used + c.w > room) break;
       used += c.w;
-      if (c.ch === " ") { if (seenText) soft = end; } else seenText = true;
+      if (c.ch === " ") { if (seenText) soft = end; }
+      else { seenText = true; if (c.ch === "/") slash = end; }
     }
     let cut = end, next = end;
     if (end < all.length && all[end]!.ch === " ") next = end + 1;
     else if (end < all.length && soft > start) { cut = soft; next = soft + 1; }
+    else if (end < all.length && slash > start) { cut = slash + 1; next = slash + 1; }
     if (next === start) { cut = start + 1; next = cut; }
     const closes = states[cut] ? RESET : "";
     rows.push(`${rows.length ? " ".repeat(lead) : ""}${states[start]}${joined(all.slice(start, cut))}${closes}`);

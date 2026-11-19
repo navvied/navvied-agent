@@ -18,6 +18,7 @@ describe("commands", () => {
   const samples: Command[] = [
     { cmd: "prompt", text: "fix the login bug", qid: "3f2c9a52-9d0e-4c61-8b1e-0a1b2c3d4e5f", mode: "plan", effort: "high", paths: ["/work/app"] },
     { cmd: "prompt", text: "", images: [{ mime: "image/png", data: "iVBORw0KGgo=" }] },
+    { cmd: "prompt", text: "", files: [{ name: "report.pdf", mime: "application/pdf", data: "JVBERi0=" }] },
     { cmd: "cancel" },
     { cmd: "compact" },
     { cmd: "model", id: "raphael-sage-2" },
@@ -53,7 +54,9 @@ describe("commands", () => {
     ["no cmd", "{}", /missing cmd/],
     ["unknown cmd", '{"cmd":"explode"}', /unknown command "explode"/],
     ["prompt without text", '{"cmd":"prompt"}', /text must be a string/],
-    ["empty prompt", '{"cmd":"prompt","text":"   "}', /needs text or an image/],
+    ["file without a name", '{"cmd":"prompt","text":"x","files":[{"mime":"text/plain","data":"AA=="}]}', /needs name, mime and data/],
+    ["file with a blank name", '{"cmd":"prompt","text":"x","files":[{"name":" ","mime":"text/plain","data":"AA=="}]}', /short name/],
+    ["empty prompt", '{"cmd":"prompt","text":"   "}', /needs text, an image or a file/],
     ["bad mode", '{"cmd":"prompt","text":"x","mode":"yolo"}', /mode must be one of/],
     ["bad effort", '{"cmd":"prompt","text":"x","effort":"ludicrous"}', /effort must be one of/],
     ["bad qid", '{"cmd":"prompt","text":"x","qid":""}', /qid/],
@@ -73,10 +76,22 @@ describe("commands", () => {
     if (!r.ok) expect(r.error).toMatch(why);
   });
 
+  test("a file alone makes a prompt", () => {
+    expect(validateCommand({ cmd: "prompt", text: "  ", files: [{ name: "a.txt", mime: "text/plain", data: "AA==" }] }).ok).toBe(true);
+    expect(validateCommand({ cmd: "prompt", text: "  ", files: [] }).ok).toBe(false);
+  });
+
   test("size limits", () => {
     expect(validateCommand({ cmd: "prompt", text: "x".repeat(LIMITS.text + 1) }).ok).toBe(false);
     const many = Array.from({ length: LIMITS.images + 1 }, () => ({ mime: "image/png", data: "AA==" }));
     expect(validateCommand({ cmd: "prompt", text: "x", images: many }).ok).toBe(false);
+    const file = { name: "a.txt", mime: "text/plain", data: "AA==" };
+    expect(validateCommand({ cmd: "prompt", text: "x", files: Array.from({ length: LIMITS.attachments + 1 }, () => file) }).ok).toBe(false);
+    const half = Array.from({ length: LIMITS.attachments / 2 }, () => file);
+    expect(validateCommand({ cmd: "prompt", text: "x", files: half, images: half.map(() => ({ mime: "image/png", data: "AA==" })) }).ok).toBe(true);
+    const together = validateCommand({ cmd: "prompt", text: "x", files: half, images: [...half, file].map(() => ({ mime: "image/png", data: "AA==" })) });
+    expect(together.ok ? "" : together.error).toMatch(/at most 8 images and files/);
+    expect(validateCommand({ cmd: "prompt", text: "x", files: [{ ...file, data: "A".repeat(LIMITS.fileData + 1) }] }).ok).toBe(false);
     const paths = Array.from({ length: LIMITS.paths + 50 }, (_, i) => `/p/${i}`);
     const r = validateCommand({ cmd: "prompt", text: "x", paths });
     expect(r.ok && r.value.cmd === "prompt" && r.value.paths?.length).toBe(LIMITS.paths);

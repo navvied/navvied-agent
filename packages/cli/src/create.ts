@@ -8,7 +8,7 @@ import type { Effort, EngineEvent, Result } from "@navvied/protocol";
 import type { Options } from "./args.ts";
 import { activeTools } from "./tools-info.ts";
 import { TerminalState, backendFor } from "./terminal.ts";
-import { chatFilesDir, chatSessionsDir, checkpointsDir, configPath, loadConfig, pluginStatePath, terminalStatePath, resolveModel, sessionsDir, type ConfigFile, type ModelEntry } from "./config.ts";
+import { attachmentsDir, chatFilesDir, chatSessionsDir, checkpointsDir, configPath, loadConfig, pluginStatePath, terminalStatePath, resolveModel, sessionsDir, type ConfigFile, type ModelEntry } from "./config.ts";
 import type { IO } from "./io.ts";
 import { memoryPathsFor } from "./memory-ui.ts";
 import { INSTRUCTION_FILE_NAMES } from "./presets.ts";
@@ -18,9 +18,9 @@ import { PluginState, activeHooks, activeSkills, mcpId } from "./plugins.ts";
 /** `where` says in plain words how the model is reached, for the welcome screen. */
 export interface Created { engine: AgentEngine; /** The name of the model in the configuration. */ entry: string; modelName: string; where: string; cwd: string; tools?: string[]; notes: string[]; /** The model is reached through a program the person is signed in to, which keeps its own sessions. */ program?: true }
 
-const providerFor = (api: "chat" | "messages" | "responses" | "ollama" | undefined, cfg: ChatCompletionsConfig, window: number, credentials?: Credentials): Provider =>
-  api === "messages" ? new MessagesApiProvider({ baseUrl: cfg.baseUrl, model: cfg.model, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}), ...(cfg.headers ? { headers: cfg.headers } : {}), ...(credentials ? { credentials } : {}) })
-  : api === "responses" ? new ResponsesApiProvider({ baseUrl: cfg.baseUrl, model: cfg.model, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}), ...(cfg.headers ? { headers: cfg.headers } : {}), ...(credentials ? { credentials } : {}) })
+const providerFor = (api: "chat" | "messages" | "responses" | "ollama" | undefined, cfg: ChatCompletionsConfig, window: number, credentials?: Credentials, pdf?: boolean): Provider =>
+  api === "messages" ? new MessagesApiProvider({ ...(pdf ? { readsPdf: true } : {}), baseUrl: cfg.baseUrl, model: cfg.model, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}), ...(cfg.headers ? { headers: cfg.headers } : {}), ...(credentials ? { credentials } : {}) })
+  : api === "responses" ? new ResponsesApiProvider({ ...(pdf ? { readsPdf: true } : {}), baseUrl: cfg.baseUrl, model: cfg.model, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}), ...(cfg.headers ? { headers: cfg.headers } : {}), ...(credentials ? { credentials } : {}) })
   : api === "ollama" ? new OllamaProvider({ baseUrl: cfg.baseUrl, model: cfg.model, contextTokens: window, ...(cfg.headers ? { headers: cfg.headers } : {}) })
   : new ChatCompletionsProvider(cfg);
 
@@ -55,7 +55,7 @@ function withFallback(first: Provider, name: string, file: ConfigFile | null, en
     if (other === name || chain.some((l) => l.name === other)) continue;
     const next = resolveModel(other, file, env, path);
     if (!next.ok || next.value.cli || !next.value.provider) continue;
-    chain.push({ name: file?.models[other]?.display?.name ?? other, provider: providerFor(next.value.api, next.value.provider, next.value.window, next.value.signIn ? credentialsFor(next.value.signIn, env) : undefined) });
+    chain.push({ name: file?.models[other]?.display?.name ?? other, provider: providerFor(next.value.api, next.value.provider, next.value.window, next.value.signIn ? credentialsFor(next.value.signIn, env) : undefined, next.value.pdf) });
   }
   return chain.length > 1 ? new FallbackProvider(chain, (msg) => emit({ ev: "notice", msg })) : first;
 }
@@ -91,8 +91,9 @@ function switcherFor(file: ConfigFile | null, current: string, env: Record<strin
       if (!next.ok) return { error: next.error };
       if (next.value.cli || !next.value.provider) return { error: "That model runs in a different program, so it needs a new conversation." };
       return {
-        provider: providerFor(next.value.api, next.value.provider, next.value.window, next.value.signIn ? credentialsFor(next.value.signIn, env) : undefined), window: next.value.window,
+        provider: providerFor(next.value.api, next.value.provider, next.value.window, next.value.signIn ? credentialsFor(next.value.signIn, env) : undefined, next.value.pdf), window: next.value.window,
         ...(next.value.efforts ? { efforts: next.value.efforts } : {}),
+        ...(next.value.vision !== undefined ? { vision: next.value.vision } : {}),
         persona: leanSoul(brainFor(id, next.value.provider.model, next.value.window, file?.models[id]?.display?.name)),
         ...(referenceFor(brainFor(id, next.value.provider.model, next.value.window, file?.models[id]?.display?.name)) ? { reference: referenceFor(brainFor(id, next.value.provider.model, next.value.window, file?.models[id]?.display?.name))! } : {}),
       };
@@ -130,11 +131,14 @@ export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) =>
     : new Engine({
         ...common,
         sessionId,
+        attachments: attachmentsDir(io.env),
+        ...(model.value.vision !== undefined ? { vision: model.value.vision } : {}),
         tools: activeTools(new PluginState(pluginStatePath(io.env))),
         backend: backendFor(new TerminalState(terminalStatePath(io.env)), file.value?.terminal),
         ...(extras.recall && kind !== "chat" ? { recall: extras.recall } : {}),
-        provider: withFallback(providerFor(model.value.api, provider!, model.value.window, model.value.signIn ? credentialsFor(model.value.signIn, io.env) : undefined), model.value.name, file.value, io.env, path, emit),
+        provider: withFallback(providerFor(model.value.api, provider!, model.value.window, model.value.signIn ? credentialsFor(model.value.signIn, io.env) : undefined, model.value.pdf), model.value.name, file.value, io.env, path, emit),
         store: new FileSessionStore(kind === "chat" ? chatSessionsDir(io.env) : sessionsDir(io.env)),
+        secrets: [...Object.values(file.value?.models ?? {}).map((m) => m.apiKey), file.value?.webProxy?.token].filter((k): k is string => !!k),
         persona: leanSoul(brain),
         ...(referenceFor(brain) ? { reference: referenceFor(brain)! } : {}),
         ...(switcher ? { switcher } : {}),

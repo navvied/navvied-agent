@@ -27,6 +27,18 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-updater = { version = "2", optional = true }
 serde_json = "1"
+base64 = "0.22"
+# Reading the system clipboard's image when the page's own paste event carries none: WebKitGTK does not expose
+# a raw clipboard image to the page at all (confirmed with the real WebKit remote inspector), so the page asks
+# Rust directly (see docs/DESKTOP.md). `image` re-encodes the raw pixels arboard reads into a PNG the page can use.
+arboard = { version = "3", features = ["image-data"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[dev-dependencies]
+# The exact two crates the real signing (`cargo tauri signer`) and verifying (`tauri-plugin-updater`) sides use,
+# so the key generated in tests/updater_signature.rs proves something about the real format, not a lookalike.
+minisign = "0.7"
+minisign-verify = "0.3"
 
 [features]
 # On when the release build has the public key for update signatures (see docs/DESKTOP.md). Off, the app never looks for updates.

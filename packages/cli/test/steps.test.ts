@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { describeFailure, describeStep, diffRows, shortPath, startLine, stepTail } from "../src/steps.ts";
+import { bashFailed, describeFailure, describeStep, diffRows, parseBashOutput, shortPath, startLine, stepTail } from "../src/steps.ts";
 
 describe("steps in plain words", () => {
   const cwd = "/Users/ana/shop";
@@ -42,6 +42,37 @@ describe("steps in plain words", () => {
     expect(stepTail("Bash", {}, "done\n[exit 0]")).toBe("");
     expect(stepTail("Glob", {}, "a\nb")).toBe("2 files");
     expect(stepTail("Grep", {}, "No matches.")).toBe("no matches");
+  });
+});
+
+describe("Bash output, old form and new", () => {
+  test("the old form: a bare [exit N] on its own line, every time, even on success", () => {
+    expect(parseBashOutput("one\ntwo\n[exit 0]")).toEqual({ lines: ["one", "two"], notes: [], exitCode: 0 });
+    expect(parseBashOutput("boom\n[exit 2]")).toEqual({ lines: ["boom"], notes: [], exitCode: 2 });
+    expect(bashFailed("boom\n[exit 2]")).toBe(true);
+    expect(bashFailed("ok\n[exit 0]")).toBe(false);
+  });
+  test("the new form: [exit N: reason] only on failure, its reason kept as a quiet note, and a literal \"(no output)\" for an empty success", () => {
+    expect(parseBashOutput("one\ntwo")).toEqual({ lines: ["one", "two"], notes: [] });
+    expect(parseBashOutput("(no output)")).toEqual({ lines: [], notes: [] });
+    expect(parseBashOutput("boom\n[exit 2: the build failed]")).toEqual({ lines: ["boom"], notes: ["[exit 2: the build failed]"], exitCode: 2 });
+    expect(bashFailed("boom\n[exit 2: the build failed]")).toBe(true);
+    expect(bashFailed("one\ntwo")).toBe(false);
+    expect(bashFailed("(no output)")).toBe(false);
+  });
+  test("grep's exit 1 is an answer, not a failure: the reason is kept so a person reading the step sees it too", () => {
+    expect(parseBashOutput("[exit 1: no matches, not a failure]")).toEqual({ lines: [], notes: ["[exit 1: no matches, not a failure]"], exitCode: 1 });
+  });
+  test("navvied's own notes (where it now runs, a background job) are taken apart from what the command printed, in either form", () => {
+    expect(parseBashOutput("one\n[now in src]\n[exit 0]")).toEqual({ lines: ["one"], notes: ["[now in src]"], exitCode: 0 });
+    expect(parseBashOutput("one\n[stays in .]")).toEqual({ lines: ["one"], notes: ["[stays in .]"] });
+    expect(parseBashOutput("[still running as job1 after 3s without output: npm run dev]")).toEqual({ lines: [], notes: ["[still running as job1 after 3s without output: npm run dev]"] });
+    expect(parseBashOutput("[job1 finished]\n[exit 0]")).toEqual({ lines: [], notes: ["[job1 finished]"], exitCode: 0 });
+  });
+  test("stepTail reads either form the same way", () => {
+    expect(stepTail("Bash", {}, "boom\n[exit 2: the build failed]")).toBe("failed, exit 2");
+    expect(stepTail("Bash", {}, "done")).toBe("");
+    expect(stepTail("Bash", {}, "(no output)")).toBe("");
   });
 });
 

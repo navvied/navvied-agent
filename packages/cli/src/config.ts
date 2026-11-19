@@ -26,6 +26,10 @@ export interface ModelEntry {
   /** Name of an environment variable that holds the key (preferred over `apiKey`). */
   apiKeyEnv?: string;
   window?: number;
+  /** The model can see pictures (absent: not known). */
+  vision?: boolean;
+  /** The service reads a PDF given as a file (messages API only). */
+  pdf?: boolean;
   /** `none`: never send a reasoning-effort field. */
   reasoning?: "effort" | "none";
   headers?: Record<string, string>;
@@ -55,6 +59,8 @@ export interface ResolvedModel {
   cli?: { command: string; args: string[]; model?: string; env: Record<string, string>; adapter?: "stream" | "codex"; models?: ModelEntry["models"] };
   /** The effort levels it accepts; none when it has no such setting. */
   efforts?: Effort[];
+  vision?: boolean;
+  pdf?: boolean;
 }
 
 type Platform = NodeJS.Platform;
@@ -84,6 +90,8 @@ export const draftsPath = (env: Env, platform: Platform = process.platform): str
 export const toolUsagePath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "tool-usage.json");
 export const schedulesPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "schedules.json");
 export const scheduledDir = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "scheduled");
+/** Where the files attached to conversations are kept, one folder per session. */
+export const attachmentsDir = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "attachments");
 export const sessionsDir = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "sessions");
 /**
  * A chat keeps everything of its own, apart from the projects: the folder it works in (and nowhere else), its saved conversations,
@@ -145,6 +153,8 @@ function entry(name: string, raw: unknown): Result<ModelEntry> {
   if (typeof raw.apiKey === "string") out.apiKey = raw.apiKey;
   if (typeof raw.apiKeyEnv === "string") out.apiKeyEnv = raw.apiKeyEnv;
   if (typeof raw.window === "number") out.window = raw.window;
+  if (typeof raw.vision === "boolean") out.vision = raw.vision;
+  if (typeof raw.pdf === "boolean") out.pdf = raw.pdf;
   if (raw.reasoning === "effort" || raw.reasoning === "none") out.reasoning = raw.reasoning;
   if (isObj(raw.headers)) out.headers = Object.fromEntries(Object.entries(raw.headers).filter((e): e is [string, string] => typeof e[1] === "string"));
   if (raw.display !== undefined) {
@@ -295,7 +305,7 @@ const toResolved = (name: string, e: ModelEntry, env: Env): ResolvedModel => {
   const apiKey = (e.apiKeyEnv ? env[e.apiKeyEnv] : undefined) ?? e.apiKey;
   const provider: ChatCompletionsConfig = { baseUrl: e.baseUrl ?? "", model: e.model ?? "", ...(apiKey ? { apiKey } : {}), ...(e.reasoning ? { reasoning: e.reasoning } : {}), ...(e.headers ? { headers: e.headers } : {}) };
   const efforts = e.efforts ?? (e.reasoning === "effort" ? DEFAULT_EFFORTS : undefined);
-  return { name, provider, window: e.window ?? DEFAULT_WINDOW, ...(e.api ? { api: e.api } : {}), ...(e.signIn ? { signIn: e.signIn } : {}), ...(efforts?.length ? { efforts } : {}) };
+  return { name, provider, window: e.window ?? DEFAULT_WINDOW, ...(e.api ? { api: e.api } : {}), ...(e.signIn ? { signIn: e.signIn } : {}), ...(efforts?.length ? { efforts } : {}), ...(e.vision !== undefined ? { vision: e.vision } : {}), ...(e.pdf ? { pdf: true } : {}) };
 };
 
 /** Pick the model to use: `--model`, else the file's default, else its only entry, else the NAVVIED_* environment. */
@@ -312,7 +322,7 @@ export function resolveModel(choice: string | undefined, file: ConfigFile | null
     return { ok: true, value: toResolved(env.NAVVIED_MODEL, { baseUrl: env.NAVVIED_BASE_URL, model: env.NAVVIED_MODEL, ...(env.NAVVIED_API_KEY ? { apiKey: env.NAVVIED_API_KEY } : {}), ...(window > 0 ? { window } : {}) }, env) };
   }
   if (names.length > 1) return { ok: false, error: `several models are configured (${names.join(", ")}); choose one with --model or set "default" in ${path}` };
-  return { ok: false, error: `no model is configured. Create ${path} (see docs/CLI.md) or set NAVVIED_BASE_URL and NAVVIED_MODEL.` };
+  return { ok: false, error: "no model is connected yet. Run navvied init to connect one." };
 }
 
 /** Whether a model can be resolved right now (a configuration file entry or the NAVVIED_* environment). */
@@ -329,6 +339,20 @@ export function updateConfig(path: string, patch: { theme?: string; accent?: str
   const config: ConfigFile = existing.value ?? { models: {} };
   if (patch.theme !== undefined) config.theme = patch.theme;
   if ("accent" in patch) { if (patch.accent === undefined) delete config.accent; else config.accent = patch.accent; }
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+  chmodSync(path, 0o600);
+  return { ok: true, value: config };
+}
+
+/** Remembers a command pattern ("git status *") as always allowed from now on, in every session: added to the configuration file's own rules, not just this run. */
+export function rememberBashPattern(path: string, pattern: string): Result<ConfigFile> {
+  const existing = loadConfig(path);
+  if (!existing.ok) return existing;
+  const config: ConfigFile = existing.value ?? { models: {} };
+  const rule = `Bash(${pattern})`;
+  const allow = config.permissions?.allow ?? [];
+  if (!allow.includes(rule)) config.permissions = { allow: [...allow, rule], ask: config.permissions?.ask ?? [], deny: config.permissions?.deny ?? [] };
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
   chmodSync(path, 0o600);

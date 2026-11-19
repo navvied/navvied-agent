@@ -74,6 +74,24 @@ describe("the counter, one at a time", () => {
   });
 });
 
+describe("a request that nobody waits for any more", () => {
+  test("is counted by its size and called given up (499), not a failure of the model (502); a refused connection is still 502", async () => {
+    upstream = () => new Promise<Response>(() => {});
+    const stop = new AbortController();
+    const asked = fetch(`${meter.url("gaveup2")}/chat/completions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(chatRequest), signal: stop.signal }).catch(() => undefined);
+    await Bun.sleep(150);
+    stop.abort();
+    await asked;
+    const [hit] = await meter.take("gaveup2");
+    expect(hit).toMatchObject({ status: 499, estimated: true, requestBytes: JSON.stringify(chatRequest).length });
+    const lost = startMeter("http://127.0.0.1:1/v1");
+    await fetch(`${lost.url("x")}/chat/completions`, { method: "POST", body: JSON.stringify(chatRequest) });
+    expect((await lost.take("x"))[0]).toMatchObject({ status: 502 });
+    lost.stop();
+    upstream = () => new Response("{}");
+  });
+});
+
 describe("the counter, in general", () => {
   test("runs are kept apart, and a run that is taken is forgotten", async () => {
     upstream = () => Response.json({ usage: { prompt_tokens: 1, completion_tokens: 1 } });

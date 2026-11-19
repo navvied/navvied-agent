@@ -1,5 +1,6 @@
-import { readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { classifyFile } from "@navvied/protocol";
 import type { Suggest, Suggestion } from "./tui/menu.ts";
 
 const MAX_HITS = 40;
@@ -18,6 +19,19 @@ export function pathMatches(cwd: string, partial: string): string[] {
       const rel = dir === "." ? n : join(dir, n).replace(/\\/g, "/");
       try { return statSync(resolve(cwd, rel)).isDirectory() ? `${rel}/` : rel; } catch { return rel; }
     });
+}
+
+/** Past this, the picker does not read the file to classify it: typing must stay instant, and a file this large is refused anyway when attached. */
+const MAX_SNIFF_BYTES = 15 * 1024 * 1024;
+
+/** Said about a file right in the "@" picker, in the same words the engine would refuse it with, before it is even chosen. Nothing for a kind navvied takes, or for a file too large to read while typing. */
+function refusal(cwd: string, rel: string): string | undefined {
+  const path = resolve(cwd, rel);
+  try {
+    if (statSync(path).size > MAX_SNIFF_BYTES) return undefined;
+    const kind = classifyFile(readFileSync(path));
+    return kind.kind === "refused" ? kind.refused : undefined;
+  } catch { return undefined; }
 }
 
 export interface CommandInfo {
@@ -44,7 +58,7 @@ export function makeSuggest(commands: readonly CommandInfo[], cwd: string): Sugg
     const at = /(?:^|\s)@(\S*)$/.exec(upTo);
     if (!at) return undefined;
     const from = upTo.length - at[1]!.length - 1;
-    const items = pathMatches(cwd, at[1]!).map((p): Suggestion => ({ label: `@${p}`, insert: p.endsWith("/") ? `@${p}` : `@${p} `, run: false }));
+    const items = pathMatches(cwd, at[1]!).map((p): Suggestion => ({ label: `@${p}`, hint: p.endsWith("/") ? undefined : refusal(cwd, p), insert: p.endsWith("/") ? `@${p}` : `@${p} `, run: false }));
     return items.length ? { from, items } : undefined;
   };
 }

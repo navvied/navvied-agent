@@ -1,19 +1,20 @@
 import { spawnSync } from "node:child_process";
-import { inflateRawSync, inflateSync } from "node:zlib";
+import { inflateRawSync } from "node:zlib";
+import { pdfText } from "./pdf.ts";
 
 /**
  * Text out of office documents and PDFs, so the agent can read a spec or a report as it reads code. Word, Excel and PowerPoint files are
  * zip files of XML, read here with nothing but the standard library. A PDF is read by `pdftotext` when this computer has it (the best
  * way), and otherwise by a plain reader that finds the text in the page streams, which is enough for most PDFs made from text.
  */
-export const DOCUMENT_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx", ".pdf"]);
+export const DOCUMENT_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".pdf"]);
 
 const ROWS = 500;
 
-interface Entry { name: string; method: number; size: number; offset: number }
+export interface Entry { name: string; method: number; size: number; offset: number }
 
 /** The files in a zip, read from its central directory. */
-function zipEntries(buf: Buffer): Entry[] {
+export function zipEntries(buf: Buffer): Entry[] {
   let end = -1;
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 66_000); i--) if (buf.readUInt32LE(i) === 0x06054b50) { end = i; break; }
   if (end < 0) throw new Error("this is not a document file (no zip directory)");
@@ -28,7 +29,7 @@ function zipEntries(buf: Buffer): Entry[] {
   return out;
 }
 
-function zipRead(buf: Buffer, e: Entry): string {
+export function zipRead(buf: Buffer, e: Entry): string {
   const nameLen = buf.readUInt16LE(e.offset + 26), extra = buf.readUInt16LE(e.offset + 28);
   const start = e.offset + 30 + nameLen + extra;
   const data = buf.subarray(start, start + e.size);
@@ -95,32 +96,52 @@ function xlsx(buf: Buffer, entries: Entry[]): string {
   return out.join("\n\n");
 }
 
-/** Text from a PDF with no program: the strings the page streams draw. Fonts that map characters through custom tables come out wrong or empty, and scanned pages have no text at all. */
-function pdfPlain(buf: Buffer): string {
-  const pages: string[] = [];
-  const text = buf.toString("latin1");
-  for (const m of text.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
-    let data: Buffer = Buffer.from(m[1]!, "latin1");
-    try { data = inflateSync(data); } catch { /* not compressed, or not a page */ }
-    const s = data.toString("latin1");
-    if (!/\bBT\b/.test(s)) continue;
-    const lines: string[] = [];
-    for (const t of s.matchAll(/\[((?:[^\]\\]|\\.)*)\]\s*TJ|\(((?:[^)\\]|\\.)*)\)\s*(?:Tj|'|")/g)) {
-      const parts = t[1] !== undefined ? [...t[1].matchAll(/\(((?:[^)\\]|\\.)*)\)|(-?\d+(?:\.\d+)?)/g)].map((p) => (p[1] !== undefined ? p[1] : Number(p[2]) < -200 ? " " : "")) : [t[2]!];
-      lines.push(parts.join("").replace(/\\([nrtbf()\\])/g, (_, c: string) => ({ n: "\n", r: "", t: "\t", b: "", f: "", "(": "(", ")": ")", "\\": "\\" } as Record<string, string>)[c] ?? "").replace(/\\(\d{1,3})/g, (_, o: string) => String.fromCharCode(parseInt(o, 8))));
+/** OpenDocument files (odt, ods, odp): one content.xml, text in text:p and text:h, tables as rows of cells. */
+function odf(buf: Buffer, entries: Entry[], ext: string): string {
+  const main = entries.find((e) => e.name === "content.xml");
+  if (!main) throw new Error("no text part in this OpenDocument file");
+  const xml = zipRead(buf, main).replace(/<office:(automatic-styles|font-face-decls)[\s\S]*?<\/office:\1>|<office:(automatic-styles|font-face-decls)\/>/g, "");
+  const paragraph = (p: string): string => unescape(p.replace(/<text:tab\/>/g, "\t").replace(/<text:line-break\/>/g, "\n").replace(/<text:s(?:\s+text:c="(\d+)")?\s*\/>/g, (_, n?: string) => " ".repeat(Math.min(Number(n ?? 1), 40))).replace(/<[^>]+>/g, ""));
+  const paragraphs = (x: string): string[] => [...x.matchAll(/<text:(?:p|h)(?:\s[^>]*)?>([\s\S]*?)<\/text:(?:p|h)>/g)].map((m) => paragraph(m[1]!));
+  const rowsOf = (table: string): string[] => blocks(table, "table:table-row").slice(0, ROWS).map((r) => {
+    const cells: string[] = [];
+    for (const c of r.matchAll(/<table:(?:covered-)?table-cell\b([^>]*?)(?:\/>|>([\s\S]*?)<\/table:(?:covered-)?table-cell>)/g)) {
+      const repeat = Math.min(Number(/table:number-columns-repeated="(\d+)"/.exec(c[1]!)?.[1] ?? 1), 20);
+      const value = paragraphs(c[2] ?? "").join(" ").replace(/[\t\n]/g, " ");
+      for (let i = 0; i < repeat; i++) cells.push(value);
     }
-    const page = lines.join("\n").trim();
-    if (page) pages.push(page);
+    while (cells.length && !cells[cells.length - 1]) cells.pop();
+    return cells.join(ext === ".ods" ? "\t" : " | ");
+  });
+  if (ext === ".ods") {
+    const out = [...xml.matchAll(/<table:table\b([^>]*)>([\s\S]*?)<\/table:table>/g)].map((t) => `--- Sheet: ${unescape(/table:name="([^"]*)"/.exec(t[1]!)?.[1] ?? "Sheet")} ---\n${rowsOf(t[2]!).join("\n")}`);
+    if (!out.length) throw new Error("no sheets in this OpenDocument spreadsheet");
+    return out.join("\n\n");
   }
-  return pages.map((p, i) => `--- Page ${i + 1} ---\n${p}`).join("\n\n");
+  if (ext === ".odp") {
+    const slides = [...xml.matchAll(/<draw:page\b[^>]*>([\s\S]*?)<\/draw:page>/g)];
+    if (!slides.length) throw new Error("no slides in this OpenDocument presentation");
+    return slides.map((s, i) => `--- Slide ${i + 1} ---\n${paragraphs(s[1]!).filter(Boolean).join("\n")}`).join("\n\n");
+  }
+  const body = xml.replace(/<table:table\b[^>]*>[\s\S]*?<\/table:table>/g, (t) => `<text:p>\u0002${rowsOf(t).join("\n")}\u0003</text:p>`);
+  return paragraphs(body).join("\n").replace(/\u0002|\u0003/g, "").replace(/\n{3,}/g, "\n\n").trim();
 }
+
+const SCANNED = "no text in this PDF (scanned pages)";
+
+/** The pages of a PDF as text, read with no program. */
+export function pdfPages(buf: Buffer): string[] {
+  const pages = pdfText(buf).pages;
+  if (!pages.some((p) => p.trim())) throw new Error(SCANNED);
+  return pages;
+}
+
+const pdfPlain = (buf: Buffer): string => pdfPages(buf).map((p, i) => `--- Page ${i + 1} ---\n${p}`).join("\n\n");
 
 function pdf(buf: Buffer, path: string): string {
   const r = spawnSync("pdftotext", ["-layout", "-q", path, "-"], { encoding: "utf8", timeout: 30_000, maxBuffer: 50_000_000 });
   if (r.status === 0 && r.stdout.trim()) return r.stdout.trim();
-  const plain = pdfPlain(buf);
-  if (!plain.trim()) throw new Error("no text found in this PDF (it may be scanned pages, which need OCR; or install pdftotext)");
-  return plain;
+  return pdfPlain(buf);
 }
 
 /** The text of a document file, or a plain reason it cannot be read. */
@@ -129,6 +150,6 @@ export function readDocument(path: string, bytes: Buffer): { ok: true; text: str
     const ext = path.slice(path.lastIndexOf(".")).toLowerCase();
     if (ext === ".pdf") return { ok: true, text: pdf(bytes, path) };
     const entries = zipEntries(bytes);
-    return { ok: true, text: ext === ".docx" ? docx(bytes, entries) : ext === ".pptx" ? pptx(bytes, entries) : xlsx(bytes, entries) };
+    return { ok: true, text: ext === ".docx" ? docx(bytes, entries) : ext === ".pptx" ? pptx(bytes, entries) : ext === ".xlsx" ? xlsx(bytes, entries) : odf(bytes, entries, ext) };
   } catch (e) { return { ok: false, error: e instanceof Error ? e.message : "could not be read" }; }
 }

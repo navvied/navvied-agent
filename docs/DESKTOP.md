@@ -15,7 +15,7 @@ A small native window around the web UI in `packages/web`, with the `navvied` pr
  └────────────────────────────────────────────────────────┘
 ```
 
-* Tauri 2 uses the web view that the system already has (WKWebView, WebView2, WebKitGTK), so the shell is about 10 MB. Measured on Linux x64: the compiled `navvied` program is 95 MB (36 MB gzipped), so it is the sidecar that decides the download size, about 45 MB per installer. Electron would add a browser of roughly 100 MB more.
+* Tauri 2 uses the web view that the system already has (WKWebView, WebView2, WebKitGTK), so the shell is about 10 MB. Measured on Linux x64: the compiled `navvied` program is 95 MB (36 MB gzipped), so it is the sidecar that decides the download size, about 45 MB per installer. Electron would add a browser of roughly 100 MB more. `arboard` and `image` (paste's clipboard fallback — see "Files" below), measured release build vs. the commit before them, same machine: the shell binary itself grew 151,168 bytes (7,333,328 → 7,484,496, ~2.1%); the `.deb` grew 76,602 bytes (56,162,382 → 56,238,984 bytes, ~0.14% — compression hides most of the binary's own growth).
 * The shell has Rust dependencies. The rule "zero third-party runtime dependencies" applies to `protocol`, `engine` and `cli`; the sidecar is the unchanged `cli`.
 * New workspace folder `packages/desktop` (`src-tauri/` for Rust, `shell-pages/` for a few static pages). The web UI is not copied: the sidecar serves it (`--web` is not needed, the build is embedded).
 
@@ -46,7 +46,7 @@ A small native window around the web UI in `packages/web`, with the `navvied` pr
 
 ### The bundle identifier
 
-`com.navvied.desktop` is written in one place only: `packages/desktop/src-tauri/tauri.conf.json` (`identifier`). Everything else derives from it, and it cannot change after people have installed the app without losing what hangs on it: the macOS code signature and notarisation record, the Login Items entry (`open when I sign in`), the folders for settings and logs (`~/Library/Application Support/com.navvied.desktop`, `%APPDATA%\com.navvied.desktop`, `~/.local/share/com.navvied.desktop`), the Windows application id used by notices and the taskbar, the Linux `.desktop` file name, and the `navvied://` link registration. The owner confirms it before the first signed build.
+`com.navvied.desktop` is written in one place only: `packages/desktop/src-tauri/tauri.conf.json` (`identifier`). Everything else derives from it, and it cannot change after people have installed the app without losing what hangs on it: the macOS code signature and notarisation record, the Login Items entry (`open when I sign in`), the folders for settings and logs (`~/Library/Application Support/com.navvied.desktop`, `%APPDATA%\com.navvied.desktop`, `~/.local/share/com.navvied.desktop`), the Windows application id used by notices and the taskbar, the Linux `.desktop` file name, and the `navvied://` link registration. The maintainer confirms it before the first signed build.
 
 ### Icons
 
@@ -95,6 +95,84 @@ which is a separate, later piece.
   Until it exists, a `relay` event with nothing listening for it is simply not shown — pairing works, but nobody
   is asked, so nothing is approved either, which is the safe default.
 
+## Files: drag-drop, paste, the "+" dialog
+
+A file a person drags onto the window, pastes, or picks through the page's own `<input type="file">` must reach
+the page exactly as it would in a browser tab — as a real `File` in `dataTransfer.files` or `clipboardData.files`,
+with the page's own code (the composer, and later the `files` field on a prompt once the engine accepts it) doing
+the rest. Nothing here is new UI: the attach menu, the drop zone outline, the file chips are the web UI's, already
+built (`packages/web/src/composer.ts`).
+
+**What WebKitGTK actually does with a real file, confirmed with its own remote inspector** (`WEBKIT_INSPECTOR_SERVER`,
+driving the real app with `tauri-driver`/`WebKitWebDriver` and reading `dataTransfer`/`clipboardData` straight out of
+the live page, not guessed): a dropped local file — even offered the way a real file manager offers one, with
+`text/uri-list`, `x-special/gnome-copied-files` *and* `image/png` all on the table — is given to the page only as a
+`text/uri-list` **string**; `dataTransfer.files` stays empty. A clipboard image is worse: `clipboardData` comes back
+with no types at all, as if nothing were pasted. Plain text, through both channels, works exactly as a browser's
+would. So the gap is specifically WebKitGTK never turning a local file or a clipboard image into a `File` — not a
+Tauri setting away from working, as the first pass through this assumed.
+
+**The fix, in two parts, neither of them new UI:**
+
+* **Drag-and-drop:** Tauri's own drag-drop handler (the thing `.disable_drag_drop_handler()` would turn off) is kept
+  **on**, because it is the only place on this platform a dropped file's real path is available at all — WebKitGTK
+  never hands it to the page directly. `native_drag_drop` (`shell.rs`) reads each dropped path in Rust (at most 8
+  files, 15 MB each — the rest are silently skipped, never an error), base64-encodes them, and calls into the page
+  (`window.__navviedDrop`, defined unconditionally by the init script) with the file bytes and the drop position.
+  That function reconstructs real `File` objects and dispatches an ordinary, bubbling `drop` `DragEvent` (preceded by
+  synthetic `dragenter`/`dragover`/`dragleave` for the composer's own hover highlight) at the element under the
+  pointer — indistinguishable, from the page's side, from a real browser drop. `packages/web/src/composer.ts` needed
+  no change at all.
+* **Paste:** a new command, `clipboard_image` (loopback-page only, like the relay commands), reads the system
+  clipboard's image with `arboard` and re-encodes it to PNG with `image`, answering `null` when there is none (never
+  an error, so a plain-text paste — already working on its own — is never slowed down). This one **does** need a
+  one-line call from the page's side: `packages/web/src/composer.ts`'s `paste` handler, finding `clipboardData.files`
+  empty, should call `window.__TAURI_INTERNALS__.invoke("clipboard_image")` as a fallback and, if it answers
+  something, build a `File` from the returned base64 `data`/`mime` and call `addFiles` with it exactly as a real
+  pasted file would.
+* **The "+" dialog** needed no change: an `<input type="file">` opening the OS's own file picker is ordinary browser
+  behavior in every one of Tauri's three webviews.
+
+**A scaled display (2x on macOS, 150%/200% on Windows):** `DragDropEvent`'s position is typed `PhysicalPosition`
+everywhere Tauri exposes it, but reading wry's own source per platform shows that is only true on one of the three.
+On Windows (`wry::webview2::drag_drop`) it is a Win32 screen point run through `ScreenToClient`, a coordinate-system
+shift with no DPI conversion — genuinely physical, needing `to_logical(scale_factor)` before it means anything to
+`document.elementFromPoint`, which wants CSS pixels. On Linux it is GTK's own `drag-motion` signal's `x, y`, already
+in GDK's device-independent units; on macOS, AppKit's `draggingLocation`, already in points — both already equal to
+CSS pixels. Converting those two a second time is exactly the bug this document's first pass over this feature had:
+reproduced here, under `GDK_SCALE=2`, a drop aimed at logical `(685, 600)` landed, converted, at `(342.5, 300)` —
+half of half, the signature of dividing by the scale factor one time too many. Fixed with `#[cfg(windows)]` gating
+`to_logical`'s use to the one platform it is correct on; the same drop, rebuilt, landed at exactly `(685, 600)`.
+
+**Verified end to end, against the real app connected to a mock model, under a virtual screen, reading the actual
+request the mock model received — not just that a chip appeared:**
+* **A real drag.** A small GTK window built for this test, offering `text/uri-list`, `x-special/gnome-copied-files`
+  and `image/png` together (WebKitGTK chose `text/uri-list`, same as a real file manager's drag would be free to),
+  driven by real mouse motion (press, move, release) onto the real composer: the dropped PNG appeared as a real chip,
+  was sent, and the mock model's own HTTP server logged the request with `{"type":"image_url","image_url":{"url":
+  "data:image/png;base64,..."}}` carrying the exact bytes dropped.
+* **Paste, both the part already working and the new fallback.** A real GTK clipboard holding plain text, pasted
+  with a real Ctrl+V, appeared in the input and was sent, logged by the mock model with that exact text — proving
+  `enable_clipboard_access()` end to end. The new `clipboard_image` command, invoked the same way the page would
+  invoke it, read a real image set on the system clipboard and returned the identical PNG bytes (decoded and
+  compared byte for byte against the original); invoked again with only text on the clipboard, it answered `null`
+  with no error.
+
+**The scaled-display fix, verified on the position math itself, not re-run through the whole composer:** under
+`GDK_SCALE=2` on this virtual screen, a real XDND drag landing at logical `(685, 600)` was captured, wrapped, and
+confirmed exact — before the fix, `(342.5, 300)`; after, `(685, 600)`, file still attached. Re-running the full
+drop-to-chip-to-mock-request proof under that same `GDK_SCALE=2`, though, hit something unrelated: the app never
+gets past "Starting navvied…" there at all — `running()` (`shell.rs`) is reached and does its work up to and
+including `refresh_tray`, but the very next call, `app.get_webview_window("main")` or the `w.url()` right after it,
+never returns. That is a stall on the GTK main thread under `GDK_SCALE` inside `Xvfb` specifically (plain text paste
+and a plain drag both work fine on `starting.html`, which loads normally under the same scale — only the
+*navigation* to the real page, which needs that same cross-thread call, never completes), present before this
+branch touched anything and unrelated to the position fix. Flagging it rather than chasing it further here.
+
+**Not yet done:** the one-line `composer.ts` call described above — this crosses into the web lane, so it is
+written up here rather than changed directly; everything Rust owns is built, tested, and proven with real bytes
+reaching a real request.
+
 ## Packaging
 
 | System | Output | Notes |
@@ -125,9 +203,54 @@ Updates: the Tauri updater with its own key pair (an ed25519 key made once with 
 | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD` | The certificate exported as a `.p12` file, as base64, and its password | Lets the runner use the certificate. |
 | `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | The Apple ID, an app-specific password made for it, and the team id | Notarisation, so macOS opens the app without a warning. |
 | `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD` | The code-signing certificate as base64 `.pfx` and its password | Signs the installer and the app, so SmartScreen warns less. |
-| `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | The key made by `cargo tauri signer generate` | Signs updates. Also needs the public key in the build and `--features updater`. |
+| `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | The key made by `cargo tauri signer generate` | Signs updates. `.github/workflows/desktop.yml` already checks for this one and switches the build to `--features updater` with update signing on when it is there — nothing else to wire up once it exists. |
 
 Adding the signing steps themselves (importing the certificate into a keychain on macOS, pointing Tauri's `signCommand` at the Windows certificate) is a small change to the installer job once the first certificate exists; it cannot be tested before that.
+
+### Turning auto-update on: what you do, once
+
+Everything the code needs is already built and tested (see "Test plan" below) against a keypair generated inside
+the test itself — never a real one. Turning the real thing on is two steps, both yours to do, both needing
+something only you can provide: a password to protect the key, and write access to this repository's own
+Actions secrets.
+
+1. **Make the key, once, on your own computer** (needs `cargo install tauri-cli --version "^2" --locked` first, if not already installed):
+   ```bash
+   cargo tauri signer generate -w ~/navvied-updater.key
+   ```
+   This prints two things and writes the private half to `~/navvied-updater.key` (keep that file **and its
+   password** somewhere safe — losing it means every future release has to ship a *new* key, and every copy of
+   the app signed with the old one can never verify a signature again until it is reinstalled with the new key
+   already built in):
+   - **Public key** — paste this over the placeholder in
+     [`packages/desktop/src-tauri/tauri.conf.json`](../packages/desktop/src-tauri/tauri.conf.json)'s
+     `plugins.updater.pubkey` (an ordinary commit like any other change; the public key is not a secret — it is
+     what every copy of the app ships with, to check updates *against*).
+   - **Private key** — this is the secret. Do not commit it anywhere.
+2. **Put the private half where the release workflow can reach it.** Settings → Secrets and variables → Actions
+   → New repository secret:
+   - `TAURI_SIGNING_PRIVATE_KEY` — the contents of `~/navvied-updater.key` (the whole file, exactly as written).
+   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the password chosen in step 1.
+
+Once both are set and the next tagged release runs, `desktop.yml`'s `bundle` job signs the installer (or, for
+macOS, a separate `.app.tar.gz` next to the `.dmg` — see the workflow's own comment on why) and the `publish` job
+assembles `latest.json` from the `.sig` files that run produced
+(`packages/desktop/scripts/assemble-update-manifest.ts`), attaching it to the release alongside the installers.
+Nothing changes in the workflow itself for this to start working — it already checks for the secret every run and
+builds unsigned, exactly as before, for as long as it is absent. If the secret is set but `tauri.conf.json`'s
+`pubkey` is still the placeholder, the `bundle` job fails loudly instead of quietly shipping a signed release
+that every copy of the app refuses to update from (see the workflow's own check for this).
+
+**What happens before this is done, what happens if it ever goes wrong:** every build is unsigned and
+`check_update()` is compiled out entirely (`#[cfg(feature = "updater")]` — the app never even asks); nothing
+regresses, nothing nags. Once it is on: a release with no network reachable, or whose check genuinely finds
+nothing newer, both end the same way today already does, quietly (`check_update()`'s `Err` branch logs once and
+tries again in six hours; `Ok(None)` does nothing at all) — no card, no retry storm. A release that answers but
+whose signature does not check out, or whose download is interrupted, surfaces as a refusal card
+(`cards::update_refused`) rather than silently installing or crashing; this and the "an update is ready" moment
+are also emitted as `app.emit("update-available", {current, version})`, so a web card can listen for the same
+moment this document's native fallback card already reacts to, without this file changing again when such a
+card replaces it.
 
 What a person sees without signing, and how to open the app anyway, is written for them in [INSTALL.md](INSTALL.md#the-desktop-app).
 
@@ -137,7 +260,9 @@ The web UI already has a manifest and a service worker. Installing it from Chrom
 
 ## What is built, and where it differs from the previews
 
-Built and tested (`cargo test -p navvied-desktop-core`, 59 tests, with the real compiled `navvied` when `NAVVIED_BIN` is set): the key, the log filter, the ready line, the loopback HTTP and WebSocket clients, the supervisor (start, crash restart with 0.5, 1 and 2 second pauses, the third crash in a minute gives up, folder change, try again, usual port with fallback, stop ends the whole tree, the app being killed ends the program), the notice and tray logic, the link and drop parser, and the settings file. A test that was made to fail on purpose (log filter off, tree kill off) did fail.
+Built and tested (`cargo test -p navvied-desktop-core`, 60 tests, with the real compiled `navvied` when `NAVVIED_BIN` is set): the key, the log filter, the ready line, the loopback HTTP and WebSocket clients, the supervisor (start, crash restart with 0.5, 1 and 2 second pauses, the third crash in a minute gives up, folder change, try again, usual port with fallback, stop ends the whole tree, the app being killed ends the program), the notice and tray logic, the link and drop parser, and the settings file. A test that was made to fail on purpose (log filter off, tree kill off) did fail.
+
+Also built and tested, against a keypair generated inside the test itself, never a real one (`cargo test -p navvied-desktop --test updater_signature`, 4 tests, in CI as part of the `window` job — it needs no `updater` feature of its own, since it exercises the same two crates (`minisign`, `minisign-verify`) that signing and verifying use directly, not the compiled plugin): a correctly signed update is accepted, one signed by the wrong key is refused, a tampered artifact is refused even with the right key, and a hand-edited (malformed) signature field is refused rather than silently treated as absent.
 
 Run for real on Linux under a virtual screen (`packages/desktop/scripts/window-check.sh`, 16 checks, in CI as the `window` job): the app starts the program, the key it runs with is a known test key, `401` without it and `200` with it, `403` for a foreign host, loopback only, the page is connected with the key, the key is in no log, setting, storage file, output, command line or window title (and the search is proven by planting a key), the program is started again after a crash on the same port with the same key, and the program goes when the app is killed. The app for this check is built with `--features test-hooks`, which is never part of a published build.
 

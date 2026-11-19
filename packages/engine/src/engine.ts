@@ -3,8 +3,8 @@
  * from the outside (model provider, session store, tools, clock) is passed in, so a whole run can be tested against a script.
  */
 import { historyOf } from "./store.ts";
-import { resolve } from "node:path";
-import { RecentIds, type Command, type Effort, type EngineEvent, type ModelInfo, type PermMode, type PromptCommand, type SessionKind, type StopReason, type ToolOutcome, type TurnTokens } from "@navvied/protocol";
+import { join, resolve } from "node:path";
+import { REFUSED, RecentIds, type Command, type Effort, type EngineEvent, type FileNote, type ModelInfo, type PermMode, type PromptCommand, type SessionKind, type StopReason, type ToolOutcome, type TurnTokens } from "@navvied/protocol";
 import { ALLOW, ALLOW_ALWAYS, ApprovalBroker, EDIT, approvalOptions } from "./approvals.ts";
 import { approvalScope } from "./approval-scope.ts";
 import type { Checkpoint, Checkpoints } from "./checkpoints.ts";
@@ -15,8 +15,10 @@ import type { Hooks } from "./hooks.ts";
 import type { MemoryPaths } from "./memory.ts";
 import { approvalChange } from "./approval-change.ts";
 import { Jobs } from "./jobs.ts";
+import { Redactor, registerSecrets } from "./redact.ts";
+import { forget, type ShellState } from "./tools/shell-state.ts";
 import { skillsPrompt, type SkillInfo } from "./skills.ts";
-import { TextToolCalls } from "./text-tool-calls.ts";
+import { TextToolCalls, dollarCommand } from "./text-tool-calls.ts";
 import type { Backend } from "./backend.ts";
 import { needsApproval, toolsFor } from "./permissions.ts";
 import { riskOf } from "./risk.ts";
@@ -24,7 +26,10 @@ import { isConfined, profileTools } from "./profiles.ts";
 import { hardBlock, type Rules } from "./rules.ts";
 import { asksAboutProgram, systemPrompt } from "./prompt.ts";
 import { PLAN_TOOL_NAME, defaultTools } from "./tools/index.ts";
-import { withinBudget } from "./tools/util.ts";
+import { outputBudget, withinBudget } from "./tools/util.ts";
+import { receive } from "./attachments.ts";
+import { Vault } from "./redact.ts";
+import { tmpdir } from "node:os";
 import { AGENT_TOOL_NAME, agentTool } from "./tools/agent.ts";
 import type { AgentDef } from "./agents.ts";
 import type { Message, ModelReply, Part, Provider, Recall, SessionStore, Tool, ToolCall, WebProxy } from "./types.ts";
@@ -38,11 +43,15 @@ export interface ModelSwitch {
   /** The effort levels the model in use supports; none when it has no such setting. */
   efforts?: Effort[];
   /** What it takes to use another: its provider and window, and the effort levels it supports. */
-  use(id: string): { provider: Provider; window: number; efforts?: Effort[]; persona?: string; reference?: string } | { error: string };
+  use(id: string): { provider: Provider; window: number; efforts?: Effort[]; persona?: string; reference?: string; vision?: boolean } | { error: string };
 }
 
 export interface EngineOptions {
   provider: Provider;
+  /** Where the files a person attaches are saved: one folder per session below it (default: a folder of the system's temporary files). */
+  attachments?: string;
+  /** Whether the model can see pictures. Absent: not known, so a picture is sent and a refusal is turned into a plain message. */
+  vision?: boolean;
   cwd: string;
   window: number;
   emit: (event: EngineEvent) => void;
@@ -50,6 +59,8 @@ export interface EngineOptions {
   /** Continue a saved session (needs `store`). */
   sessionId?: string;
   persona?: string;
+  /** Keys the program knows from its configuration: they are hidden from everything a command prints. */
+  secrets?: string[];
   /** What the person may ask about this program (its commands, modes, files): put in the prompt only for a request that asks about it. */
   reference?: string;
   instructions?: () => string | undefined;
@@ -90,7 +101,8 @@ export interface EngineOptions {
   model?: ModelInfo;
 }
 
-interface Queued { qid?: string; text: string; images: NonNullable<PromptCommand["images"]> }
+/** `attached` is what the model is told about the files, `parts` the pictures and PDFs that go with it, `files` what the person's window is told. */
+interface Queued { qid?: string; text: string; images: NonNullable<PromptCommand["images"]>; attached?: string; parts?: Part[]; files?: FileNote[] }
 
 /** `{"path": "...", "limit": 0}`: what a call to a tool looks like, from its parameter schema. */
 function exampleArguments(schema: Record<string, unknown>): string {
@@ -100,6 +112,13 @@ function exampleArguments(schema: Record<string, unknown>): string {
   return `{${required.map((k) => `"${k}": ${sample(props[k]?.type)}`).join(", ")}}`;
 }
 
+/** The names models invent for the command tool, and what they stand for. */
+const ALIASES: Record<string, string> = { bash: "Bash", shell: "Bash", terminal: "Bash", run: "Bash", execute_bash: "Bash", run_command: "Bash", exec: "Bash", sh: "Bash" };
+const squash = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/** Tools that are named in the prompt, without their definitions, when the request has not brought them in. */
+const EXTRA = new Set(["WebSearch", "WebFetch", "Agent", "Remember", "TodoWrite"]);
+
 /** A context window this small, or smaller, marks a model that needs a lighter touch. */
 export const SMALL_WINDOW = 40_000;
 /** The steps a helper may take before it must answer. */
@@ -108,8 +127,18 @@ const LIVE_EVERY_MS = 150;
 const LIVE_MOST = 200_000;
 const HELPER_STEPS = 25;
 
-const asParts = (q: Queued): string | Part[] =>
-  q.images.length ? [...(q.text ? [{ type: "text" as const, text: q.text }] : []), ...q.images.map((i) => ({ type: "image" as const, mime: i.mime, data: i.data }))] : q.text;
+const asParts = (q: Queued): string | Part[] => {
+  const text = [q.text, q.attached].filter(Boolean).join("\n\n");
+  const rest: Part[] = [...q.images.map((i) => ({ type: "image" as const, mime: i.mime, data: i.data })), ...(q.parts ?? [])];
+  return rest.length ? [...(text ? [{ type: "text" as const, text }] : []), ...rest] : text;
+};
+
+/** The arguments of Edit and Write that are text going into a file. */
+const CHANGED = ["content", "old_string", "new_string"];
+
+/** The words a person is shown when the model cannot see pictures. */
+const BLIND = "This model cannot see pictures, so they were not sent.";
+const REFUSES_PICTURES = /image|picture|vision|multimodal|multi-modal|modalit/i;
 
 /** Run a collaborator's code that must never be able to stop a turn: a failure counts as "no result". */
 function attempt<T>(fn: () => T): T | undefined {
@@ -132,6 +161,7 @@ export class Engine implements AgentEngine {
   #effort: Effort | undefined;
   #provider: Provider;
   #window: number;
+  #vision: boolean | undefined;
   #persona: string | undefined;
   #reference: string | undefined;
   #model: string | undefined;
@@ -147,6 +177,11 @@ export class Engine implements AgentEngine {
   /** Kinds of action the person said not to ask about again, until this engine closes. */
   readonly #allowed = new Set<string>();
   readonly #jobs = new Jobs((e) => this.#emit(e));
+  /** The secrets this conversation has met in files and commands, behind the marks that stand for them. */
+  readonly #vault = new Vault();
+  readonly #shell: ShellState = {};
+  /** Tools the model has called, which stay offered for the rest of the conversation even when the request that brought them is long past. */
+  readonly #called = new Set<string>();
   readonly #closing = new AbortController();
   #abort = new AbortController();
   #lastContext = 0;
@@ -159,6 +194,8 @@ export class Engine implements AgentEngine {
     this.#o = { maxSteps: 60, allowPrivateNetwork: false, ...opts };
     this.#provider = opts.provider;
     this.#window = opts.window;
+    this.#vision = opts.vision;
+    registerSecrets(opts.secrets ?? []);
     this.#persona = opts.persona;
     this.#reference = opts.reference;
     this.#model = opts.switcher?.current;
@@ -217,6 +254,7 @@ export class Engine implements AgentEngine {
     this.#closing.abort();
     this.#cancel();
     this.#jobs.close();
+    forget(this.#shell);
     for (const dispose of this.#disposers.splice(0)) attempt(dispose);
     if (this.#heartbeat) clearInterval(this.#heartbeat);
   }
@@ -226,9 +264,57 @@ export class Engine implements AgentEngine {
     if (cmd.mode && this.#kind === "agent") this.#mode = cmd.mode;
     if (cmd.effort) this.#effort = cmd.effort;
     const item: Queued = { text: cmd.text, images: cmd.images ?? [], ...(cmd.qid ? { qid: cmd.qid } : {}) };
-    if (this.#busy) { this.#queue.push(item); if (item.qid) this.#emit({ ev: "queued", qid: item.qid, text: item.text, ...(item.images.length ? { images: item.images.length } : {}) }); return; }
+    this.#attach(item, cmd);
+    if (this.#busy) { this.#queue.push(item); if (item.qid) this.#emit({ ev: "queued", qid: item.qid, text: item.text, ...(item.images.length ? { images: item.images.length } : {}), ...(item.files?.length ? { files: item.files } : {}) }); return; }
     this.#busy = true;
     this.#running = this.#turn(item);
+  }
+
+  /** Where this session keeps what is attached to it. A conversation held to its own folder can read nothing outside it, so there it is a folder inside. */
+  #attachmentDir(): string {
+    return isConfined(this.#kind) ? join(this.#o.cwd, "attachments") : join(this.#o.attachments ?? join(tmpdir(), "navvied-attachments"), this.sessionId);
+  }
+
+  /** Saves the files of a prompt and works out what the model is told about them. Pictures a blind model cannot use are left out. */
+  #attach(item: Queued, cmd: PromptCommand): void {
+    let blind = false;
+    const told: string[] = [];
+    if (this.#vision === false && item.images.length) {
+      told.push(`${item.images.length === 1 ? "A picture was" : `${item.images.length} pictures were`} attached but not shown to you: this model cannot see pictures.`);
+      item.images = [];
+      blind = true;
+    }
+    if (cmd.files?.length && !this.#takesFiles()) {
+      item.files = cmd.files.map((f) => ({ name: f.name, kind: "refused" as const, note: REFUSED.noFiles }));
+      told.push(cmd.files.map((f) => `not attached: ${f.name}. ${REFUSED.noFiles}`).join("\n\n"));
+      this.#emit({ ev: "notice", msg: REFUSED.noFiles });
+    } else if (cmd.files?.length) {
+      const r = receive(cmd.files, { dir: this.#attachmentDir(), ...(this.#vision !== undefined ? { vision: this.#vision } : {}), budget: outputBudget(this.#window), readsPdf: this.#provider.readsPdf === true });
+      if (r.text) told.push(this.#unseen(r.text));
+      if (r.parts.length) item.parts = r.parts;
+      item.files = r.notes;
+      blind ||= r.blind;
+    }
+    if (told.length) item.attached = told.join("\n\n");
+    if (blind) this.#emit({ ev: "notice", msg: BLIND });
+  }
+
+  /** Whether the model in use takes files: a model list that says `files: false` for it closes attachments (a hosted model an administrator closed). */
+  #takesFiles(): boolean {
+    const info = this.#o.switcher ? this.#o.switcher.models.find((m) => m.id === (this.#wantModel ?? this.#model)) : this.#o.model;
+    return info?.files !== false;
+  }
+
+  /** A service turned a picture down that the engine did not know it could not read: the pictures leave the conversation and the model is known as blind from now on. */
+  #learnBlind(): boolean {
+    let found = false;
+    for (const m of this.#messages) {
+      if (typeof m.content === "string" || !m.content?.some((p) => p.type === "image")) continue;
+      found = true;
+      m.content = m.content.map((p): Part => (p.type === "image" ? { type: "text", text: "[a picture was attached here; this model cannot see pictures]" } : p));
+    }
+    if (found) { this.#vision = false; this.#announce(); }
+    return found;
   }
 
   /** Messages that were waiting and will not run: every window is told, so none stays on the screen as waiting for ever. */
@@ -255,6 +341,7 @@ export class Engine implements AgentEngine {
       ...(sw ? { models: sw.models.map((m) => ({ ...m, current: m.id === (this.#wantModel ?? this.#model) })) } : this.#o.model ? { models: [{ ...this.#o.model, current: true }] } : {}),
       ...(this.#efforts?.length ? { efforts: this.#efforts } : {}),
       ...(this.#effort ? { effort: this.#effort } : {}),
+      ...(this.#vision !== undefined ? { vision: this.#vision } : {}),
     });
   }
 
@@ -305,6 +392,7 @@ export class Engine implements AgentEngine {
       if (next.reference !== undefined) this.#reference = next.reference;
       this.#model = id;
       this.#efforts = next.efforts;
+      this.#vision = next.vision;
       if (this.#effort && !next.efforts?.includes(this.#effort)) this.#effort = undefined;
     } else this.#emit({ ev: "error", msg: "The last messages are longer than that model can read, so nothing was changed. Choose a model with more room." });
     this.#announce();
@@ -382,7 +470,11 @@ export class Engine implements AgentEngine {
       if (this.#cancelled) stop = "cancelled";
     } catch (e) {
       if (this.#cancelled) stop = "cancelled";
-      else { this.#emit({ ev: "error", msg: e instanceof Error ? e.message : String(e) }); stop = "error"; }
+      else {
+        const message = e instanceof Error ? e.message : String(e);
+        this.#emit({ ev: "error", msg: REFUSES_PICTURES.test(message) && this.#learnBlind() ? BLIND : message });
+        stop = "error";
+      }
       this.#save();
     } finally {
       // A model chosen during this turn takes effect now, so the next message finds it in use.
@@ -398,7 +490,7 @@ export class Engine implements AgentEngine {
     if (startsTurn) { this.#turnQid = q.qid; this.#turnTokens = { in: 0, out: 0, calls: 0 }; }
     if (startsTurn && this.#kind === "agent") this.#checkpoint = attempt(() => this.#o.checkpoints?.begin(q.text || "Message", [this.#o.cwd, ...this.#written]));
     if (q.qid) {
-      this.#emit({ ev: "user", qid: q.qid, text: q.text, ...(q.images.length ? { images: q.images.length } : {}) });
+      this.#emit({ ev: "user", qid: q.qid, text: q.text, ...(q.images.length ? { images: q.images.length } : {}), ...(q.files?.length ? { files: q.files } : {}) });
       this.#emit({ ev: "taken", qid: q.qid });
     }
     this.#messages.push({ role: "user", content: asParts(q) });
@@ -424,7 +516,14 @@ export class Engine implements AgentEngine {
 
       const small = this.#window <= SMALL_WINDOW;
       const skills = attempt(() => this.#o.skills?.()) ?? [];
-      const tools = toolsFor(this.#mode, this.#tools, { small, userText: this.#userText(), jobs: this.#jobs.running, steps: step, chat: this.#kind === "chat", typable: this.#jobs.typable, skills: skills.length, recall: this.#o.recall !== undefined });
+      const offeredNow = toolsFor(this.#mode, this.#tools, { small, userText: this.#userText(), jobs: this.#jobs.running, steps: step, chat: this.#kind === "chat", typable: this.#jobs.typable, skills: skills.length, recall: this.#o.recall !== undefined });
+      // A tool the model has used stays offered. Of the others, the ones that are not offered are named in the prompt, and a call to one of
+      // them is run, not refused: the words that bring a tool in (the web, a helper) are a guess about the request, and a guess can be wrong.
+      const allowedNow = (t: Tool): boolean => this.#mode !== "plan" || t.readOnly;
+      const tools = [...offeredNow, ...this.#tools.filter((t) => this.#called.has(t.name) && allowedNow(t) && !offeredNow.some((o) => o.name === t.name))];
+      const news = this.#jobs.news();
+      const finished = news.map((n) => `[${n.id} ${n.status === "done" || n.status === "failed" ? `finished: exit ${n.code}` : n.status}, ${(n.ms / 1000).toFixed(1)} s; BashOutput ${n.id} for the rest]`);
+      const also = this.#tools.filter((t) => EXTRA.has(t.name) && allowedNow(t) && !tools.some((o) => o.name === t.name)).map((t) => t.name);
       const instructions = attempt(() => this.#o.instructions?.());
       const written = new TextToolCalls(Object.fromEntries(tools.map((t) => [t.name, t.parameters as { properties?: Record<string, { type?: string }> }])), `text${this.#messages.length}_`);
       let thinkingSince: number | undefined;
@@ -432,7 +531,7 @@ export class Engine implements AgentEngine {
       const said = (text: string): void => { if (text) { endThought(); this.#emit({ ev: "text", text }); } };
       const model = await this.#provider.stream(
         {
-          system: systemPrompt({ cwd: this.#o.cwd, platform: process.platform, date: (this.#o.now?.() ?? new Date()).toISOString().slice(0, 10), ...(this.#persona ? { persona: this.#persona } : {}), ...(this.#reference && asksAboutProgram(this.#lastUserText()) ? { reference: this.#reference } : {}), tools: tools.map((t) => t.name), ...(instructions ? { instructions } : {}), ...(skills.length ? { skills: skillsPrompt(skills, small)! } : {}), small, ...(this.#kind === "chat" ? { kind: "chat" as const, sandboxed: this.#o.sandboxed === true } : {}) }, this.#mode),
+          system: systemPrompt({ cwd: this.#o.cwd, platform: process.platform, date: (this.#o.now?.() ?? new Date()).toISOString().slice(0, 10), ...(this.#persona ? { persona: this.#persona } : {}), ...(this.#reference && asksAboutProgram(this.#lastUserText()) ? { reference: this.#reference } : {}), tools: tools.map((t) => t.name), ...(also.length ? { also } : {}), ...(finished.length ? { finished } : {}), ...(instructions ? { instructions } : {}), ...(skills.length ? { skills: skillsPrompt(skills, small)! } : {}), small, ...(this.#kind === "chat" ? { kind: "chat" as const, sandboxed: this.#o.sandboxed === true } : {}) }, this.#mode),
           messages: this.#messages,
           tools: tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
           ...(this.#effort ? { effort: this.#effort } : {}),
@@ -445,9 +544,14 @@ export class Engine implements AgentEngine {
         },
       );
 
+      // The model has the news only once its request has gone through: a request that failed does not use it up.
+      this.#jobs.told(news.map((n) => n.id));
       said(written.finish());
       endThought();
-      const reply: ModelReply = written.calls.length || written.shown !== model.content ? { ...model, content: written.shown, calls: [...model.calls, ...written.calls] } : model;
+      let reply: ModelReply = written.calls.length || written.shown !== model.content ? { ...model, content: written.shown, calls: [...model.calls, ...written.calls] } : model;
+      // A model that cannot call tools may end its reply with `$ command` lines: they become one Bash call, when Bash is offered.
+      const typed = !reply.calls.length && tools.some((t) => t.name === "Bash") ? dollarCommand(reply.content) : undefined;
+      if (typed) reply = { ...reply, calls: [{ id: `text${this.#messages.length}_$`, name: "Bash", arguments: JSON.stringify({ command: typed }) }] };
       this.#lastContext = reply.usage?.prompt || estimateTokens(this.#messages);
       this.#turnTokens = { in: this.#turnTokens.in + this.#lastContext, out: this.#turnTokens.out + (reply.usage?.completion ?? 0), calls: this.#turnTokens.calls + 1 };
       this.#emit({ ev: "usage", ctx: this.#lastContext, win: this.#window, out: reply.usage?.completion ?? 0, turn: { ...this.#turnTokens } });
@@ -543,15 +647,29 @@ export class Engine implements AgentEngine {
     } finally { signal.removeEventListener("abort", stop); helper.close(); }
   }
 
+  /** The tool a call names: as offered, or by a name models invent for it, or one that exists and is not offered now (plan mode still allows only reading). */
+  #toolFor(name: string, offered: Tool[]): Tool | undefined {
+    const wanted = ALIASES[name.toLowerCase()] ?? name;
+    const exact = offered.find((t) => t.name === wanted) ?? offered.find((t) => squash(t.name) === squash(wanted));
+    if (exact) return exact;
+    const known = this.#tools.find((t) => t.name === wanted) ?? this.#tools.find((t) => squash(t.name) === squash(wanted));
+    return known && (this.#mode !== "plan" || known.readOnly) ? known : undefined;
+  }
+
   async #runTool(call: ToolCall, offered: Tool[]): Promise<string> {
     let t0 = Date.now();
     const fail = (message: string, outcome?: ToolOutcome): string => { this.#emit({ ev: "tool", id: call.id, name: call.name, status: "error", output: message, ms: Date.now() - t0, ...(outcome ? { outcome } : {}) }); return message; };
-    const tool = offered.find((t) => t.name === call.name);
-    if (!tool) return fail(`Error: there is no tool "${call.name}". Use one of: ${offered.map((t) => t.name).join(", ")}${this.#mode === "plan" ? " (plan mode only allows reading)" : ""}.`);
+    const tool = this.#toolFor(call.name, offered);
+    if (tool) this.#called.add(tool.name);
+    if (!tool) return fail(`Error: there is no tool "${call.name}". Use one of: ${offered.map((t) => t.name).join(", ")}${this.#mode === "plan" ? " (plan mode only allows reading)" : ""}.${offered.some((t) => t.name === "Bash") ? ' To run a command: Bash {"command": "ls -la"}' : ""}`);
 
     let args = parseLenient(call.arguments);
     if (!args) return fail(`Error: the arguments for ${call.name} must be a JSON object such as ${exampleArguments(tool.parameters)}. Send them again.`);
-    this.#emit({ ev: "tool", id: call.id, name: tool.name, status: "running", input: args });
+    const missing = (Array.isArray(tool.parameters.required) ? (tool.parameters.required as string[]) : []).filter((k) => args![k] === undefined);
+    if (missing.length) return fail(`Error: ${tool.name} needs ${missing.join(", ")}: ${exampleArguments(tool.parameters)}. Send the call again with it.`);
+    const bad = tool.name === "Edit" || tool.name === "Write" ? this.#vault.restore(CHANGED.map((k) => (typeof args![k] === "string" ? args![k] as string : "")).join("\n")).unknown : [];
+    if (bad.length) return fail(`Error: ${bad[0]} is not a value you can write: it stands for a secret you were not shown, or one this conversation does not know any more. To keep a value as it is, write the [hidden:N] mark that Read gave for it; otherwise ask the person for the value.`);
+    this.#emit({ ev: "tool", id: call.id, name: tool.name, status: "running", input: this.#shown(args) });
 
     // What may never be done is stopped in every mode, before anything else is asked.
     const forbidden = hardBlock(tool.name, args, this.#o.cwd);
@@ -565,22 +683,24 @@ export class Engine implements AgentEngine {
     if (mustAsk) {
       const scope = riskAsked ? { key: risk!.key, phrase: risk!.phrase } : approvalScope(tool.name, args, this.#o.cwd);
       if (this.#o.noQuestions) return fail(`Blocked: this needs the person's say-so${risk ? ` (${risk.reason})` : ""}, and a helper cannot ask. Do not try again; say what you wanted to do.`, "blocked");
-      if (verdict.kind === "ask" || riskAsked || !this.#allowed.has(scope.key)) {
+      if (verdict.kind === "ask" || riskAsked || !(scope.keys ?? [scope.key]).every((k) => this.#allowed.has(k))) {
         const { id, answer } = this.#approvals.open();
-        const change = approvalChange(tool.name, args);
+        const change = approvalChange(tool.name, this.#shown(args));
         // A command can be changed by the person before it is allowed.
-        const editable = tool.name === "Bash" && typeof args.command === "string" ? args.command : undefined;
-        this.#emit({ ev: "approval", id, title: attempt(() => tool.title(args!)) ?? `Run ${tool.name}`, options: approvalOptions(scope.phrase, editable), tool: call.id, ...(change ? { change } : {}), ...(riskAsked ? { risk: risk!.reason } : {}) });
+        const editable = tool.name === "Bash" && typeof args.command === "string" ? this.#vault.hide(args.command).text : undefined;
+        this.#emit({ ev: "approval", id, title: this.#vault.hide(attempt(() => tool.title(args!)) ?? `Run ${tool.name}`).text, options: approvalOptions(scope.phrase, editable), tool: call.id, ...(change ? { change } : {}), ...(riskAsked ? { risk: risk!.reason } : {}) });
         const given = await answer;
-        if (given.optionId === ALLOW_ALWAYS) this.#allowed.add(scope.key);
+        if (given.optionId === ALLOW_ALWAYS) for (const k of scope.keys ?? [scope.key]) this.#allowed.add(k);
         else if (given.optionId === EDIT && editable !== undefined && given.input?.trim()) {
           // What the person typed is held to the same limits as anything else, and shown as the step's new input.
-          args = { ...args, command: given.input.trim() };
+          const typed = this.#vault.restore(given.input.trim());
+          if (typed.unknown.length) return fail(`Not run: ${typed.unknown.join(", ")} stands for a secret that is not known any more. Read the file again for its mark, or give the value.`, "blocked");
+          args = { ...args, command: typed.text };
           const again = hardBlock(tool.name, args, this.#o.cwd);
           if (again) return fail(`Blocked: ${again}. navvied never does this.`, "blocked");
           const rule = this.#o.rules?.check(tool.name, args);
           if (rule?.kind === "deny") return fail(`Blocked by the permission rule ${rule.rule}.`, "blocked");
-          this.#emit({ ev: "tool", id: call.id, name: tool.name, status: "running", input: args });
+          this.#emit({ ev: "tool", id: call.id, name: tool.name, status: "running", input: this.#shown(args) });
         } else if (given.optionId !== ALLOW && given.optionId !== EDIT) return fail("The user denied this action.", "denied");
       }
     }
@@ -597,15 +717,18 @@ export class Engine implements AgentEngine {
     // What a command prints is passed on a little at a time; how it ended is reported by the tool.
     let pending = "", sent = 0, timer: ReturnType<typeof setTimeout> | undefined;
     const flush = (): void => { timer = undefined; if (pending) { this.#emit({ ev: "tool", id: call.id, name: tool.name, status: "running", live: pending }); pending = ""; } };
-    const live = (chunk: string): void => { if (sent > LIVE_MOST) return; sent += chunk.length; pending += chunk; timer ??= setTimeout(flush, LIVE_EVERY_MS); };
+    // What a running command prints is made safe as it arrives, before it reaches an event.
+    const safe = new Redactor();
+    const live = (raw: string): void => { const chunk = safe.push(raw); if (!chunk || sent > LIVE_MOST) return; sent += chunk.length; pending += chunk; timer ??= setTimeout(flush, LIVE_EVERY_MS); };
     let meta: { code?: number | null; truncated?: boolean; timedOut?: boolean; background?: boolean } = {};
     let output: string;
     try {
-      output = await tool.run(args, { cwd: this.#o.cwd, ...(isConfined(this.#kind) ? { root: this.#o.cwd } : {}), signal: this.#abort.signal, emit: (e) => this.#emit(e.ev === "plan" ? { ...e, ...(this.#turnQid ? { qid: this.#turnQid } : {}), tool: call.id } : e), live, report: (m) => { meta = { ...meta, ...m }; }, allowPrivateNetwork: this.#o.allowPrivateNetwork, window: this.#window, jobs: this.#jobs, ...(this.#o.backend ? { backend: this.#o.backend } : {}), ...(this.#o.recall ? { recall: this.#o.recall } : {}), ...(this.#o.search ? { search: this.#o.search } : {}), ...(this.#o.webProxy ? { webProxy: this.#o.webProxy } : {}), ...(this.#o.skills ? { skills: this.#o.skills } : {}), ...(this.#o.memory ? { memory: this.#o.memory } : {}), helper: (task, signal) => this.#delegate(call.id, task, signal) });
+      output = await tool.run(this.#restored(tool.name, args), { cwd: this.#o.cwd, ...(isConfined(this.#kind) ? { root: this.#o.cwd } : {}), signal: this.#abort.signal, emit: (e) => this.#emit(e.ev === "plan" ? { ...e, ...(this.#turnQid ? { qid: this.#turnQid } : {}), tool: call.id } : e), live, report: (m) => { meta = { ...meta, ...m }; }, allowPrivateNetwork: this.#o.allowPrivateNetwork, window: this.#window, shell: this.#shell, jobs: this.#jobs, ...(this.#o.backend ? { backend: this.#o.backend } : {}), ...(this.#o.recall ? { recall: this.#o.recall } : {}), ...(this.#o.search ? { search: this.#o.search } : {}), ...(this.#o.webProxy ? { webProxy: this.#o.webProxy } : {}), ...(this.#o.skills ? { skills: this.#o.skills } : {}), ...(this.#o.memory ? { memory: this.#o.memory } : {}), helper: (task, signal) => this.#delegate(call.id, task, signal) });
     } catch (e) { output = `Error: ${e instanceof Error ? e.message : String(e)}`; }
     clearTimeout(timer);
     flush();
     // Whatever a tool gave, no more than the window can spare reaches the model.
+    if (tool.name === "Read" || tool.name === "Grep") output = this.#unseen(output);
     output = withinBudget(tool.name, output, this.#window);
     const stopped = this.#abort.signal.aborted || output.endsWith("[interrupted]");
     const outcome: ToolOutcome | undefined = meta.timedOut ? "timeout" : stopped ? "stopped" : meta.background ? "background" : undefined;
@@ -640,5 +763,22 @@ export class Engine implements AgentEngine {
   }
 
   #save(): void { try { this.#o.store?.save(this.sessionId, this.#messages); } catch { /* a full disk must not kill the turn */ } }
+  /** The arguments of a call as a window or a log may show them: every secret in them is a mark. */
+  #shown(args: Record<string, unknown>): Record<string, unknown> {
+    return Object.fromEntries(Object.entries(args).map(([k, v]) => [k, typeof v === "string" ? this.#vault.hide(v).text : v]));
+  }
+
+  /** The arguments of an Edit or a Write with the marks put back as the values they stand for: only the file ever gets them. */
+  #restored(tool: string, args: Record<string, unknown>): Record<string, unknown> {
+    if (tool !== "Edit" && tool !== "Write") return args;
+    return Object.fromEntries(Object.entries(args).map(([k, v]) => [k, CHANGED.includes(k) && typeof v === "string" ? this.#vault.restore(v).text : v]));
+  }
+
+  /** What the model is given of a file or a search: the secrets in it are marks, and it is told once what the marks are. */
+  #unseen(text: string): string {
+    const h = this.#vault.hide(text);
+    return h.count ? `${h.text}\n[${h.count} secret ${h.count === 1 ? "value is" : "values are"} hidden as [hidden:N] marks; write a mark in Edit or Write to keep that value as it is]` : h.text;
+  }
+
   #emit(event: EngineEvent): void { attempt(() => this.#o.emit(event)); }
 }

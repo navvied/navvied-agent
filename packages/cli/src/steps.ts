@@ -85,8 +85,8 @@ export function stepTail(name: string, input: unknown, output: string): string {
     case "Bash": {
       const passed = /\b(\d+)\s+(?:tests?\s+)?(?:pass(?:ed|ing)?)\b/i.exec(output);
       if (passed) return `${passed[1]} passed`;
-      const code = /\[exit (\d+)\]\s*$/.exec(output);
-      return code && code[1] !== "0" ? `failed, exit ${code[1]}` : "";
+      const { exitCode } = parseBashOutput(output);
+      return exitCode !== undefined && exitCode !== 0 ? `failed, exit ${exitCode}` : "";
     }
     case "Glob": { const n = output.split("\n").filter((l) => l.trim() && !l.startsWith("[")).length; return n ? `${n} file${n === 1 ? "" : "s"}` : ""; }
     case "Grep": return /^No matches/.test(first) ? "no matches" : "";
@@ -116,3 +116,42 @@ export const startLine = (output: string): number => Number(/ at line (\d+)/.exe
 
 /** Whether a tool call failed, from what it returned. */
 export const failed = (output: string): boolean => output.startsWith("Error:");
+
+/** A line the Bash tool adds about itself, not the command's own output: where it now runs, or a background job's status. */
+const NOTE_LINE = /^\[(now in .+|stays in .+|still running as job\d+ after .+|job\d+ finished[^\]]*)\]$/;
+/** The line a Bash call ends with, when it says how it went: the old form (`[exit N]`, every code) or the new one (`[exit N: reason]`, only when N is not 0). */
+const EXIT_LINE = /^\[exit (\d+)(?::\s*(.+))?\]$/;
+
+export interface BashOutcome {
+  /** What the command itself printed: neither the exit line nor navvied's own notes, and empty for the literal "(no output)" too. */
+  lines: string[];
+  /** The folder and background-job notes navvied adds, oldest first. */
+  notes: string[];
+  /** The exit code, when the output said one: the old form always does, the new one only on failure. */
+  exitCode?: number;
+}
+
+/**
+ * Bash output has always carried a line of its own at the end (how it went); it can now also carry a note about where the command
+ * left the working folder, or about a background job. This takes those apart from what the command itself printed.
+ */
+export function parseBashOutput(output: string): BashOutcome {
+  const trimmed = output.replace(/\s+$/, "");
+  const all = trimmed === "" ? [] : trimmed.split("\n");
+  const notes: string[] = [];
+  let exitCode: number | undefined;
+  for (;;) {
+    const last = all.at(-1)?.trim();
+    if (last === undefined) break;
+    const exit = EXIT_LINE.exec(last);
+    // The reason the engine gave (grep's "no matches" is not a failure) is kept as a quiet note; the bare "[exit N]" of a plain failure is not.
+    if (exit) { exitCode = Number(exit[1]); const popped = all.pop()!.trim(); if (exit[2]) notes.unshift(popped); continue; }
+    if (NOTE_LINE.test(last)) { notes.unshift(all.pop()!.trim()); continue; }
+    break;
+  }
+  if (all.length === 1 && all[0]!.trim() === "(no output)") all.pop();
+  return { lines: all, notes, exitCode };
+}
+
+/** Whether Bash output says the command failed, in either the old or the new form. */
+export const bashFailed = (output: string): boolean => { const e = parseBashOutput(output).exitCode; return e !== undefined && e !== 0; };

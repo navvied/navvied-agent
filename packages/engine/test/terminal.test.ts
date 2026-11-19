@@ -24,7 +24,7 @@ describe("a command that is not done in time", () => {
     const first = await tool("Bash").run({ command: node("console.log('one'); setTimeout(() => { console.log('two'); }, 1800); setTimeout(() => {}, 2600)"), timeout: 1 }, ctx);
     expect(first).toContain("one");
     expect(first).not.toContain("two");
-    expect(first).toContain('[still running after 1s as job1: BashOutput job_id "job1" shows what it prints next, KillShell stops it]');
+    expect(first).toContain('[still running as job1 after 1s without output: BashOutput job_id "job1" shows what it prints next (until:"text" waits for a line), KillShell stops it]');
     const next = await tool("BashOutput").run({ job_id: "job1", wait: 10 }, ctx);
     expect(next).toContain("two");
     expect(next).not.toContain("one");
@@ -59,7 +59,7 @@ describe("a command that is not done in time", () => {
 
   test("a command that finishes in time is answered as before, with no job", async () => {
     const { jobs, ctx } = rig();
-    expect(await tool("Bash").run({ command: "echo quick", timeout: 5 }, ctx)).toMatch(/quick[\s\S]*\[exit 0\]/);
+    expect(await tool("Bash").run({ command: "echo quick", timeout: 5 }, ctx)).toBe("quick");
     expect(jobs.list()).toEqual([]);
   });
 });
@@ -76,7 +76,7 @@ describe("the folder of one command", () => {
   });
   test("a folder that is not there, or outside what the conversation may use, is a sentence", async () => {
     const { ctx } = rig();
-    expect(await tool("Bash").run({ command: "echo x", cwd: "nowhere" }, ctx)).toMatch(/^Error: the folder .*nowhere does not exist\.$/);
+    expect(await tool("Bash").run({ command: "echo x", cwd: "nowhere" }, ctx)).toMatch(/^Error: the folder .*nowhere does not exist, so nothing was run\. Retry without cwd: \{"command":"echo x"\}$/);
     mkdirSync(join(dir, "app"), { recursive: true });
     const confined = rig({ cwd: join(dir, "app"), root: join(dir, "app") });
     expect(await tool("Bash").run({ command: "echo x", cwd: ".." }, confined.ctx)).toMatch(/^Error: that is outside the folder/);

@@ -63,7 +63,7 @@ export function splitCommand(command: string): string[] {
 }
 
 /** A command that runs something the rule cannot see (a command inside another), so it is never allowed by a rule. */
-const opaque = (command: string): boolean => /\$\(|`|<\(|>\(/.test(command);
+export const opaque = (command: string): boolean => /\$\(|`|<\(|>\(/.test(command);
 
 /** A path as rules see it: relative to the project when inside it, else whole. On Windows a path without a drive is on the project's. */
 function pathOf(file: unknown, cwd: string, p: Paths): string | undefined {

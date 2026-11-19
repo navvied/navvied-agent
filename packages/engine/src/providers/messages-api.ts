@@ -11,6 +11,8 @@ import { fetchModel } from "./net.ts";
 
 
 export interface MessagesApiConfig {
+  /** The service is known to read a PDF given as a file, so the original goes along with its text. */
+  readsPdf?: boolean;
   /** A saved sign-in used instead of a key: it gives the headers, and may change the body. */
   credentials?: Credentials;
   /** Base URL including the version prefix, e.g. `https://api.anthropic.com/v1`. */
@@ -29,7 +31,7 @@ export const MESSAGES_HEADERS = { version: "anthropic-version", beta: "anthropic
 type Block = Record<string, unknown>;
 type Wire = { role: "user" | "assistant"; content: Block[] };
 
-const part = (p: Part): Block => (p.type === "text" ? { type: "text", text: p.text } : { type: "image", source: { type: "base64", media_type: p.mime, data: p.data } });
+const part = (p: Part): Block => (p.type === "text" ? { type: "text", text: p.text } : p.type === "file" ? { type: "document", title: p.name, source: { type: "base64", media_type: p.mime, data: p.data } } : { type: "image", source: { type: "base64", media_type: p.mime, data: p.data } });
 const blocks = (content: Message["content"]): Block[] => (content === undefined ? [] : typeof content === "string" ? (content ? [{ type: "text", text: content }] : []) : content.map(part));
 
 /**
@@ -53,6 +55,7 @@ export function toWire(messages: Message[]): Wire[] {
 
 export class MessagesApiProvider implements Provider {
   constructor(private readonly cfg: MessagesApiConfig) {}
+  get readsPdf(): boolean { return this.cfg.readsPdf === true; }
 
   private url(): string { return `${this.cfg.baseUrl.replace(/\/+$/, "")}/messages`; }
   private async headers(): Promise<Record<string, string>> {

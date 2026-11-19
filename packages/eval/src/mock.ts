@@ -12,6 +12,7 @@ export type Behaviour =
   | "tamper"  // rewrites a protected file, then says it is done
   | "leave"   // does what the oracle does, then leaves a program running
   | "leak"    // says the key it was sent, and changes nothing
+  | "stall"   // does the work of the oracle, then never answers the last request (its time runs out with the task done)
   | "crash"   // the model endpoint answers 500
   | "hang";   // never answers
 
@@ -32,6 +33,7 @@ const tokens = (n: number): number => Math.ceil(n / 4);
 interface Step { tool: "Write" | "Bash"; args: Record<string, string> }
 
 function stepsFor(task: Task, behaviour: Behaviour, leaves: string): Step[] {
+  if (behaviour === "stall") behaviour = "oracle";
   if (behaviour === "lazy" || behaviour === "leak" || behaviour === "crash" || behaviour === "hang") return [];
   if (behaviour === "tamper") {
     const protectedFile = Object.keys(repoFiles(task)).find((f) => task.protect.some((p) => new Bun.Glob(p).match(f)));
@@ -70,6 +72,7 @@ export function startMock(tasks: readonly Task[], behaviour: Behaviour | ((task:
       if (how === "hang") return new Promise<Response>(() => {});
       const done = messages.filter((m) => m.role === "tool").length;
       const step = task ? stepsFor(task, how, leaves)[done] : undefined;
+      if (how === "stall" && !step) return new Promise<Response>(() => {});
       const completion = tokens(step ? chars(step.args) : 6);
       requests.push({ task: task?.id ?? "?", prompt: promptTokens, completion });
       const usage = { choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: completion } };

@@ -71,7 +71,7 @@ describe("run", () => {
   test("no model configured → exit 2 with the way out", async () => {
     const f = fakeIO({ env: { HOME: tempDir() } });
     expect(await main(["run", "x"], f.io)).toBe(2);
-    expect(f.err()).toMatch(/no model is configured.*NAVVIED_BASE_URL/);
+    expect(f.err()).toMatch(/no model is connected yet\. Run navvied init/);
   });
 
   test("a bad --cwd is reported", async () => {
@@ -291,13 +291,13 @@ describe("checkpoints", () => {
     const f = fakeIO({ env, interactive: true });
     const done = main(["chat", "--cwd", work], f.io);
     f.input.push("/restore 1\n");
-    await until(() => f.err().includes("run /checkpoints first"));
+    await until(() => f.err().includes("Run /checkpoints first"));
     f.input.push(`write ${join(work, "a.txt")}\n`);
     await until(() => f.out().includes("done: Created") || f.out().includes("done: Overwrote"));
     f.input.push("/checkpoints\n");
     await until(() => /1\s+\S+\s+just now/.test(f.err()));
     f.input.push("/restore 7\n");
-    await until(() => f.err().includes("there is no checkpoint 7"));
+    await until(() => f.err().includes("There is no checkpoint 7"));
     f.input.push("/restore 1\n");
     await until(() => f.err().includes("restore 1 file? [y/n]"));
     f.input.push("n\n");
@@ -334,7 +334,7 @@ describe("models", () => {
   test("says so when nothing is configured; a broken file is an error", async () => {
     const f = fakeIO({ env: { HOME: tempDir() } });
     expect(await main(["models"], f.io)).toBe(0);
-    expect(f.out()).toMatch(/No models configured/);
+    expect(f.out()).toMatch(/No model connected yet\.\nRun navvied init to connect one\./);
     const bad = join(tempDir(), "bad.json"); writeFileSync(bad, "{oops");
     const g = fakeIO({ env: {} });
     expect(await main(["models", "--config", bad], g.io)).toBe(2);

@@ -1,3 +1,4 @@
+import type { ShellState } from "./tools/shell-state.ts";
 import type { Backend } from "./backend.ts";
 import type { Jobs } from "./jobs.ts";
 import type { MemoryPaths } from "./memory.ts";
@@ -7,7 +8,7 @@ import type { EngineEvent } from "@navvied/protocol";
 export type Role = "system" | "user" | "assistant" | "tool";
 
 export interface ToolCall { id: string; name: string; /** JSON text, exactly as the model produced it. */ arguments: string }
-export type Part = { type: "text"; text: string } | { type: "image"; mime: string; data: string };
+export type Part = { type: "text"; text: string } | { type: "image"; mime: string; data: string } | { type: "file"; name: string; mime: string; data: string };
 
 /** One conversation message. Plain data: it is saved and reloaded as JSON. */
 export interface Message {
@@ -47,6 +48,8 @@ export interface StreamHandlers {
 }
 
 export interface Provider {
+  /** The service reads a PDF given as a file part, so the original goes along with its text. */
+  readonly readsPdf?: boolean;
   stream(req: ModelRequest, signal: AbortSignal, on: StreamHandlers): Promise<ModelReply>;
   complete(system: string, user: string, signal: AbortSignal): Promise<string>;
 }
@@ -55,6 +58,8 @@ export interface Provider {
 export interface WebProxy { url: string; token: string }
 
 export interface ToolContext {
+  /** What this conversation's commands remember between calls (the folder, the exports). */
+  shell?: ShellState;
   /** The model's context window in tokens, for tools that size what they return to it. */
   window?: number;
   cwd: string;

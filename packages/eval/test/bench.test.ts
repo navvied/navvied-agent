@@ -79,8 +79,17 @@ describe("every way a run can fail is seen", () => {
   }, 60_000);
   test("a model that never answers: the time limit, and the program is stopped", async () => {
     const started = Date.now();
-    expect(await run({ ...pick("fix-off-by-one"), timeoutSeconds: 2 }, "hang")).toMatchObject({ passed: false, reason: "timeout" });
+    const r = await run({ ...pick("fix-off-by-one"), timeoutSeconds: 2 }, "hang");
+    expect(r).toMatchObject({ passed: false, reason: "timeout", checkedAtTimeout: false });
     expect(Date.now() - started).toBeLessThan(15_000);
+    // The agent was stopped while the model had not answered: that is the run's time running out, not the model failing.
+    expect(r.modelErrors ?? 0).toBe(0);
+    expect(r.largest).toMatchObject({ status: 499 });
+  }, 60_000);
+  test("an agent that had done the task and only waited for its last answer is a timeout, and the check says it was done", async () => {
+    const r = await run({ ...pick("fix-off-by-one"), timeoutSeconds: 4 }, "stall");
+    expect(r).toMatchObject({ passed: false, reason: "timeout", checkedAtTimeout: true });
+    expect(r.modelErrors ?? 0).toBe(0);
   }, 60_000);
   test.skipIf(process.platform !== "linux")("a model that leaves a program running: not solved, and the program is stopped", async () => {
     expect(await run(pick("fix-off-by-one"), "leave")).toMatchObject({ passed: false, reason: "left a process running" });

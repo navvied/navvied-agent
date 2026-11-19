@@ -33,9 +33,7 @@ describe("banner", () => {
     expect(text).toMatch(/Mode\s+Auto\s+asks only for what cannot be undone/);
     expect(text).toMatch(/Rules\s+NAVVIED\.md/);
     expect(text).toContain("Try it");
-    expect(text).toContain("Handy keys");
-    expect(text).toMatch(/Shift\+Tab\s+Switch mode: Ask, Edits, Plan, Auto, Bypass/);
-    expect(text).toMatch(/Esc\s+Stop what it is doing/);
+    expect(text).toContain('"add a contact page to the website"');
   });
 
   test("uses plain words and no dot-separated hint lists", () => {
@@ -43,19 +41,18 @@ describe("banner", () => {
     expect(renderBanner({ version: "1", cwd: "/x", mode: "auto" }, false, 100)).not.toContain(" · ");
   });
 
-  test("without a model it explains the three steps to connect one", () => {
+  test("without a model it says so in one line, and a picker follows right after when one is coming", () => {
     const text = renderBanner({ version: "1.2.3", cwd: "/x", mode: "auto" }, false, 100);
     expect(text).toContain("No model connected yet");
     expect(text).toContain("A model is the AI that does the thinking");
-    expect(text).toMatch(/1\s+Press Enter to see how to connect one\./);
-    expect(text).toMatch(/2\s+Use ↑ ↓ to choose, and Enter to confirm\. Nothing to type\./);
-    expect(text).toMatch(/3\s+Then just describe what you want done\./);
+    expect(text).toContain("Type /connect to pick one");
     expect(text).not.toContain("Handy keys");
+    const withPicker = renderBanner({ version: "1.2.3", cwd: "/x", mode: "auto", pickerNext: true }, false, 100);
+    expect(withPicker).toContain("Pick one below");
+    expect(withPicker).not.toContain("/connect");
   });
 
-  test("lists only the modes the model supports, and drops the switch hint when there is one", () => {
-    expect(renderBanner({ ...info, modes: ["auto", "plan"] }, false, 100)).toMatch(/Switch mode: Auto, Plan/);
-    expect(renderBanner({ ...info, modes: ["auto"] }, false, 100)).not.toContain("Shift+Tab");
+  test("the mode line reflects the mode it is given", () => {
     expect(renderBanner({ ...info, mode: "ask" }, false, 100)).toMatch(/Mode\s+Ask first\s+asks before changing files/);
   });
 
@@ -146,12 +143,11 @@ describe("status line", () => {
 
 describe("the banner of a chat", () => {
   test("it speaks of an assistant and of files it makes, and has no mode", () => {
-    const out = renderBanner({ version: "1.0.0", cwd: "/home/a/.local/state/navvied/chat/files", mode: "auto", modes: [], model: { name: "m", where: "here" }, chat: true }, false, 100);
+    const out = renderBanner({ version: "1.0.0", cwd: "/home/a/.local/state/navvied/chat/files", mode: "auto", model: { name: "m", where: "here" }, chat: true }, false, 100);
     expect(out).toContain("Your assistant.");
     expect(out).toContain("Files");
     expect(out).not.toContain("Mode ");
     expect(out).not.toContain("add a contact page");
-    expect(out).not.toContain("Shift+Tab");
   });
 });
 

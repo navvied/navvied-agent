@@ -81,6 +81,12 @@ jobs:
       - name: Where may the key be, and where must it not be
         working-directory: packages/desktop
         run: bash scripts/ci-run.sh "window checks" bash scripts/window-check.sh "$RUNNER_TEMP/navvied"
+      # A fresh keypair generated inside the test itself, never a real one: proves the transport format
+      # docs/DESKTOP.md asks you to set up (tauri.conf.json's base64-wrapped pubkey, latest.json's
+      # base64-wrapped signature) against the same two crates the real signing and verifying sides use.
+      - name: "The update signature format: a valid one is accepted, a wrong or tampered one is refused"
+        working-directory: packages/desktop
+        run: bash scripts/ci-run.sh "update signature tests" cargo test --locked -p navvied-desktop --test updater_signature
 
   bundle:
     if: ${{ github.repository == 'navvied/navvied-agent' || github.event_name == 'workflow_dispatch' }}
@@ -89,10 +95,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: linux-x64, os: ubuntu-22.04, bundles: "deb,appimage" }
-          - { name: macos-arm64, os: macos-latest, bundles: "dmg" }
-          - { name: macos-x64, os: macos-15-intel, bundles: "dmg" }
-          - { name: windows-x64, os: windows-latest, bundles: "nsis" }
+          # "app" (the raw .app bundle) is only ever a dependency of "dmg", never uploaded on its own; requesting
+          # it here is what makes the bundler also archive it for the updater (macOS's own updater artifact is
+          # always a .tar.gz of the .app, never the .dmg) once signing is on. Harmless and unused when it is not.
+          - { name: linux-x64, os: ubuntu-22.04, bundles: "deb,appimage", updater_target: "appimage" }
+          - { name: macos-arm64, os: macos-latest, bundles: "app,dmg", updater_target: "app" }
+          - { name: macos-x64, os: macos-15-intel, bundles: "app,dmg", updater_target: "app" }
+          - { name: windows-x64, os: windows-latest, bundles: "nsis", updater_target: "nsis" }
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.name == 'windows-x64' || matrix.name == 'macos-x64' }}
     defaults:
@@ -130,26 +139,59 @@ jobs:
           key: tauri-cli-2-${{ runner.os }}-${{ runner.arch }}
       - if: steps.tauricli.outputs.cache-hit != 'true'
         run: bash packages/desktop/scripts/ci-run.sh "tauri cli" cargo install tauri-cli --version "^2" --locked
-      # Signing and notarising, once the signing accounts exist, are these secrets on the next step (docs/DESKTOP.md):
+      # Signing and notarising, once the signing accounts exist, are these secrets (docs/DESKTOP.md says how to make them):
       #   APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
       #   WINDOWS_CERTIFICATE (base64 .pfx), WINDOWS_CERTIFICATE_PASSWORD
-      #   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD (updates), with `--features updater` and the public key in a merged config
-      # Without them the app is built unsigned. On macOS an ad-hoc signature ("-") is applied, which Apple silicon needs to start a program at all.
-      - name: Build the installer (unsigned)
+      #   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD (update signing)
+      # Without TAURI_SIGNING_PRIVATE_KEY this step is exactly what it always was: `cargo tauri build` with no
+      # updater feature, no update manifest, nothing attached to the release but the installer itself. With it,
+      # the same command gains `--features updater` and a config that turns on `createUpdaterArtifacts` — which
+      # is what makes the bundler also write a `.sig` next to the artifact the updater is meant to fetch
+      # (the installer itself for appimage/nsis/deb, a separate `.app.tar.gz` for macOS; never the .dmg).
+      # `tauri.conf.json`'s own `plugins.updater.pubkey` is a placeholder until you replace it with the real
+      # public half of whatever key signed this (see the doc) — otherwise the app's own verification at update
+      # time rejects every release's signature, update-or-not. The check right below refuses to build a signed
+      # release with that placeholder still in place, rather than ship one silently nobody can ever update from.
+      - name: Build the installer
         working-directory: packages/desktop/src-tauri
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
-        run: bash ../scripts/ci-run.sh "installer build" cargo tauri build --bundles ${{ matrix.bundles }}
-      - name: Name the installers
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            if grep -q 'REPLACE-ME' tauri.conf.json; then
+              echo "::error::TAURI_SIGNING_PRIVATE_KEY is set, but tauri.conf.json's plugins.updater.pubkey is still the placeholder. Replace it with the real public key (see docs/DESKTOP.md) before signing a release — otherwise every copy of the app will refuse this release's update."
+              exit 1
+            fi
+            echo '{"bundle":{"createUpdaterArtifacts":true}}' > /tmp/updater-build.conf.json
+            bash ../scripts/ci-run.sh "installer build (signed, updater artifacts on)" cargo tauri build --bundles ${{ matrix.bundles }} --features updater --config /tmp/updater-build.conf.json
+          else
+            bash ../scripts/ci-run.sh "installer build (unsigned)" cargo tauri build --bundles ${{ matrix.bundles }}
+          fi
+      - name: Name the installers, and their update signatures when this run signed them
         run: |
           ver=$(bun -p "require('./packages/desktop/package.json').version")
           b=packages/desktop/target/release/bundle
-          find "$b" -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' -o -name '*-setup.exe' \) | sort
+          find "$b" -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' -o -name '*-setup.exe' -o -name '*.sig' -o -name '*.tar.gz' \) | sort
           mkdir -p out
           case "${{ matrix.name }}" in
-            linux-x64) cp "$b"/deb/*.deb "out/navvied-desktop-$ver-linux-x64.deb"; cp "$b"/appimage/*.AppImage "out/navvied-desktop-$ver-linux-x64.AppImage" ;;
-            macos-*) cp "$b"/dmg/*.dmg "out/navvied-desktop-$ver-${{ matrix.name }}.dmg" ;;
-            windows-x64) cp "$b"/nsis/*-setup.exe "out/navvied-desktop-$ver-windows-x64-setup.exe" ;;
+            linux-x64)
+              cp "$b"/deb/*.deb "out/navvied-desktop-$ver-linux-x64.deb"
+              cp "$b"/appimage/*.AppImage "out/navvied-desktop-$ver-linux-x64.AppImage"
+              [ -f "$b"/appimage/*.AppImage.sig ] && cp "$b"/appimage/*.AppImage.sig "out/navvied-desktop-$ver-linux-x64.AppImage.sig" || true
+              ;;
+            macos-*)
+              cp "$b"/dmg/*.dmg "out/navvied-desktop-$ver-${{ matrix.name }}.dmg"
+              if ls "$b"/macos/*.app.tar.gz >/dev/null 2>&1; then
+                cp "$b"/macos/*.app.tar.gz "out/navvied-desktop-$ver-${{ matrix.name }}.app.tar.gz"
+                cp "$b"/macos/*.app.tar.gz.sig "out/navvied-desktop-$ver-${{ matrix.name }}.app.tar.gz.sig"
+              fi
+              ;;
+            windows-x64)
+              cp "$b"/nsis/*-setup.exe "out/navvied-desktop-$ver-windows-x64-setup.exe"
+              [ -f "$b"/nsis/*-setup.exe.sig ] && cp "$b"/nsis/*-setup.exe.sig "out/navvied-desktop-$ver-windows-x64-setup.exe.sig" || true
+              ;;
           esac
           ls -l out
       - uses: actions/upload-artifact@v4
@@ -166,6 +208,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/download-artifact@v4
         with:
           pattern: navvied-desktop-*
@@ -177,6 +221,12 @@ jobs:
           ls -l
           sha256sum navvied-desktop-* > SHA256SUMS-desktop
           cat SHA256SUMS-desktop
+      # Only when at least one leg's "Build the installer" step was actually signed (a TAURI_SIGNING_PRIVATE_KEY
+      # secret present) did any `.sig` make it into `out/` — then, and only then, is there an update to offer;
+      # the script exits 0 with no latest.json otherwise, which is not a failure.
+      - name: Assemble the update manifest, if this release was signed
+        working-directory: out
+        run: bun ../packages/desktop/scripts/assemble-update-manifest.ts "$GITHUB_REF_NAME"
       - uses: softprops/action-gh-release@v2
         with:
           files: out/*

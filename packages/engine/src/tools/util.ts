@@ -61,7 +61,7 @@ const STOP_GRACE_MS = 1500;
 /** How long to wait, after the command itself has ended, for what it left running behind it to let go of the output. */
 const EXIT_GRACE_MS = 400;
 /** What every command is told, so that nothing waits for a person who is not there: no pager, no editor, no prompt for a password. */
-export const QUIET_ENV = { TERM: "dumb", PAGER: "cat", GIT_PAGER: "cat", GIT_EDITOR: "true", GIT_TERMINAL_PROMPT: "0" } as const;
+export const QUIET_ENV = { TERM: "dumb", NO_COLOR: "1", PAGER: "cat", GIT_PAGER: "cat", GIT_EDITOR: "true", GIT_TERMINAL_PROMPT: "0" } as const;
 
 /** Keep the start and the end of long output — failures and summaries are usually at the end. */
 export function clip(text: string, max = MAX_OUTPUT, headShare = 0.6): string {
@@ -89,42 +89,52 @@ export function cleanOutput(text: string): string {
     .split("\n").map((line) => line.slice(line.lastIndexOf("\r") + 1)).join("\n");
 }
 
-export interface RunResult { output: string; code: number | null; timedOut: boolean; interrupted: boolean; /** The command was not killed at its timeout: it was handed on (see `onTimeout`). */ adopted?: boolean }
+export interface RunResult { output: string; code: number | null; timedOut: boolean; interrupted: boolean; /** What ran out: the silence (no output for `idleMs`) or the whole time (`timeoutMs`). */ ranOut?: "silence" | "time"; /** The command was not killed at its timeout: it was handed on (see `onTimeout`). */ adopted?: boolean }
 
 /**
  * Run a process, collect its output, and kill the whole process group on timeout or when `signal` aborts.
  * Never rejects: a failure to start is reported in `output`.
  */
-export function run(argv: string[], opts: { cwd: string; signal: AbortSignal; timeoutMs: number; env?: NodeJS.ProcessEnv; onChunk?: (text: string) => void; /** At the timeout: take the running command over (true) instead of killing it. */ onTimeout?: (child: ChildProcess, printed: string) => boolean }): Promise<RunResult> {
+export function run(argv: string[], opts: { cwd: string; signal: AbortSignal; timeoutMs: number; /** Time it may be silent: the clock is restarted by every bit of output, and `timeoutMs` is then the most it may take in all. */ idleMs?: number; env?: NodeJS.ProcessEnv; onChunk?: (text: string) => void; /** At the timeout: take the running command over (true) instead of killing it. */ onTimeout?: (child: ChildProcess, printed: string) => boolean }): Promise<RunResult> {
   return new Promise((done) => {
     const [cmd, ...args] = argv;
     if (!cmd) return done({ output: "Error: empty command", code: null, timedOut: false, interrupted: false });
     if (opts.signal.aborted) return done({ output: "", code: null, timedOut: false, interrupted: true });
     // Nobody types to a command: its input is closed, so a program that reads (cat, read, a prompt) ends at once instead of waiting out the timeout.
     const child = spawn(cmd, args, { cwd: opts.cwd, env: { ...process.env, ...QUIET_ENV, ...opts.env }, detached: usesProcessGroups(), windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-    let output = "", timedOut = false, interrupted = false, settled = false, adopted = false;
+    let output = "", timedOut = false, interrupted = false, settled = false, adopted = false, ranOut: RunResult["ranOut"];
     // After a kill the process may still hold its pipes through a child it started: do not wait for them for long.
     const stop = () => { killTree(child); const grace = setTimeout(() => finish(null), STOP_GRACE_MS); grace.unref?.(); };
-    const timer = setTimeout(() => {
+    const fire = (why: "silence" | "time"): void => {
+      if (timedOut) return;
       timedOut = true;
+      ranOut = why;
       if (!opts.onTimeout?.(child, output)) return stop();
       // Handed on: this call is over, and nothing more of the command is shown through it.
       child.stdout.off("data", collect);
       child.stderr.off("data", collect);
       adopted = true;
       finish(null);
-    }, opts.timeoutMs);
+    };
+    let timer = setTimeout(() => fire(opts.idleMs ? "silence" : "time"), opts.idleMs ?? opts.timeoutMs);
+    const ceiling = opts.idleMs ? setTimeout(() => fire("time"), opts.timeoutMs) : undefined;
     const onAbort = () => { interrupted = true; stop(); };
     opts.signal.addEventListener("abort", onAbort, { once: true });
-    const collect = (d: Buffer) => { const text = d.toString("utf8"); if (output.length < 400_000) output += text; opts.onChunk?.(text); };
+    const collect = (d: Buffer) => {
+      const text = d.toString("utf8");
+      if (output.length < 400_000) output += text;
+      opts.onChunk?.(text);
+      if (opts.idleMs && !settled) { clearTimeout(timer); timer = setTimeout(() => fire("silence"), opts.idleMs); }
+    };
     child.stdout.on("data", collect);
     child.stderr.on("data", collect);
     const finish = (code: number | null, extra = "") => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(ceiling);
       opts.signal.removeEventListener("abort", onAbort);
-      done({ output: output + extra, code, timedOut, interrupted, ...(adopted ? { adopted } : {}) });
+      done({ output: output + extra, code, timedOut, interrupted, ...(ranOut ? { ranOut } : {}), ...(adopted ? { adopted } : {}) });
     };
     child.on("close", (code) => finish(code));
     // The command has ended but something it started (`server &`) still holds the output: report what there is, do not wait for it.

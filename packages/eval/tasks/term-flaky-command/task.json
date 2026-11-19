@@ -14,5 +14,5 @@
     "deploy.sh"
   ],
   "maxSteps": 30,
-  "timeoutSeconds": 300
+  "timeoutSeconds": 600
 }

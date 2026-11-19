@@ -31,7 +31,7 @@ export function describeTool(name: string, input: unknown): string {
   }
 }
 
-function ago(at: number, now = Date.now()): string {
+export function ago(at: number, now = Date.now()): string {
   const s = Math.max(0, Math.round((now - at) / 1000));
   return s < 60 ? "just now" : s < 3600 ? `${Math.floor(s / 60)} min ago` : s < 86_400 ? `${Math.floor(s / 3600)} h ago` : `${Math.floor(s / 86_400)} d ago`;
 }

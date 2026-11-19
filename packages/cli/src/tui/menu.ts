@@ -14,6 +14,8 @@ export interface Frame {
   status?: string;
   /** Keys a waiting screen answers (a letter), shown beside Esc. */
   actions?: { key: string; label: string; run(): void }[];
+  /** A menu numbers its rows so a digit can jump to one; set false when the title already makes the choice obvious and a short list needs no numbers. */
+  numbered?: boolean;
 }
 
 export type MenuOutcome = { done: number } | { back: true } | { cancel: true } | undefined;
@@ -68,7 +70,7 @@ export class Menu {
     }
     if (key.kind === "text") {
       if (this.filtering) { this.#filter += key.text; this.#fit(); return undefined; }
-      if (/^[1-9]$/.test(key.text) && Number(key.text) <= this.items.length) { this.#at = Number(key.text) - 1; return undefined; }
+      if ((this.frame.numbered ?? true) && /^[1-9]$/.test(key.text) && Number(key.text) <= this.items.length) { this.#at = Number(key.text) - 1; return undefined; }
       if (key.text === "k") move(-1);
       if (key.text === "j") move(1);
       return undefined;
@@ -113,7 +115,7 @@ export class Menu {
     const footer = `  ${keyHints([["↑ ↓", "choose"], ["Enter", "confirm"], ["←", "back"], ["Esc", "cancel"]], c)}`;
     const room = Math.max(1, maxRows - header.length - 2);
     const per = withHints ? 2 : 1;
-    const numbered = !this.filtering && this.items.length <= 9;
+    const numbered = (this.frame.numbered ?? true) && !this.filtering && this.items.length <= 9;
     const count = Math.max(1, Math.min(shown.length, Math.floor(room / per)));
     const pos = Math.max(0, shown.indexOf(this.#at));
     const top = Math.min(Math.max(0, pos - count + 1 + Math.floor(count / 2)), Math.max(0, shown.length - count));
@@ -124,7 +126,13 @@ export class Menu {
       const on = i === this.#at;
       const label = numbered ? `${i + 1}  ${item.label}` : item.label;
       body.push(`    ${on ? paint(c, "cyan", "›") : " "} ${on ? paint(c, "bold", label) : label}`);
-      if (withHints) body.push(`      ${numbered ? "   " : ""}${paint(c, "dim", item.hint ?? "")}`);
+      if (withHints) {
+        const hintCols = Math.max(20, cols - 6 - (numbered ? 3 : 0));
+        const wrapped = item.hint ? wrap(item.hint, hintCols) : [];
+        // One column is kept free for the "…" itself, so adding it never pushes the row past `hintCols`.
+        const hintLine = wrapped.length > 1 ? `${wrap(item.hint!, hintCols - 1)[0]}…` : wrapped[0] ?? "";
+        body.push(`      ${numbered ? "   " : ""}${paint(c, "dim", hintLine)}`);
+      }
     }
     const more = shown.length > count ? [paint(c, "dim", `  ${top > 0 ? "↑" : " "} ${top + count < shown.length ? "↓" : " "}  ${pos + 1} of ${shown.length}`)] : [];
     return [...header, ...body, ...more, footer].map((l) => clip(l, cols));
@@ -178,19 +186,47 @@ export interface Suggestions { from: number; items: Suggestion[] }
 
 export type Suggest = (text: string, cursor: number) => Suggestions | undefined;
 
-/** Rows for the list of suggestions shown above the prompt. */
+/** A quick cue, not the full explanation: the first sentence (its period kept), cut at a word with "…" when even that is still too long. */
+function briefOf(hint: string, max: number): string {
+  const sentence = /^(.*?\.)\s/.exec(hint)?.[1] ?? hint;
+  if (sentence.length <= max) return sentence;
+  // One column is kept free for the "…" itself, so adding it never pushes the row past `max`.
+  const cut = wrap(sentence, Math.max(1, max - 1))[0] ?? "";
+  return `${cut}…`;
+}
+
+/** Rows for the list of suggestions shown above the prompt, narrow enough to scan while typing. */
 export function suggestionLines(list: Suggestion[], selected: number, cols: number, maxRows: number, color: boolean): string[] {
-  const room = Math.max(1, maxRows - 1);
+  const hasMore = list.length > Math.max(1, maxRows - 1);
+  const room = Math.max(1, maxRows - 1 - (hasMore ? 1 : 0));
   const count = Math.min(list.length, room);
-  const top = Math.min(Math.max(0, selected - Math.floor(count / 2)), list.length - count);
+  const top = Math.min(Math.max(0, selected - Math.floor(count / 2)), Math.max(0, list.length - count));
   const width = Math.min(Math.max(...list.map((s) => s.label.length)) + 3, Math.floor(cols / 2));
   const rows = list.slice(top, top + count).map((s, k) => {
     const on = top + k === selected;
     const label = s.label.padEnd(width);
-    return clip(`  ${on ? paint(color, "cyan", "›") : " "} ${on ? paint(color, "cyan", paint(color, "bold", label)) : label}${s.hint ? paint(color, "dim", s.hint) : ""}`, cols);
+    const hintCols = Math.max(4, cols - `  › ${label}`.length);
+    const hint = s.hint ? briefOf(s.hint, hintCols) : "";
+    return clip(`  ${on ? paint(color, "cyan", "›") : " "} ${on ? paint(color, "cyan", paint(color, "bold", label)) : label}${hint ? paint(color, "dim", hint) : ""}`, cols);
   });
+  const more = hasMore ? [paint(color, "dim", `  ${top > 0 ? "↑" : " "} ${top + count < list.length ? "↓" : " "}  ${selected + 1} of ${list.length}`)] : [];
   const run = list[selected]?.run ?? false;
-  return [...rows, clip(keyHints([["↑ ↓", "choose"], ["Enter", run ? "run" : "complete"], ["Tab", "complete"], ["Esc", "close"]], color), cols)];
+  return [...rows, ...more, clip(keyHints([["↑ ↓", "choose"], ["Enter", run ? "run" : "complete"], ["Tab", "complete"], ["Esc", "close"]], color), cols)];
+}
+
+export interface Chip {
+  name: string;
+  /** This file is not one navvied can take; sending anyway will leave it out. */
+  refused?: boolean;
+}
+
+/** The files named in the message so far, as a row of chips just above it, when nothing else (a menu, a suggestion) is open there instead. */
+export function chipLines(chips: Chip[], cols: number, color: boolean): string[] {
+  if (!chips.length) return [];
+  const row = `  ${chips.map((c) => (c.refused ? `${paint(color, "red", "✗")} ${c.name}` : c.name)).join("   ")}`;
+  const refused = chips.filter((c) => c.refused).length;
+  const hint = `  ${paint(color, "dim", `${chips.length} attached — Backspace on an empty line removes the last${refused ? ` — ${refused} will not be sent` : ""}`)}`;
+  return [clip(row, cols), clip(hint, cols)];
 }
 
 /** A list that changes while it is open: `next` is asked every `everyMs` and may give new choices, a new notice, or pick one for the person. */

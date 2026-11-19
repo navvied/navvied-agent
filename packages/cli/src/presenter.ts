@@ -3,12 +3,13 @@
  * words, changes as tinted lines, the answer as formatted text, and while it works a live line saying what it is doing.
  * It replaces the plain stream of the renderer in the interactive app; the renderer still serves `run` and piped output.
  */
-import type { EngineEvent } from "@navvied/protocol";
+import type { EngineEvent, FileNote } from "@navvied/protocol";
+import { mark } from "./banner.ts";
 import type { IO } from "./io.ts";
 import { Markdown } from "./markdown.ts";
 import { paint, type Renderer } from "./render.ts";
-import { describeFailure, describeStep, diffRows, failed, shortPath, startLine, stepTail, type Step } from "./steps.ts";
-import { bgRgb, currentTheme, fgRgb, surfaces } from "./theme.ts";
+import { describeFailure, describeStep, diffRows, failed, parseBashOutput, shortPath, startLine, stepTail, type Step } from "./steps.ts";
+import { currentTheme, fgRgb, surfaces } from "./theme.ts";
 import { diffLines } from "./diff-view.ts";
 
 const RESET = "\u001b[0m";
@@ -17,9 +18,35 @@ const TICK_MS = 120;
 const MAX_QUEUE_SHOWN = 3;
 const PREVIEW_LINES = 2;
 const MAX_GROUP_SHOWN = 8;
-/** 950 → "950", 1234 → "1.2k", 15200 → "15k". */
-export const tokenCount = (n: number): string => (n < 1000 ? String(n) : n < 10_000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n / 1000)}k`);
 const MAX_PLAN_SHOWN = 8;
+/** Separates short facts on one line (a time, a count) without looking like a generated "a · b · c" list. */
+const SEP = "   ";
+
+/**
+ * What the engine says when a model fails to answer is written for a log, not for a person ("the model endpoint answered 401",
+ * a raw "fetch failed"). This turns the shapes navvied knows about into a plain sentence with something to do next; anything
+ * else is shown as it came, with its first letter capitalised, so it still reads as a sentence.
+ */
+export function plainModelError(msg: string): string {
+  if (/fetch failed|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|network/i.test(msg)) return "Could not reach the model. Check that it is running, and your internet connection.";
+  if (/answered 401|answered 403/.test(msg)) return "The model did not accept the key it was given. Check it, or run /model to connect a different one.";
+  if (/answered 5\d\d/.test(msg)) return "The model did not answer properly just now. Try again in a moment.";
+  if (/returned an empty answer/.test(msg)) return "The model sent back nothing. Try again, or run /model to choose another one.";
+  return msg ? msg.charAt(0).toUpperCase() + msg.slice(1) : msg;
+}
+
+/** What the engine made of a picture or a file attached to the message, one line each; a picture is only ever a count. */
+function attachmentLines(images: number | undefined, files: FileNote[] | undefined, color: boolean): string[] {
+  const lines: string[] = [];
+  if (images) lines.push(paint(color, "dim", `${images} picture${images === 1 ? "" : "s"} attached`));
+  for (const f of files ?? []) {
+    const pages = f.pages ? ` (${f.pages} page${f.pages === 1 ? "" : "s"})` : "";
+    const note = f.note ? ` — ${f.note}` : "";
+    const rest = paint(color, "dim", `${f.name}${pages}${note}`);
+    lines.push(f.kind === "refused" ? `${paint(color, "red", "✗")} ${rest}` : rest);
+  }
+  return lines;
+}
 
 export interface PresenterOptions {
   cwd: () => string;
@@ -54,8 +81,6 @@ export class Presenter {
   #markdown: Markdown;
   #partial = "";
   #usage: { ctx: number; win: number } | undefined;
-  /** Tokens the model has written in this turn, when the engine says. */
-  #turnOut = 0;
   #turnStart: number | undefined;
   #markShown = false;
   #thoughtStart: number | undefined;
@@ -80,7 +105,7 @@ export class Presenter {
   #inWork = false;
   #group = { steps: 0, failed: 0, started: 0, commands: 0, reads: 0, edits: 0, timeout: 0, background: 0, denied: 0 };
   /** What each step of the turn did, for `/steps`. */
-  #log: { title: string; mark: string; ms?: number; input: string; output: string }[] = [];
+  #log: { title: string; mark: string; ms?: number; input: string; output: string; notes?: string[] }[] = [];
   /** What was shown last, so a step and a paragraph never touch each other. */
   #last: "none" | "step" | "text" = "none";
 
@@ -94,7 +119,7 @@ export class Presenter {
 
   /** Everything the last step that printed anything said, for `/output`. */
   /** Every step of this turn, for `/steps`. */
-  get steps(): readonly { title: string; mark: string; ms?: number; input: string; output: string }[] { return this.#log; }
+  get steps(): readonly { title: string; mark: string; ms?: number; input: string; output: string; notes?: string[] }[] { return this.#log; }
 
   get lastOutput(): { title: string; text: string } | undefined { return this.#lastOutput; }
 
@@ -117,12 +142,14 @@ export class Presenter {
       case "thought": this.#thought(e.text); return;
       case "tool": return this.#tool(e);
       case "approval": this.#settle(); return;
+      // A picker takes these over from the piped renderer's numbered lines; without one (a dumb terminal), that plain listing is still what is shown.
+      case "checkpoints": case "restore": this.#settle(); if (!this.io.choose) this.fallback.handle(e); return;
       case "phase": this.#label = e.name === "compacting" ? "Compacting context" : ""; this.#renderLive(); return;
       case "job": return this.#job(e);
       case "plan": this.#plan = e.entries.map((p) => ({ title: p.title, status: p.status })); this.#renderLive(); return;
-      case "usage": this.#usage = { ctx: e.ctx, win: e.win }; if (e.turn) this.#turnOut = e.turn.out; this.fallback.handle(e); return;
+      case "usage": this.#usage = { ctx: e.ctx, win: e.win }; this.fallback.handle(e); return;
       case "notice": this.#settle(); this.#closeWork(); this.#line(`  ${this.#warn("!")} ${e.msg}`); return;
-      case "error": this.#settle(); this.#closeWork(); this.#line(`  ${this.#bad("✗")} ${paint(this.io.color, "bold", e.msg)}`); return;
+      case "error": this.#settle(); this.#closeWork(); this.#line(`  ${this.#bad("✗")} ${paint(this.io.color, "bold", plainModelError(e.msg))}`); return;
       case "done": return this.#done(e.stop);
       default: this.#settle(); this.fallback.handle(e);
     }
@@ -173,18 +200,13 @@ export class Presenter {
     this.#markShown = false;
     this.#last = "none";
     this.#log = [];
-    this.#block(this.opts.display?.(e.qid) ?? e.text);
+    this.#block(this.opts.display?.(e.qid) ?? e.text, e.images, e.files);
     this.#renderLive();
   }
 
-  /**
-   * The person's message as a band: full width with an even margin on both sides, tinted, with a line of the accent colour above and
-   * below, the word You in the accent colour, and the words under it with the same space on the left and the right.
-   */
-  #block(text: string): void {
-    const total = this.#width();
-    const wide = Math.max(24, total - 4);
-    const inner = wide - 4;
+  /** The person's message: the same ❯ as the prompt it was typed at, so it is plainly theirs, then the words indented like everything else. */
+  #block(text: string, images?: number, files?: FileNote[]): void {
+    const inner = Math.max(20, this.#width() - 4);
     const body: string[] = [];
     for (const raw of text.split("\n")) {
       let rest = raw.replace(/\t/g, "  ");
@@ -198,17 +220,10 @@ export class Presenter {
     }
     const shown = body.slice(0, 40);
     if (body.length > 40) shown.push(paint(this.io.color, "dim", `… ${body.length - 40} more lines`));
-    const t = currentTheme();
-    const bg = this.io.color ? bgRgb(surfaces(t).you, t.truecolor) : "";
-    // Colours inside a row end with a full reset, which would end the tint too: it is put back after each of them.
-    const keep = (content: string): string => (bg ? content.split(RESET).join(`${RESET}${bg}`) : content);
-    const row = (content: string): string => `  ${bg}${keep(content)}${" ".repeat(Math.max(0, wide - plain(content)))}${this.io.color ? RESET : ""}`;
-    const rule = paint(this.io.color, "cyan", "─".repeat(wide));
     this.#write("\n");
-    this.#line(`  ${bg}${keep(rule)}${this.io.color ? RESET : ""}`);
-    this.#line(row(`  ${paint(this.io.color, "cyan", paint(this.io.color, "bold", "You"))}`));
-    for (const r of shown) this.#line(row(`  ${r}`));
-    this.#line(`  ${bg}${keep(rule)}${this.io.color ? RESET : ""}`);
+    this.#line(`  ${paint(this.io.color, "cyan", "❯")} ${paint(this.io.color, "cyan", paint(this.io.color, "bold", "You"))}`);
+    for (const r of shown) this.#line(`  ${r}`);
+    for (const a of attachmentLines(images, files, this.io.color)) this.#line(`  ${a}`);
     this.#write("\n");
   }
 
@@ -234,31 +249,34 @@ export class Presenter {
     this.#last = "step";
   }
 
-  /** What a block of steps came to: "Ran 5 commands, read 1 file · 1 failed". */
+  /** What a block of steps came to, as one plain sentence: "Ran 5 commands, read 1 file, 1 failed". */
   #groupSummary(): string {
     const g = this.#group;
     const parts: string[] = [];
     if (g.commands) parts.push(`${parts.length ? "ran" : "Ran"} ${g.commands} command${g.commands > 1 ? "s" : ""}`);
     if (g.reads) parts.push(`${parts.length ? "read" : "Read"} ${g.reads} file${g.reads > 1 ? "s" : ""}`);
     if (g.edits) parts.push(`${parts.length ? "changed" : "Changed"} ${g.edits} file${g.edits > 1 ? "s" : ""}`);
-    const trouble = [g.failed ? `${g.failed} failed` : "", g.timeout ? `${g.timeout} timed out` : "", g.denied ? `${g.denied} declined` : "", g.background ? `${g.background} in the background` : ""].filter(Boolean);
-    return [parts.join(", "), ...trouble].filter(Boolean).join("  ·  ") || `${g.steps} step${g.steps === 1 ? "" : "s"}`;
+    if (g.failed) parts.push(`${g.failed} failed`);
+    if (g.timeout) parts.push(`${g.timeout} timed out`);
+    if (g.denied) parts.push(`${g.denied} declined`);
+    if (g.background) parts.push(`${g.background} in the background`);
+    return parts.join(", ") || `${g.steps} step${g.steps === 1 ? "" : "s"}`;
   }
 
-  /** `⚙ Work  summary · time · note` on one line: when it would not fit, the last parts of the summary give way first. */
+  /** `⚙ Work  summary   time   note` on one line: when it would not fit, the last clauses of the summary give way first, so the time and the Ctrl+O note always stay. */
   #header(summary: string, time: string, note: string): string {
     const room = this.#width() - 2 - "⚙ Work  ".length;
-    const items = summary.split("  ·  ");
-    const build = (n: number): string => [...items.slice(0, n), time, ...(note ? [note] : [])].join("  ·  ");
-    let n = items.length;
+    const tail = [time, ...(note ? [note] : [])].join(SEP);
+    const clauses = summary.split(", ");
+    const build = (n: number): string => [clauses.slice(0, n).join(", "), tail].join(SEP);
+    let n = clauses.length;
     while (n > 1 && build(n).length > room) n--;
     let text = build(n);
     if (text.length > room) {
-      // Even the first part alone is too long: it is cut, and the time and the note stay.
-      const tail = [time, ...(note ? [note] : [])].join("  ·  ");
-      const first = items[0]!;
-      const space = Math.max(8, room - tail.length - 5);
-      text = `${first.length > space ? `${first.slice(0, space - 1)}…` : first}  ·  ${tail}`;
+      // Even the first clause alone is too long: it is cut, and the time and the note stay.
+      const first = clauses[0]!;
+      const space = Math.max(8, room - tail.length - SEP.length - 1);
+      text = `${first.length > space ? `${first.slice(0, space - 1)}…` : first}${SEP}${tail}`;
     }
     return `  ${paint(this.io.color, "yellow", "⚙")} ${paint(this.io.color, "bold", "Work")}  ${paint(this.io.color, "dim", text)}`;
   }
@@ -274,7 +292,7 @@ export class Presenter {
       this.#inWork = false;
       if (this.#last === "text" || this.#last === "step") this.#emit("");
       const hidden = this.#fold ? this.#rows.filter((r) => !r.keep && !r.thought).length : 0;
-      this.#emit(this.#header(this.#groupSummary(), `${time}${this.#turnOut ? `  ·  ↓ ${tokenCount(this.#turnOut)} tokens` : ""}`, hidden ? `${hidden} folded: Ctrl+O` : "Ctrl+O for details"));
+      this.#emit(this.#header(this.#groupSummary(), time, hidden ? `${hidden} folded: Ctrl+O` : "Ctrl+O for details"));
       this.#inWork = true;
       for (const row of this.#rows) {
         if (row.keep) for (const l of row.lines) this.#emit(l);
@@ -283,7 +301,7 @@ export class Presenter {
       this.#inWork = false;
     } else {
       this.#inWork = false;
-      this.#emit(`  ${paint(this.io.color, "faint", `└ ${this.#groupSummary()}  ·  ${time}`)}`);
+      this.#emit(`  ${paint(this.io.color, "faint", `└ ${this.#groupSummary()}${SEP}${time}`)}`);
     }
     this.#rows = [];
     this.#emit("");
@@ -294,7 +312,7 @@ export class Presenter {
     this.#closeWork();
     if (this.#markShown) return;
     this.#markShown = true;
-    this.#line(`  ${paint(this.io.color, "cyan", "⬢")} ${paint(this.io.color, "bold", "navvied")}  ${paint(this.io.color, "dim", "report")}`);
+    this.#line(`  ${mark(this.io.color)}  ${paint(this.io.color, "bold", "navvied")}`);
   }
 
   /** Whatever was being shown line by line is closed, so a step or a question starts on a fresh line. */
@@ -405,7 +423,10 @@ export class Presenter {
     const input = known.input ?? e.input;
     const output = e.output ?? "";
     const right = e.ms !== undefined ? took(e.ms) : "";
-    if (output.trim()) this.#lastOutput = { title: step.done, text: output.replace(/\n?\[exit \d+\]\s*$/, "") };
+    // Bash output can carry its own trailing lines (how it went, where it now runs, a background job): taken apart from what the command printed.
+    const bash = e.name === "Bash" ? parseBashOutput(output) : undefined;
+    const cleanOutput = bash ? bash.lines.join("\n") : output;
+    if (output.trim()) this.#lastOutput = { title: step.done, text: cleanOutput };
     const notes = [...(e.truncated ? ["TRUNCATED"] : []), ...((known as Running & { edited?: boolean }).edited ? ["EDITED"] : [])];
     const what = (): string => step.done;
     // A step stays on the screen when something went wrong or when it changed a file: those are what a person needs to see.
@@ -415,35 +436,39 @@ export class Presenter {
       this.#counts.failed++; this.#group.failed++;
       this.#row(this.#bad("⊘"), `Blocked: ${what()}`, right);
       this.#line(`    ${paint(this.io.color, "dim", output.replace(/^Error:\s*/, "").split("\n")[0]!.slice(0, 110))}`);
-    } else if (e.outcome === "timeout") { this.#counts.timeout++; this.#group.timeout++; this.#count(e.name); this.#row(this.#warn("⏱"), `${what()}`, `timed out · ${right}`, notes); }
+    } else if (e.outcome === "timeout") { this.#counts.timeout++; this.#group.timeout++; this.#count(e.name); this.#row(this.#warn("⏱"), `${what()}`, `timed out${SEP}${right}`, notes); }
     else if (e.outcome === "stopped") { this.#row(this.#warn("■"), paint(this.io.color, "dim", `Stopped: ${what()}`), right, notes); }
     else if (e.outcome === "skipped") { this.#row(paint(this.io.color, "dim", "»"), paint(this.io.color, "dim", `Skipped: ${what()}`), ""); }
     else if (e.outcome === "redirected") { this.#row(paint(this.io.color, "dim", "↪"), paint(this.io.color, "dim", `Redirected, not run: ${what()}`), ""); }
     else if (e.outcome === "background") { this.#counts.background++; this.#group.background++; this.#count(e.name); this.#row(paint(this.io.color, "cyan", "◉"), what(), "running in the background", notes); }
     else {
       this.#count(e.name);
-      const bad = e.status === "error" || failed(output) || (e.code !== undefined && e.code !== null && e.code !== 0) || /\[exit [1-9]\d*\]\s*$/.test(output);
+      const bad = e.status === "error" || failed(output) || (e.code !== undefined && e.code !== null && e.code !== 0) || (bash ? bash.exitCode !== undefined && bash.exitCode !== 0 : false);
       if (bad) {
         this.#counts.failed++; this.#group.failed++;
-        const code = e.code !== undefined && e.code !== null && e.code !== 0 ? `exit ${e.code}  ` : "";
+        const code = e.code !== undefined && e.code !== null && e.code !== 0 ? `exit ${e.code}  ` : bash?.exitCode ? `exit ${bash.exitCode}  ` : "";
         this.#row(this.#bad("✗"), describeFailure(e.name, input, this.opts.cwd()), `${code}${right}`.trim(), notes);
-        const said = output.replace(/^Error:\s*/, "").split("\n").map((l) => l.trim()).filter((l) => l && !/^\[exit/.test(l)).slice(-3);
+        const said = (bash ? bash.lines : output.replace(/^Error:\s*/, "").split("\n")).map((l) => l.trim()).filter(Boolean).slice(-3);
         if (said.length) { this.#line(`    ${paint(this.io.color, "dim", "What it said")}`); for (const l of said) this.#line(`    ${paint(this.io.color, "dim", l.length > 100 ? `${l.slice(0, 99)}…` : l)}`); }
+        if (bash) for (const n of bash.notes) this.#line(`    ${paint(this.io.color, "faint", n)}`);
       } else {
         const tail = stepTail(e.name, input, output);
         this.#row(this.#ok("✓"), `${what()}${tail ? `  ${paint(this.io.color, "dim", tail)}` : ""}`, right, notes);
-        // What a command printed: the first lines, and how many more there are.
-        if (e.name === "Bash" && e.outcome !== "background") {
-          const said = output.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim() && !/^\[exit \d+\]$/.test(l.trim()));
+        // What a command printed: the first lines, and how many more there are; then navvied's own quiet notes, apart from that output.
+        if (bash && e.outcome !== "background") {
+          const said = bash.lines.map((l) => l.trimEnd()).filter((l) => l.trim());
           for (const l of said.slice(0, PREVIEW_LINES)) this.#line(`    ${paint(this.io.color, "faint", "⎿")} ${paint(this.io.color, "dim", l.length > this.#width() - 10 ? `${l.slice(0, this.#width() - 11)}…` : l)}`);
           if (said.length > PREVIEW_LINES) this.#line(`      ${paint(this.io.color, "faint", `… ${said.length - PREVIEW_LINES} more line${said.length - PREVIEW_LINES > 1 ? "s" : ""}`)}`);
+          for (const n of bash.notes) this.#line(`    ${paint(this.io.color, "faint", n)}`);
         }
         if (e.name === "Edit") this.#diff(input as Record<string, unknown>, output);
       }
     }
     this.#endStep(attention);
     this.#stepsDone++;
-    this.#log.push({ title: step.done, mark: e.outcome === "denied" ? "−" : e.outcome === "blocked" ? "⊘" : e.outcome === "timeout" ? "⏱" : e.outcome === "stopped" ? "■" : e.outcome === "skipped" ? "»" : e.outcome === "redirected" ? "↪" : e.outcome === "background" ? "◉" : (e.status === "error" || (e.code !== undefined && e.code !== null && e.code !== 0)) ? "✗" : "✓", ...(e.ms !== undefined ? { ms: e.ms } : {}), input: typeof input === "object" && input !== null ? String((input as Record<string, unknown>).command ?? (input as Record<string, unknown>).file_path ?? (input as Record<string, unknown>).url ?? (input as Record<string, unknown>).pattern ?? JSON.stringify(input)) : "", output: output.replace(/\n?\[exit \d+\]\s*$/, "") });
+    const rec = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : undefined;
+    const logInput = rec ? String(rec.command ?? (typeof rec.file_path === "string" ? shortPath(rec.file_path, this.opts.cwd()) : undefined) ?? rec.url ?? rec.pattern ?? JSON.stringify(rec)) : "";
+    this.#log.push({ title: step.done, mark: e.outcome === "denied" ? "−" : e.outcome === "blocked" ? "⊘" : e.outcome === "timeout" ? "⏱" : e.outcome === "stopped" ? "■" : e.outcome === "skipped" ? "»" : e.outcome === "redirected" ? "↪" : e.outcome === "background" ? "◉" : (e.status === "error" || (e.code !== undefined && e.code !== null && e.code !== 0)) ? "✗" : "✓", ...(e.ms !== undefined ? { ms: e.ms } : {}), input: logInput, output: cleanOutput, ...(bash?.notes.length ? { notes: bash.notes } : {}) });
     this.#label = "";
     this.#renderLive();
   }
@@ -469,15 +494,18 @@ export class Presenter {
     if (during) this.#endStep(e.status !== "done");
   }
 
-  /** "Ran 3 commands, read 1 file", and what did not go well. */
+  /** "Ran 3 commands, read 1 file, 1 failed", as one plain sentence. */
   #summary(): string {
     const c = this.#counts;
     const parts: string[] = [];
     if (c.commands) parts.push(`${parts.length ? "ran" : "Ran"} ${c.commands} command${c.commands > 1 ? "s" : ""}`);
     if (c.reads) parts.push(`${parts.length ? "read" : "Read"} ${c.reads} file${c.reads > 1 ? "s" : ""}`);
     if (c.edits) parts.push(`${parts.length ? "changed" : "Changed"} ${c.edits} file${c.edits > 1 ? "s" : ""}`);
-    const trouble = [c.failed ? `${c.failed} failed` : "", c.timeout ? `${c.timeout} timed out` : "", c.denied ? `${c.denied} declined` : "", c.background ? `${c.background} in the background` : ""].filter(Boolean);
-    return [parts.join(", "), ...trouble].filter(Boolean).join("  ·  ");
+    if (c.failed) parts.push(`${c.failed} failed`);
+    if (c.timeout) parts.push(`${c.timeout} timed out`);
+    if (c.denied) parts.push(`${c.denied} declined`);
+    if (c.background) parts.push(`${c.background} in the background`);
+    return parts.join(", ");
   }
 
   #done(stop: string): void {
@@ -494,7 +522,6 @@ export class Presenter {
     const hadWork = this.#summary() !== "";
     this.#counts = { commands: 0, reads: 0, edits: 0, failed: 0, denied: 0, timeout: 0, background: 0 };
     this.#stepsDone = 0;
-    this.#turnOut = 0;
     this.#started = false;
     this.#plan = [];
     if (stop === "cancelled") this.#line(`  ${this.#warn("■")} ${paint(this.io.color, "bold", "Stopped")}  ${paint(this.io.color, "dim", "You pressed Esc. Nothing was undone: /checkpoints lists what changed.")}`);
@@ -525,7 +552,7 @@ export class Presenter {
     else {
       const seconds = Math.round((this.#now() - this.#turnStart) / 1000);
       const label = this.#label || (this.#started ? "Thinking" : "Starting");
-      lines.push(`  ${this.#warn(FRAMES[this.#frame % FRAMES.length]!)} ${paint(this.io.color, "bold", label)}${paint(this.io.color, "dim", "…")}${this.#stepsDone || seconds >= 1 ? `  ${paint(this.io.color, "dim", [this.#stepsDone ? `${this.#stepsDone} step${this.#stepsDone > 1 ? "s" : ""} done` : "", seconds >= 1 ? `${seconds} s` : "", this.#turnOut ? `↓ ${tokenCount(this.#turnOut)} tokens` : ""].filter(Boolean).join("  ·  "))}` : ""}`);
+      lines.push(`  ${this.#warn(FRAMES[this.#frame % FRAMES.length]!)} ${paint(this.io.color, "bold", label)}${paint(this.io.color, "dim", "…")}${this.#stepsDone || seconds >= 1 ? `  ${paint(this.io.color, "dim", [this.#stepsDone ? `${this.#stepsDone} step${this.#stepsDone > 1 ? "s" : ""} done` : "", seconds >= 1 ? `${seconds} s` : ""].filter(Boolean).join(SEP))}` : ""}`);
       // What the running command is printing, as it prints.
       const current = [...this.#running.values()].find((r) => r.out.length);
       if (current) for (const row of current.out) lines.push(`    ${paint(this.io.color, "faint", "│")} ${paint(this.io.color, "dim", row.length > this.#width() - 10 ? `${row.slice(0, this.#width() - 11)}…` : row)}`);

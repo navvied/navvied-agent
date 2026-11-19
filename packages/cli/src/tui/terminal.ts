@@ -2,7 +2,7 @@ import { paint } from "../render.ts";
 import { LineEditor } from "./editor.ts";
 import { composeFrame, viewportRows } from "./frame.ts";
 import { KeyParser, type Key } from "./keys.ts";
-import { Menu, Secret, keyHints, suggestionLines, workLines, type Choice, type Frame, type Suggest, type Suggestion, type Watch, type WorkContext } from "./menu.ts";
+import { Menu, Secret, chipLines, keyHints, suggestionLines, workLines, type Chip, type Choice, type Frame, type Suggest, type Suggestion, type Watch, type WorkContext } from "./menu.ts";
 import { Transcript } from "./transcript.ts";
 import { visibleWidth, wrap } from "./wrap.ts";
 
@@ -56,6 +56,7 @@ export class Tui {
   #status: () => string = () => "";
   #suggest: Suggest | undefined;
   #echo: ((line: string) => string | undefined) | undefined;
+  #chips: ((text: string) => Chip[]) | undefined;
   #picked = 0;
   #pickedFor = "";
   #dismissed: string | undefined;
@@ -124,6 +125,7 @@ export class Tui {
 
   setSuggest(suggest: Suggest | undefined): void { this.#suggest = suggest; }
   setEcho(echo: ((line: string) => string | undefined) | undefined): void { this.#echo = echo; }
+  setChips(chips: ((text: string) => Chip[]) | undefined): void { this.#chips = chips; }
 
   refresh(): void { this.#schedule(); }
 
@@ -377,9 +379,10 @@ export class Tui {
     const modal = this.#modal;
     const open = modal ? undefined : this.#suggestions();
     const view = viewportRows(rows, this.#layout().rows.length);
+    const chips = modal || open || !this.#chips ? [] : chipLines(this.#chips(this.#editor.text), cols, c);
     const overlay = modal
       ? ["", ...(modal.kind === "menu" ? modal.menu.lines(cols, Math.max(5, rows - 6)) : modal.kind === "secret" ? modal.secret.lines(cols) : modal.kind === "view" ? this.#viewOverlay(modal) : workLines(modal.title, modal.frame, modal.log, cols, c))]
-      : open ? suggestionLines(open.items, this.#picked, cols, Math.min(PALETTE_ROWS, view), c) : undefined;
+      : open ? suggestionLines(open.items, this.#picked, cols, Math.min(PALETTE_ROWS, view), c) : chips.length ? chips : undefined;
     const rule = paint(c, "faint", "─".repeat(cols));
     const frame = composeFrame({
       cols, rows, transcript: this.transcript, back: this.#back, input: this.#layout(), status: this.#status(),

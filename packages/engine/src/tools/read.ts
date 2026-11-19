@@ -10,7 +10,7 @@ const MAX_DOCUMENT_BYTES = 40_000_000;
 export const read: Tool = {
   name: "Read",
   readOnly: true,
-  description: "Read a file, with line numbers (Word, Excel, PowerPoint and PDF files too). Give offset and limit for a part.",
+  description: "Read a file, with line numbers (Word, Excel, PowerPoint, OpenDocument and PDF files too). Give offset and limit for a part.",
   parameters: {
     type: "object",
     properties: {

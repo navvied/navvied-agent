@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { EngineEvent } from "@navvied/protocol";
-import { Presenter, type PresenterOptions } from "../src/presenter.ts";
+import { Presenter, plainModelError, type PresenterOptions } from "../src/presenter.ts";
 import { Renderer } from "../src/render.ts";
 import { resolveTheme, setTheme } from "../src/theme.ts";
 import { fakeIO } from "./helpers.ts";
@@ -41,25 +41,21 @@ describe("the person's message", () => {
     big.send({ ev: "user", qid: "q", text: Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n") });
     expect(big.shown()).toContain("… 20 more lines");
   });
-  test("with colour it is a tinted band with a line of the accent above and below, You in the accent, and the same space on both sides", () => {
+  test("with colour it is as plain as the answer: the ❯ of the prompt, You in the accent, the words under it", () => {
     const r = rig({ color: true });
     r.send({ ev: "user", qid: "q", text: "hi" });
-    expect(r.shown()).toContain("\u001b[48;2;44;44;58m");
+    expect(r.shown()).toContain("\u001b[");
     const rows = r.lines().map(strip).filter((l) => l.trim());
-    expect(rows).toHaveLength(4);
-    expect(rows[0]).toBe(`  ${"─".repeat(56)}`);
-    expect(rows[1]).toBe(`    You${" ".repeat(56 - 5)}`);
-    expect(rows[2]).toBe(`    hi${" ".repeat(56 - 4)}`);
-    expect(rows[3]).toBe(rows[0]);
-    for (const l of rows) expect(l.length).toBe(58);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toBe("  ❯ You");
+    expect(rows[1]).toBe("  hi");
   });
   test("without colour it is the same layout, plain", () => {
     const r = rig();
     r.send({ ev: "user", qid: "q", text: "hi there" });
     const rows = r.lines().filter((l) => l.trim());
-    expect(rows[0]!.trim()).toBe("─".repeat(56));
-    expect(rows[1]!.trim()).toBe("You");
-    expect(rows[2]!.trim()).toBe("hi there");
+    expect(rows[0]!.trim()).toBe("❯ You");
+    expect(rows[1]!.trim()).toBe("hi there");
   });
 });
 
@@ -77,7 +73,7 @@ describe("a turn", () => {
     r.advance(5000);
     r.send({ ev: "done", stop: "end_turn" });
     const out = r.shown();
-    expect(out.match(/⬢ navvied/g)).toHaveLength(1);
+    expect(out.match(/⬢⬢ {2}navvied/g)).toHaveLength(1);
     expect(out).toContain("✓ Read src/checkout.ts  3 lines");
     expect(out).toContain("  Cause");
     expect(out).toContain("  It adds 0.1 + 0.2.");
@@ -87,8 +83,8 @@ describe("a turn", () => {
     const at = (needle: string): number => rows.findIndex((l) => l.includes(needle));
     expect(at("⚙ Work")).toBeGreaterThan(-1);
     expect(at("└ Read 1 file")).toBeGreaterThan(at("✓ Read src/checkout.ts"));
-    expect(at("⬢ navvied  report")).toBeGreaterThan(at("└ Read 1 file"));
-    expect(at("  Cause")).toBeGreaterThan(at("⬢ navvied  report"));
+    expect(at("⬢⬢  navvied")).toBeGreaterThan(at("└ Read 1 file"));
+    expect(at("  Cause")).toBeGreaterThan(at("⬢⬢  navvied"));
   });
   test("a change shows what came out and went in, numbered from the line the tool reported", () => {
     const r = rig();
@@ -120,7 +116,7 @@ describe("a turn", () => {
   test("stopping says so and what is left alone; an error shows the message", () => {
     const r = rig();
     r.send({ ev: "user", qid: "q", text: "x" }, { ev: "error", msg: "raphael did not answer" }, { ev: "done", stop: "cancelled" });
-    expect(r.shown()).toContain("✗ raphael did not answer");
+    expect(r.shown()).toContain("✗ Raphael did not answer");
     expect(r.shown()).toContain("■ Stopped  You pressed Esc. Nothing was undone");
   });
   test("thinking is summarised, and its text only appears when asked for", () => {
@@ -278,7 +274,7 @@ describe("steps that say how they went", () => {
     expect(out).toContain("− You said no: Ran rm -rf cache");
     expect(out).toContain("⊘ Blocked: Ran rm -rf /");
     expect(out).toContain("navvied never does this");
-    expect(out).toMatch(/⏱ Ran bun test --watch\s+timed out · 2 m 0 s/);
+    expect(out).toMatch(/⏱ Ran bun test --watch\s+timed out {3}2 m 0 s/);
     expect(out).toMatch(/■ Stopped: Ran sleep 99\s+3\.0 s/);
     expect(out).toContain("» Skipped:");
     expect(out).toMatch(/◉ Ran bun run dev\s+running in the background/);
@@ -293,7 +289,7 @@ describe("steps that say how they went", () => {
     r.send({ ev: "tool", id: "bad", name: "Bash", status: "error", output: "[exit 1]", code: 1, ms: 50 });
     r.advance(8000);
     r.send({ ev: "done", stop: "end_turn" });
-    expect(r.shown().trimEnd().split("\n").at(-1)).toBe("  └ Ran 3 commands, read 1 file  ·  1 failed  ·  8.0 s");
+    expect(r.shown().trimEnd().split("\n").at(-1)).toBe("  └ Ran 3 commands, read 1 file, 1 failed   8.0 s");
   });
   test("while it works, what a command prints shows under the live line, and the steps that wait show as next", () => {
     const r = rig();
@@ -342,7 +338,7 @@ describe("the working line, the task list and what a command printed", () => {
     r.send({ ev: "user", qid: "q", text: "go" }, { ev: "taken", qid: "q" }, { ev: "tool", id: "a", name: "Read", status: "running", input: { file_path: "/work/shop/a.ts" } });
     r.send({ ev: "tool", id: "a", name: "Read", status: "done", output: "x", ms: 5 }, { ev: "tool", id: "b", name: "Bash", status: "running", input: { command: "sleep 9" } });
     r.advance(3000);
-    expect(r.lastLive().join("\n")).toMatch(/1 step done\s+·\s+3 s/);
+    expect(r.lastLive().join("\n")).toMatch(/1 step done {3}3 s/);
   });
 });
 
@@ -365,7 +361,7 @@ describe("the work and the report are apart", () => {
     r.send({ ev: "tool", id: "b", name: "Bash", status: "running", input: { command: "ls" } }, { ev: "tool", id: "b", name: "Bash", status: "done", output: "one\ntwo\n[exit 0]", code: 0, ms: 50 });
     r.send({ ev: "text", text: "All done.\n" }, { ev: "done", stop: "end_turn" });
     const rows = r.lines();
-    const work = rows.findIndex((l) => l.includes("⚙ Work")), close = rows.findIndex((l) => l.includes("└ Ran 1 command, read 1 file")), report = rows.findIndex((l) => l.includes("⬢ navvied  report"));
+    const work = rows.findIndex((l) => l.includes("⚙ Work")), close = rows.findIndex((l) => l.includes("└ Ran 1 command, read 1 file")), report = rows.findIndex((l) => l.includes("⬢⬢  navvied"));
     expect(work).toBeGreaterThan(-1);
     expect(close).toBeGreaterThan(work);
     expect(report).toBeGreaterThan(close);
@@ -381,7 +377,7 @@ describe("the work and the report are apart", () => {
     r.send({ ev: "text", text: "Finished.\n" }, { ev: "done", stop: "end_turn" });
     const out = r.shown();
     expect(out.match(/⚙ Work/g)).toHaveLength(2);
-    expect(out.match(/⬢ navvied  report/g)).toHaveLength(2);
+    expect(out.match(/⬢⬢ {2}navvied/g)).toHaveLength(2);
   });
   test("every step of the turn is kept for /steps, with what it ran and all it printed, and a new message starts a new list", () => {
     const r = rig();
@@ -447,19 +443,60 @@ describe("the steps of a block, as a list or folded", () => {
   });
 });
 
-describe("tokens and redirected steps", () => {
-  test("the live line and the block header carry the tokens written in the turn; a redirected step says it did not run", () => {
+describe("redirected steps", () => {
+  test("usage does not clutter the live line or the block header with jargon, and a redirected step says it did not run", () => {
     const r = rig({ steps: "list" });
     r.send({ ev: "user", qid: "q", text: "go" }, { ev: "taken", qid: "q" });
     r.send({ ev: "tool", id: "a", name: "Bash", status: "running", input: { command: "ls" } });
     r.send({ ev: "tool", id: "a", name: "Bash", status: "done", output: "x\n[exit 0]", code: 0, ms: 50 });
     r.send({ ev: "usage", ctx: 900, win: 32768, out: 1234, turn: { in: 900, out: 1234, calls: 1 } });
     r.send({ ev: "tool", id: "b", name: "Bash", status: "error", output: "[redirected]", outcome: "redirected", input: { command: "rm -rf x" } } as never);
-    expect(r.lastLive().join("\n")).toContain("↓ 1.2k tokens");
+    expect(r.lastLive().join("\n")).not.toContain("tokens");
     r.send({ ev: "text", text: "ok\n" }, { ev: "done", stop: "end_turn" });
     const out = r.shown();
-    expect(out).toContain("↓ 1.2k tokens");
+    expect(out).not.toContain("tokens");
     expect(out).toMatch(/↪ Redirected, not run/);
+  });
+});
+
+describe("common model errors, in plain words", () => {
+  test("a wrong or missing key, a model that did not answer, and no way to reach it at all", () => {
+    expect(plainModelError("the model endpoint answered 401: Incorrect API key provided.")).toBe("The model did not accept the key it was given. Check it, or run /model to connect a different one.");
+    expect(plainModelError("the model server answered 403")).toBe("The model did not accept the key it was given. Check it, or run /model to connect a different one.");
+    expect(plainModelError("the model endpoint answered 500")).toBe("The model did not answer properly just now. Try again in a moment.");
+    expect(plainModelError("the model returned an empty answer")).toBe("The model sent back nothing. Try again, or run /model to choose another one.");
+    expect(plainModelError("fetch failed")).toBe("Could not reach the model. Check that it is running, and your internet connection.");
+    expect(plainModelError("connect ECONNREFUSED 127.0.0.1:11434")).toBe("Could not reach the model. Check that it is running, and your internet connection.");
+  });
+  test("anything navvied does not recognise is still shown, as a sentence", () => {
+    expect(plainModelError("raphael did not answer")).toBe("Raphael did not answer");
+    expect(plainModelError("the model did not start answering within 180 seconds. Check that x.local can be reached from this computer.")).toBe("The model did not start answering within 180 seconds. Check that x.local can be reached from this computer.");
+  });
+});
+
+describe("a message with a picture or a file attached", () => {
+  test("a picture is only ever a count; a file says what the engine made of it", () => {
+    const r = rig();
+    r.send({ ev: "user", qid: "q", text: "what is in these", images: 2, files: [{ name: "report.pdf", kind: "pdf", pages: 12 }, { name: "notes.txt", kind: "text" }] });
+    const out = r.shown();
+    expect(out).toContain("2 pictures attached");
+    expect(out).toContain("report.pdf (12 pages)");
+    expect(out).toContain("notes.txt");
+  });
+
+  test("a refused file, or a scanned PDF, says why in the same line", () => {
+    const r = rig();
+    r.send({ ev: "user", qid: "q", text: "x", files: [{ name: "old.doc", kind: "refused", note: "this kind of document is not read yet" }, { name: "scan.pdf", kind: "pdf", note: "no text in this PDF (scanned pages)" }] });
+    const out = r.shown();
+    expect(out).toContain("✗ old.doc — this kind of document is not read yet");
+    expect(out).toContain("scan.pdf — no text in this PDF (scanned pages)");
+  });
+
+  test("nothing attached, nothing extra shown", () => {
+    const r = rig();
+    r.send({ ev: "user", qid: "q", text: "plain message" });
+    expect(r.shown()).not.toContain("picture");
+    expect(r.shown()).not.toContain("attached");
   });
 });
 

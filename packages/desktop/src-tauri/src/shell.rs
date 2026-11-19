@@ -1,5 +1,6 @@
 //! The app's life: the program inside it, the window, the tray, notices, links and updates.
 
+use base64::Engine as _;
 use crate::{cards, tray};
 use navvied_desktop_core::events::{Settings as NoticeSettings, Tracker, Update};
 use navvied_desktop_core::http::{self, Info};
@@ -17,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager, RunEvent, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, DragDropEvent, Emitter, Manager, RunEvent, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt as _};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
@@ -100,12 +101,21 @@ pub fn run() {
     {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }
+    // Only on macOS: there, without a menu item carrying the Cmd+V accelerator, the system never delivers that
+    // keystroke to the app at all (clipboard access being enabled on the webview, below, is not enough there on
+    // its own). On Linux and Windows the webview's own paste works without any menu, and a File/Edit/Window menu
+    // bar drawn inside the window would be a visible change on its own, with no preview approved for it.
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.menu(|handle| tauri::menu::Menu::default(handle));
+    }
     let app = builder
         .invoke_handler(tauri::generate_handler![
             crate::commands::shell_answer,
             crate::commands::shell_settings_get,
             crate::commands::shell_settings_set,
             crate::commands::page_action,
+            crate::commands::clipboard_image,
             crate::commands::relay_pair,
             crate::commands::relay_status,
             crate::commands::relay_forget,
@@ -192,9 +202,13 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     });
     app.manage(shell.clone());
     let background = std::env::args().any(|a| a == "--background");
+    // Started before the window: spawning the sidecar and building the native window both cost real time
+    // (disk I/O for the sidecar's own code, process-fork and library loading for the window's WebKitGTK
+    // view), and neither depends on the other, so starting the sidecar first lets that cost run alongside
+    // window creation instead of after it.
+    start_supervisor(app, &shell);
     create_window(app, &shell, !background)?;
     *lock(&shell.tray) = Some(tray::build(app, &shell)?);
-    start_supervisor(app, &shell);
     start_listener(app.clone(), shell.clone());
     let handle = app.clone();
     app.deep_link().on_open_url(move |event| {
@@ -212,9 +226,47 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 fn init_script(token: &Token) -> String {
     let key = serde_json::to_string(token.expose()).unwrap_or_default();
     format!(
-        "(function(){{ if(location.protocol!=='http:'||location.hostname!=='127.0.0.1')return; try{{ sessionStorage.setItem('navvied.target',JSON.stringify({{origin:location.origin,token:{key}}})); }}catch(e){{}} }})();\n(function(){{ if(location.protocol!=='http:'||location.hostname!=='127.0.0.1')return; {OVERLAY} }})();"
+        "(function(){{ if(location.protocol!=='http:'||location.hostname!=='127.0.0.1')return; try{{ sessionStorage.setItem('navvied.target',JSON.stringify({{origin:location.origin,token:{key}}})); }}catch(e){{}} }})();\n(function(){{ if(location.protocol!=='http:'||location.hostname!=='127.0.0.1')return; {OVERLAY} }})();\n{NATIVE_DROP}"
     )
 }
+
+/// Turns the native drop Rust reads for us (see `native_drag_drop`, above `create_window`'s builder) back into
+/// the ordinary HTML5 drag sequence a page already knows how to handle: WebKitGTK gives a dropped local file to
+/// the page only as a `text/uri-list` string, never as a `File` (verified with the real WebKit remote
+/// inspector), so this is the one place that gap is closed — the page itself (`packages/web/src/composer.ts`)
+/// needs no change at all, since what it receives here is indistinguishable from a real browser drop.
+const NATIVE_DROP: &str = r#"(function(){
+  if (window.__navviedDrop) return;
+  var overEl = null;
+  function fakeFilesTransfer() {
+    var dt = new DataTransfer();
+    dt.items.add(new File([], "", { type: "application/octet-stream" }));
+    return dt;
+  }
+  function realFilesTransfer(files) {
+    var dt = new DataTransfer();
+    (files || []).forEach(function (f) {
+      var bin = atob(f.data), bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      dt.items.add(new File([bytes], f.name, { type: f.mime }));
+    });
+    return dt;
+  }
+  function fire(type, el, dataTransfer) {
+    if (!el) return;
+    el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dataTransfer }));
+  }
+  window.__navviedDrop = {
+    enter: function (p) { overEl = document.elementFromPoint(p.x, p.y); fire("dragenter", overEl, fakeFilesTransfer()); },
+    over: function (p) { overEl = document.elementFromPoint(p.x, p.y) || overEl; fire("dragover", overEl, fakeFilesTransfer()); },
+    leave: function () { fire("dragleave", overEl, fakeFilesTransfer()); overEl = null; },
+    drop: function (p) {
+      var el = document.elementFromPoint(p.x, p.y) || overEl;
+      overEl = null;
+      fire("drop", el, realFilesTransfer(p.files));
+    },
+  };
+})();"#;
 
 enum Nav {
     Allow,
@@ -238,6 +290,9 @@ fn create_window(app: &AppHandle, shell: &Arc<Shell>, visible: bool) -> tauri::R
         .inner_size(1100.0, 720.0)
         .min_inner_size(720.0, 520.0)
         .visible(visible)
+        // Off by default on Linux and Windows only (already on for macOS); needed for the page's own
+        // paste (text) to reach it at all.
+        .enable_clipboard_access()
         .initialization_script(init_script(&shell.token))
         .on_navigation(move |url| {
             let port = shell_of(&nav_app).page_port.load(Ordering::SeqCst);
@@ -267,22 +322,122 @@ fn create_window(app: &AppHandle, shell: &Arc<Shell>, visible: bool) -> tauri::R
                 quit(&close_app);
             } else if !asked {
                 ask(&close_app, Pending::Close, cards::close_question(tray::place_name()));
-            } else if let Some(w) = close_app.get_webview_window("main") {
-                let _ = w.hide();
+            } else {
+                hide_window(&close_app);
             }
+        } else if let WindowEvent::DragDrop(e) = event {
+            native_drag_drop(&close_app, e);
         }
     });
     Ok(win)
 }
 
-pub fn show_window(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.show();
-        let _ = w.unminimize();
-        let _ = w.set_focus();
+const MAX_DROPPED_FILES: usize = 8;
+const MAX_DROPPED_FILE_BYTES: u64 = 15 * 1024 * 1024;
+
+fn mime_for(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "pdf" => "application/pdf",
+        "txt" | "md" | "markdown" => "text/plain",
+        "json" => "application/json",
+        _ => "application/octet-stream",
     }
 }
 
+/// WebKitGTK's own drag-and-drop exposes a dropped file's path to the page only as a `text/uri-list` string,
+/// never as a `File` (confirmed with the real WebKit remote inspector: `dataTransfer.files.length` is always 0
+/// for a local file drag, whatever targets the source offers). Tauri's own drag-drop handler, the one
+/// `disable_drag_drop_handler()` would otherwise turn off, is the only place a real file path is available at
+/// all on this platform — so it stays on, and this reads the dropped files here instead and hands them to the
+/// page as real `File` objects over a Tauri event the init script below turns back into a synthetic, ordinary
+/// HTML5 drag sequence. The page's own code (`packages/web/src/composer.ts`) needs no change: a `drop` it
+/// receives this way looks exactly like one a browser would have given it.
+fn native_drag_drop(app: &AppHandle, event: &DragDropEvent) {
+    let Some(win) = app.get_webview_window("main") else { return };
+    // `DragDropEvent`'s position is typed `PhysicalPosition` everywhere, but is only genuinely physical on one
+    // of the three platforms: wry's own source (`wry::webview2::drag_drop`) converts a Win32 `POINTL` with
+    // `ScreenToClient`, a pure coordinate-system shift with no DPI conversion — real physical pixels, needing
+    // `to_logical` on a scaled display. On Linux it is GTK's own `drag-motion` signal's `x, y`, already in
+    // GDK's device-independent units; on macOS, AppKit's `draggingLocation`, already in points. Both of those
+    // already match the CSS pixels `document.elementFromPoint` wants, so converting them *again* on those two
+    // platforms is what this fix got wrong on its first pass — proven by reproducing it: under `GDK_SCALE=2`,
+    // a drop aimed at logical (685, 600) landed, converted, at (342.5, 300) — exactly half of half, the typical
+    // signature of dividing by the scale factor one time too many.
+    #[cfg(windows)]
+    let scale = win.scale_factor().unwrap_or(1.0);
+    #[cfg(windows)]
+    let logical = |p: &tauri::PhysicalPosition<f64>| p.to_logical::<f64>(scale);
+    #[cfg(not(windows))]
+    let logical = |p: &tauri::PhysicalPosition<f64>| tauri::LogicalPosition::new(p.x, p.y);
+    let at = |method: &str, arg: Value| {
+        let _ = win.eval(format!("window.__navviedDrop&&window.__navviedDrop.{method}({arg})"));
+    };
+    match event {
+        DragDropEvent::Enter { position, .. } => {
+            let p = logical(position);
+            at("enter", serde_json::json!({ "x": p.x, "y": p.y }));
+        }
+        DragDropEvent::Over { position } => {
+            let p = logical(position);
+            at("over", serde_json::json!({ "x": p.x, "y": p.y }));
+        }
+        DragDropEvent::Leave => at("leave", Value::Null),
+        DragDropEvent::Drop { paths, position } => {
+            let files: Vec<Value> = paths
+                .iter()
+                .filter(|p| p.is_file())
+                .filter(|p| std::fs::metadata(p).map(|m| m.len() <= MAX_DROPPED_FILE_BYTES).unwrap_or(false))
+                .take(MAX_DROPPED_FILES)
+                .filter_map(|p| {
+                    let bytes = std::fs::read(p).ok()?;
+                    let name = p.file_name()?.to_string_lossy().into_owned();
+                    Some(serde_json::json!({ "name": name, "mime": mime_for(p), "data": base64::engine::general_purpose::STANDARD.encode(bytes) }))
+                })
+                .collect();
+            if !files.is_empty() {
+                let p = logical(position);
+                at("drop", serde_json::json!({ "x": p.x, "y": p.y, "files": files }));
+            }
+        }
+        _ => {}
+    }
+}
+
+// `show_window`, `hide_window`, `overlay`, `overlay_fill`, `go`, `refresh_tray`, `set_tray_login` and
+// `confirm_navigated` are the only places in this file allowed to touch the `WebviewWindow` or the tray
+// directly (see `desktop.test.ts`, "every touch of the window or the tray runs on the GTK main thread"):
+// each one dispatches through `run_on_main_thread`, which runs its closure inline when already on that
+// thread and marshals it there otherwise — correct and free to call from anywhere, including the main
+// thread itself (verified in `tauri-runtime-wry`'s `send_user_message`). Nowhere else calls these methods,
+// so a caller never has to know, or get wrong, which thread it happens to be running on.
+pub fn show_window(app: &AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(w) = handle.get_webview_window("main") {
+            let _ = w.show();
+            let _ = w.unminimize();
+            let _ = w.set_focus();
+        }
+    });
+}
+
+fn hide_window(app: &AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(w) = handle.get_webview_window("main") {
+            let _ = w.hide();
+        }
+    });
+}
+
+/// Only ever called from a closure already dispatched onto the main thread (`dispatch`'s `Update::Notice`
+/// branch): a `bool` has no way back out of `run_on_main_thread` itself, so this reads the window directly
+/// and relies on its caller for the thread it runs on, instead of dispatching a second time.
 fn window_in_front(app: &AppHandle) -> bool {
     // The window tests run on a screen with no window manager, where "in front" cannot be told apart from "not".
     #[cfg(feature = "test-hooks")]
@@ -293,9 +448,14 @@ fn window_in_front(app: &AppHandle) -> bool {
 }
 
 fn overlay(app: &AppHandle, method: &str, arg: &Value) {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.eval(format!("window.__navviedShell&&window.__navviedShell.{method}({arg})"));
-    }
+    let handle = app.clone();
+    let method = method.to_owned();
+    let arg = arg.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(w) = handle.get_webview_window("main") {
+            let _ = w.eval(format!("window.__navviedShell&&window.__navviedShell.{method}({arg})"));
+        }
+    });
 }
 
 fn ask(app: &AppHandle, what: Pending, mut card: Value) {
@@ -312,25 +472,40 @@ fn local_url(page: &str) -> Option<Url> {
 }
 
 fn go(app: &AppHandle, url: Url) {
-    if let Some(w) = app.get_webview_window("main") {
-        if w.url().is_ok_and(|u| u == url) {
-            return;
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(w) = handle.get_webview_window("main") {
+            if w.url().is_ok_and(|u| u == url) {
+                return;
+            }
+            let _ = w.navigate(url);
         }
-        let _ = w.navigate(url);
-    }
+    });
 }
 
 fn refresh_tray(app: &AppHandle) {
-    let sh = shell_of(app);
-    let tray = lock(&sh.tray);
-    if let Some(t) = tray.as_ref() {
-        t.set(&lock(&sh.view));
-    }
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let sh = shell_of(&handle);
+        let tray = lock(&sh.tray);
+        if let Some(t) = tray.as_ref() {
+            t.set(&lock(&sh.view));
+        }
+    });
 }
 
 fn set_view(app: &AppHandle, f: impl FnOnce(&mut tray::View)) {
     f(&mut lock(&shell_of(app).view));
     refresh_tray(app);
+}
+
+fn set_tray_login(app: &AppHandle, value: bool) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(t) = lock(&shell_of(&handle).tray).as_ref() {
+            t.set_login(value);
+        }
+    });
 }
 
 fn folder_for_start(app: &AppHandle, sh: &Shell) -> PathBuf {
@@ -381,9 +556,7 @@ fn on_event(app: &AppHandle, event: Event) {
                 StartFailure::NoAnswer => "noanswer",
             };
             if let Some(url) = local_url(&format!("error.html#{kind}")) {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.navigate(url);
-                }
+                go(app, url);
             }
             show_window(app);
         }
@@ -409,14 +582,23 @@ fn running(app: &AppHandle, sh: &Arc<Shell>, port: u16, info: Info, recovered: b
     refresh_tray(app);
     if let Ok(url) = Url::parse(&format!("http://127.0.0.1:{port}/")) {
         let reload = sh.reload_on_running.swap(false, Ordering::SeqCst);
-        if let Some(w) = app.get_webview_window("main") {
-            let on_page = w.url().is_ok_and(|u| u.host_str() == Some("127.0.0.1") && u.port() == Some(port));
-            if !on_page {
-                let _ = w.navigate(url);
-            } else if reload {
-                let _ = w.eval("location.reload()");
+        let main_app = app.clone();
+        // Dispatched explicitly onto the GTK main thread: this call runs from the supervisor's worker thread,
+        // and calling `navigate`/`url` on `WebviewWindow` straight from there is what was hanging on a HiDPI
+        // Linux desktop with a model already connected (reproduced with GDK_SCALE=2) — `navigate` returned `Ok`
+        // but the page never changed, forever. `run_on_main_thread` fixed it (13/13 trials, against 0/8 for
+        // retrying alone); `confirm_navigated` below stays as a second line of defence.
+        let _ = app.run_on_main_thread(move || {
+            if let Some(w) = main_app.get_webview_window("main") {
+                let on_page = w.url().is_ok_and(|u| u.host_str() == Some("127.0.0.1") && u.port() == Some(port));
+                if !on_page {
+                    let _ = w.navigate(url);
+                    confirm_navigated(&main_app, port);
+                } else if reload {
+                    let _ = w.eval("location.reload()");
+                }
             }
-        }
+        });
     }
     if recovered {
         overlay(
@@ -437,6 +619,48 @@ fn running(app: &AppHandle, sh: &Arc<Shell>, port: u16, info: Info, recovered: b
             ask(&app2, Pending::Welcome, cards::welcome());
         }
         ask_intents(&app2, queued);
+    });
+}
+
+/// A second check behind `run_on_main_thread` above, kept in case some other path to the same hang turns up:
+/// `navigate` returns `Ok` as soon as the load request is handed to the webview, not once the page has actually
+/// changed, so this watches for the load really landing and asks again if it has not — first through `navigate`
+/// once more, then through the page's own `location.href`, a different path into the webview. The sleep between
+/// attempts stays on this worker thread (it must not block the main loop for up to 5 seconds); only the one
+/// check-and-retry step that actually touches the window runs on the main thread, and a channel carries its
+/// yes/no back here so the loop can still stop as soon as the page has really moved, exactly as it did when
+/// this all ran directly on this thread — a single `run_on_main_thread` call that outlived its own result
+/// could not do that, since dispatching it never waits for the closure to run.
+fn confirm_navigated(app: &AppHandle, port: u16) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        for attempt in 0..10 {
+            std::thread::sleep(Duration::from_millis(500));
+            let (tx, rx) = std::sync::mpsc::channel();
+            let main_app = app.clone();
+            let dispatched = app.run_on_main_thread(move || {
+                let landed = main_app.get_webview_window("main").is_some_and(|w| {
+                    if w.url().is_ok_and(|u| u.host_str() == Some("127.0.0.1") && u.port() == Some(port)) {
+                        return true;
+                    }
+                    if attempt < 5 {
+                        if let Ok(url) = Url::parse(&format!("http://127.0.0.1:{port}/")) {
+                            let _ = w.navigate(url);
+                        }
+                    } else {
+                        let _ = w.eval(format!("location.href='http://127.0.0.1:{port}/'"));
+                    }
+                    false
+                });
+                let _ = tx.send(landed);
+            });
+            if dispatched.is_err() {
+                return;
+            }
+            if rx.recv_timeout(Duration::from_secs(2)).unwrap_or(false) {
+                return;
+            }
+        }
     });
 }
 
@@ -520,16 +744,21 @@ fn dispatch(app: &AppHandle, update: Update) {
                 "navvied is running".to_owned()
             };
         }),
+        // `window_in_front` reads the window directly, so the whole decision (and the notification that
+        // follows it) is one dispatch onto the main thread, not read there and acted on here.
         Update::Notice(n) => {
             let (title, body) = n.text();
-            if window_in_front(app) {
-                return;
-            }
-            let sent = app.notification().builder().title(title).body(body).show();
-            // Only the title is written down: a notice may name a file.
-            shell_of(app)
-                .logger
-                .log("app", &format!("notice \"{title}\": {}", if sent.is_ok() { "sent".to_owned() } else { "the system refused it".to_owned() }));
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if window_in_front(&handle) {
+                    return;
+                }
+                let sent = handle.notification().builder().title(title).body(body).show();
+                // Only the title is written down: a notice may name a file.
+                shell_of(&handle)
+                    .logger
+                    .log("app", &format!("notice \"{title}\": {}", if sent.is_ok() { "sent".to_owned() } else { "the system refused it".to_owned() }));
+            });
         }
     }
 }
@@ -558,6 +787,34 @@ fn relay_call(app: &AppHandle, method_post_body: Option<&str>, path: &str) -> Re
         return Err(value.get("error").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| format!("the program answered {}", reply.status)));
     }
     Ok(value)
+}
+
+const MAX_CLIPBOARD_IMAGE_BYTES: usize = 15 * 1024 * 1024;
+
+/// The system clipboard's image, PNG-encoded and base64-wrapped the same way a dropped file is (see
+/// `native_drag_drop`), or `null` when there is none. `arboard`'s raw RGBA8 pixels need re-encoding (`image`)
+/// before they are anything a page can use as a `File`.
+pub fn clipboard_image() -> Result<Value, String> {
+    let mut clipboard = match arboard::Clipboard::new() {
+        Ok(c) => c,
+        Err(_) => return Ok(Value::Null),
+    };
+    let img = match clipboard.get_image() {
+        Ok(i) => i,
+        Err(_) => return Ok(Value::Null),
+    };
+    let (width, height) = (img.width as u32, img.height as u32);
+    let Some(buf) = image::RgbaImage::from_raw(width, height, img.bytes.into_owned()) else {
+        return Ok(Value::Null);
+    };
+    let mut png = Vec::new();
+    if image::DynamicImage::ImageRgba8(buf).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).is_err() {
+        return Ok(Value::Null);
+    }
+    if png.len() > MAX_CLIPBOARD_IMAGE_BYTES {
+        return Ok(Value::Null);
+    }
+    Ok(serde_json::json!({ "mime": "image/png", "data": base64::engine::general_purpose::STANDARD.encode(png) }))
 }
 
 /// Makes a link and a code for navvied.com to pair with, the same way `/remote` does in the terminal.
@@ -663,9 +920,7 @@ pub fn set_setting(app: &AppHandle, sh: &Arc<Shell>, key: &str, value: bool) -> 
             let launch = app.autolaunch();
             if value { launch.enable() } else { launch.disable() }.map_err(|e| e.to_string())?;
             s.open_at_login = value;
-            if let Some(t) = lock(&sh.tray).as_ref() {
-                t.set_login(value);
-            }
+            set_tray_login(app, value);
         }
         _ => return Err("unknown setting".into()),
     }
@@ -719,8 +974,8 @@ pub fn answer(app: &AppHandle, sh: &Arc<Shell>, id: &str, choice: &str, checked:
             }
             if choice == "quit" {
                 quit(app);
-            } else if let Some(w) = app.get_webview_window("main") {
-                let _ = w.hide();
+            } else {
+                hide_window(app);
             }
         }
         (Pending::Folder(p), "work") => apply_folder(app, p),
@@ -750,9 +1005,13 @@ pub fn answer(app: &AppHandle, sh: &Arc<Shell>, id: &str, choice: &str, checked:
 }
 
 fn overlay_fill(app: &AppHandle, js_text: &str) {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.eval(format!("window.__navviedShell&&window.__navviedShell.fill({js_text})"));
-    }
+    let handle = app.clone();
+    let js_text = js_text.to_owned();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(w) = handle.get_webview_window("main") {
+            let _ = w.eval(format!("window.__navviedShell&&window.__navviedShell.fill({js_text})"));
+        }
+    });
 }
 
 #[cfg(feature = "updater")]
@@ -776,6 +1035,9 @@ fn check_update(app: AppHandle) {
             Ok(Some(update)) => {
                 let (current, new) = (update.current_version.clone(), update.version.clone());
                 *lock(&sh.update) = Some(update);
+                // The native card below is today's only UI for this; a web card can listen for this event
+                // instead (same information, same moment, so trading one for the other needs no change here).
+                let _ = app.emit("update-available", serde_json::json!({ "current": current, "version": new }));
                 ask(&app, Pending::UpdateReady, cards::update_ready(&current, &new));
             }
             Ok(None) => {}

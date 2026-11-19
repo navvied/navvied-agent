@@ -1,17 +1,42 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import type { Tool } from "../types.ts";
-import { clip, firstLines, place, run, str } from "./util.ts";
+import { clip, place, run, str } from "./util.ts";
 
-/** Matches shown at most: more than this is not read by a model, only paid for. */
+/** Matches shown at most, and at most from one file when there are several: more than this is not read by a model, only paid for. */
 const MOST_MATCHES = 100;
-const NARROWER = "add a glob or a narrower pattern";
+const PER_FILE = 50;
+/** The most matches the program looks for itself, and the most output it takes from a search program, before it says "at least". */
+const SEARCH_LIMIT = 20_000;
+const OUTPUT_LIMIT = 400_000;
+
+/**
+ * Keeps the first matches (50 of a file when several files match, 100 in all) and says what it left out, so that a short list is
+ * never taken for the whole. `partial`: the search itself stopped early, so there are at least as many as were counted.
+ */
+export function shortened(lines: string[], partial: boolean): string {
+  const where = (l: string): string => /^(.+?):\d+:/.exec(l)?.[1] ?? "";
+  const files = new Set(lines.map(where));
+  const perFile = files.size === 1 ? MOST_MATCHES : PER_FILE;
+  const seen = new Map<string, number>();
+  const kept: string[] = [];
+  const hidden = new Map<string, number>();
+  for (const l of lines) {
+    const f = where(l), n = (seen.get(f) ?? 0) + 1;
+    seen.set(f, n);
+    if (n <= perFile && kept.length < MOST_MATCHES) kept.push(l); else hidden.set(f, (hidden.get(f) ?? 0) + 1);
+  }
+  if (!hidden.size && !partial) return kept.join("\n");
+  const more = [...hidden.values()].reduce((a, b) => a + b, 0);
+  const inFiles = hidden.size > 1 ? ` in ${hidden.size} files` : hidden.size === 1 && files.size > 1 ? " in 1 file" : "";
+  return `${kept.join("\n")}\n[${partial ? "at least " : ""}${more} more matches${inFiles} were not shown: narrow the pattern, add a glob, or search one file]`;
+}
 
 const SKIP_DIRS = new Set(["node_modules", ".git"]);
 const MAX_FILE = 1_000_000;
 
 /** The search done in-process, for machines with neither ripgrep nor grep (Windows, minimal containers). */
-function searchHere(root: string, pattern: string, insensitive: boolean, only: string | undefined): string {
+function searchHere(root: string, pattern: string, insensitive: boolean, only: string | undefined): { lines: string[]; partial: boolean } | string {
   let regex: RegExp;
   try { regex = new RegExp(pattern, insensitive ? "i" : ""); } catch { return "Error: the pattern is not a valid regular expression."; }
   const matcher = only ? new Bun.Glob(only) : undefined;
@@ -32,14 +57,13 @@ function searchHere(root: string, pattern: string, insensitive: boolean, only: s
     let text: string;
     try { if (statSync(file).size > MAX_FILE) continue; text = readFileSync(file, "utf8"); } catch { continue; }
     if (text.includes("\u0000")) continue;
-    let perFile = 0;
     const lines = text.split("\n");
-    for (let i = 0; i < lines.length && perFile < 50 && out.length < 500; i++) {
-      if (regex.test(lines[i]!)) { out.push(`${rel}:${i + 1}:${lines[i]!.replace(/\r$/, "").slice(0, 300)}`); perFile++; }
+    for (let i = 0; i < lines.length && out.length < SEARCH_LIMIT; i++) {
+      if (regex.test(lines[i]!)) out.push(`${rel}:${i + 1}:${lines[i]!.replace(/\r$/, "").slice(0, 300)}`);
     }
-    if (out.length >= 500) break;
+    if (out.length >= SEARCH_LIMIT) return { lines: out, partial: true };
   }
-  return out.join("\n");
+  return { lines: out, partial: false };
 }
 
 export const grep: Tool = {
@@ -63,13 +87,16 @@ export const grep: Tool = {
     if (!pattern) return "Error: empty pattern.";
     const insensitive = a.ignore_case === true;
     const path = process.env.PATH ?? "";
-    if (!Bun.which("rg", { PATH: path }) && !Bun.which("grep", { PATH: path })) { const found = searchHere(root, pattern, insensitive, a.glob ? str(a.glob) : undefined); return found ? clip(firstLines(found, MOST_MATCHES, "matches", NARROWER)) : "No matches."; }
+    if (!Bun.which("rg", { PATH: path }) && !Bun.which("grep", { PATH: path })) { const found = searchHere(root, pattern, insensitive, a.glob ? str(a.glob) : undefined); return typeof found === "string" ? found : found.lines.length ? clip(shortened(found.lines, found.partial)) : "No matches."; }
     const argv = Bun.which("rg", { PATH: path })
-      ? ["rg", "-n", "--no-heading", "--max-columns", "300", "--max-count", "50", ...(insensitive ? ["-i"] : []), ...(a.glob ? ["-g", str(a.glob)] : []), "-e", pattern, root]
-      : ["grep", "-rnE", ...(insensitive ? ["-i"] : []), ...(a.glob ? ["--include", str(a.glob)] : []), "--exclude-dir=node_modules", "--exclude-dir=.git", "-e", pattern, root];
+      ? ["rg", "-nH", "--no-heading", "--max-columns", "300", ...(insensitive ? ["-i"] : []), ...(a.glob ? ["-g", str(a.glob)] : []), "-e", pattern, root]
+      : ["grep", "-rnHE", ...(insensitive ? ["-i"] : []), ...(a.glob ? ["--include", str(a.glob)] : []), "--exclude-dir=node_modules", "--exclude-dir=.git", "-e", pattern, root];
     const r = await run(argv, { cwd: ctx.cwd, signal: ctx.signal, timeoutMs: 30_000 });
     const text = r.output.trim();
     if (!text) return "No matches.";
-    return clip(firstLines(text.split("\n").map((l) => l.replace(`${root}/`, "").replace(`${root}\\`, "")).map((l) => (l.length > 300 ? `${l.slice(0, 300)}…` : l)).join("\n"), MOST_MATCHES, "matches", NARROWER));
+    // Each line names its file (also when one file is searched), relative to the folder searched.
+    const base = statSync(root).isDirectory() ? root : dirname(root);
+    const lines = text.split("\n").map((l) => l.replace(`${base}/`, "").replace(`${base}\\`, "")).map((l) => (l.length > 300 ? `${l.slice(0, 300)}…` : l));
+    return clip(shortened(lines, r.output.length >= OUTPUT_LIMIT));
   },
 };

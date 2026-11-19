@@ -17,7 +17,7 @@ describe("a command that nobody can type to", () => {
     const started = Date.now();
     const out = await bash.run({ command: "cat; echo after" }, ctx());
     expect(out).toContain("after");
-    expect(out).toContain("[exit 0]");
+    expect(out).not.toContain("[exit");
     expect(Date.now() - started).toBeLessThan(20_000);
   });
 

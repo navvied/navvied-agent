@@ -10,6 +10,8 @@ import { fetchModel } from "./net.ts";
 
 
 export interface ResponsesApiConfig {
+  /** The service is known to read a PDF given as a file, so the original goes along with its text. */
+  readsPdf?: boolean;
   /** A saved sign-in used instead of a key: it gives the headers, and may change the body (some services answer only as a stream). */
   credentials?: Credentials;
   /** Base URL including the version prefix, e.g. `https://api.example.com/v1`. */
@@ -25,7 +27,7 @@ type Item = Record<string, unknown>;
 const LEVEL: Record<string, string> = { minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "high", max: "high" };
 
 const content = (c: Message["content"], text: "input_text" | "output_text"): Item[] =>
-  c === undefined ? [] : typeof c === "string" ? (c ? [{ type: text, text: c }] : []) : c.map((p: Part) => (p.type === "text" ? { type: text, text: p.text } : { type: "input_image", image_url: `data:${p.mime};base64,${p.data}` }));
+  c === undefined ? [] : typeof c === "string" ? (c ? [{ type: text, text: c }] : []) : c.map((p: Part) => (p.type === "text" ? { type: text, text: p.text } : p.type === "file" ? { type: "input_file", filename: p.name, file_data: `data:${p.mime};base64,${p.data}` } : { type: "input_image", image_url: `data:${p.mime};base64,${p.data}` }));
 
 /** The conversation as the API wants it: one item after another, a tool call and its result paired by the call's id. */
 export function toInput(messages: Message[]): Item[] {
@@ -46,6 +48,7 @@ export function toInput(messages: Message[]): Item[] {
 
 export class ResponsesApiProvider implements Provider {
   constructor(private readonly cfg: ResponsesApiConfig) {}
+  get readsPdf(): boolean { return this.cfg.readsPdf === true; }
 
   private url(): string { return `${this.cfg.baseUrl.replace(/\/+$/, "")}/responses`; }
   private async headers(): Promise<Record<string, string>> {

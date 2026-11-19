@@ -35,6 +35,25 @@ export interface ImageInput {
   data: string;
 }
 
+/** A file the person attached. What it is, is decided by its content, not by `name` or `mime`, which only label it. */
+export interface FileInput {
+  name: string;
+  mime: string;
+  /** Base64 payload, no `data:` prefix. */
+  data: string;
+}
+
+/** What the engine made of an attached file (the content itself is never repeated in events). */
+export type FileKind = "image" | "text" | "pdf" | "document" | "refused";
+export interface FileNote {
+  name: string;
+  kind: FileKind;
+  /** Pages of a PDF, slides of a presentation. */
+  pages?: number;
+  /** One plain sentence when the file was refused, was not sent as it is, or has nothing readable in it. */
+  note?: string;
+}
+
 /* ── front-end → engine ─────────────────────────────────────────────────────────────────────────────────────── */
 
 export interface PromptCommand {
@@ -43,6 +62,8 @@ export interface PromptCommand {
   /** Client-chosen id (a UUID). The engine confirms it with a `taken` event; re-sending a known qid is a no-op. */
   qid?: string;
   images?: ImageInput[];
+  /** Files of any kind. `images` and `files` together hold at most 8, each at most 15 MB; the prompt needs text, an image or a file. */
+  files?: FileInput[];
   effort?: Effort;
   mode?: PermMode;
   /** Paths the session has worked in so far — lets the host snapshot those repositories before the turn. */
@@ -164,6 +185,8 @@ export interface ModelInfo {
   locked?: boolean;
   /** The one in use. */
   current?: boolean;
+  /** Whether this model takes file attachments from whoever is asking. Left out means yes. */
+  files?: boolean;
 }
 
 export type ToolStatus = "running" | "done" | "error";
@@ -238,7 +261,7 @@ type EngineEventBody =
   /** The things that extend the agent here (sent when asked and when one is switched). */
   | { ev: "plugins"; items: PluginInfo[] }
   /** A message was received and is waiting its turn (the agent is busy, or still starting): every window shows it as waiting, not only the one that sent it. It is followed by `user` and `taken` when the agent takes it. */
-  | { ev: "queued"; qid: string; text: string; images?: number }
+  | { ev: "queued"; qid: string; text: string; images?: number; files?: FileNote[] }
   /** Waiting messages that were thrown away without being taken (the person stopped the agent, or it failed): windows take them off the screen. */
   | { ev: "dropped"; qids: string[] }
   | { ev: "tools"; items: ToolInfo[]; sets: ToolSetInfo[]; backends: BackendInfo[] }
@@ -265,12 +288,12 @@ type EngineEventBody =
   | { ev: "sessions"; items: SessionInfo[] }
   /** The answer to `search`: the conversations that mention the words, best first, each with the passage (the words in [brackets]). */
   | { ev: "found"; query: string; items: SearchHit[] }
-  | { ev: "caps"; kind?: SessionKind; manage?: true; rowActions?: true; schedule?: true; plugins?: true; toolList?: true; drafts?: true; artifacts?: true; scheduleNote?: string; folders?: Capabilities["folders"]; steer: boolean; modes: PermMode[]; defaultMode?: PermMode; compact: boolean; checkpoints?: boolean; models?: ModelInfo[]; efforts?: Effort[]; effort?: Effort }
+  | { ev: "caps"; kind?: SessionKind; manage?: true; rowActions?: true; schedule?: true; plugins?: true; toolList?: true; drafts?: true; artifacts?: true; scheduleNote?: string; folders?: Capabilities["folders"]; steer: boolean; modes: PermMode[]; defaultMode?: PermMode; compact: boolean; checkpoints?: boolean; models?: ModelInfo[]; efforts?: Effort[]; effort?: Effort; vision?: boolean }
   | { ev: "checkpoints"; items: CheckpointInfo[] }
   /** The outcome of `restore`. A restore saves the current state first as `undoId`, so it can be undone. */
   | { ev: "restore"; id: string; preview: boolean; changes: RestoreEntry[]; undoId?: string }
   /** The text of a prompt the engine accepted, sent once just before its `taken`, so any window can show it. `images` is only a count. */
-  | { ev: "user"; qid: string; text: string; images?: number }
+  | { ev: "user"; qid: string; text: string; images?: number; files?: FileNote[] }
   /** The engine started working on prompt `qid` (or took it in mid-turn). */
   | { ev: "taken"; qid: string }
   | { ev: "text"; text: string }

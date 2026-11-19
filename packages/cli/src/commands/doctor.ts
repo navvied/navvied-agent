@@ -16,7 +16,7 @@ export async function doctorCommand(options: Options, io: IO): Promise<number> {
   const file = loadConfig(path, io.env);
   if (!file.ok) { line(false, "config", file.error); return EXIT.failed; }
   const count = Object.keys(file.value?.models ?? {}).length;
-  line(file.value ? true : "note", "config", file.value ? `${path} (${count} model${count === 1 ? "" : "s"})` : `none at ${path}; environment variables may be used instead`);
+  line(file.value ? true : "note", "config", file.value ? `${path} (${count} model${count === 1 ? "" : "s"})` : "no model connected yet; run navvied init to connect one");
 
   const model = resolveModel(options.model, file.value, io.env, path);
   if (!model.ok) line(false, "model", model.error);
