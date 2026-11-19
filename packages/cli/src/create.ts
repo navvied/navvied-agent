@@ -156,7 +156,7 @@ export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) =>
   if (engine instanceof Engine && file.value?.mcp && kind === "agent") {
     const off = new PluginState(pluginStatePath(io.env)).disabled();
     const servers = Object.fromEntries(Object.entries(file.value.mcp).filter(([name]) => !off.has(mcpId(name))).map(([name, e]) => [name, { ...e, cwd: e.cwd ?? cwd }]));
-    engine.loadTools(connectMcp(servers, model.value.window <= SMALL_WINDOW));
+    engine.loadTools(connectMcp(servers, model.value.window <= SMALL_WINDOW, engine.closing));
   }
   const notes = instructionFiles(cwd, dirname(path), INSTRUCTION_FILE_NAMES);
   return { ok: true, value: { engine, entry: model.value.name, modelName: shown || provider?.model || cli?.model || model.value.name, where: describeModel(cli, provider?.baseUrl), cwd, ...(cli ? { program: true as const } : { tools: defaultTools().map((t) => t.name) }), notes } };

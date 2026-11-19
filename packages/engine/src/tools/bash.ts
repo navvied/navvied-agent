@@ -1,7 +1,9 @@
+import { existsSync } from "node:fs";
 import { localBackend } from "../backend.ts";
 import { inTerminal, shellFor } from "../platform.ts";
+import type { Jobs } from "../jobs.ts";
 import type { Tool } from "../types.ts";
-import { MAX_OUTPUT, cleanOutput, clip, num, run, spill, str } from "./util.ts";
+import { MAX_OUTPUT, cleanOutput, clip, num, place, run, spill, str } from "./util.ts";
 
 const shell = shellFor();
 
@@ -17,11 +19,12 @@ function exitNote(command: string, code: number | null): string {
 export const bash: Tool = {
   name: "Bash",
   readOnly: false,
-  description: `Run a ${shell.name} command in the working directory. Output is shortened if long. Default timeout 120 s, maximum 600 s. For a server or a watcher that must keep running, set run_in_background and read it later with BashOutput. Every call starts a fresh shell: cd and variables do not carry over, and nothing can be typed to a command, so never wait for input.`,
+  description: `Run a ${shell.name} command in the working directory. Output is shortened if long. Default timeout 120 s, maximum 600 s. For a server or a watcher that must keep running, set run_in_background and read it later with BashOutput. Every call starts a fresh shell: use cwd, not cd, and variables do not carry over; nothing can be typed to a command, so never wait for input. A command still running at its timeout is not killed: it goes on as a job.`,
   parameters: {
     type: "object",
     properties: {
       command: { type: "string" },
+      cwd: { type: "string", description: "folder to run in, for this command only; use it instead of cd" },
       timeout: { type: "number", description: "seconds" },
       description: { type: "string", description: "what the command does, in a few words" },
       run_in_background: { type: "boolean", description: "keep it running after this step; read it with BashOutput, stop it with KillShell" },
@@ -34,7 +37,11 @@ export const bash: Tool = {
     const command = str(a.command);
     if (!command.trim()) return "Error: empty command.";
     let where: ReturnType<typeof localBackend.prepare>;
-    try { where = (ctx.backend ?? localBackend).prepare(command, ctx.cwd); } catch (e) { return `Error: ${e instanceof Error ? e.message : String(e)}`; }
+    try {
+      const folder = a.cwd === undefined || a.cwd === "" ? ctx.cwd : place(ctx, a.cwd);
+      if (folder !== ctx.cwd && !existsSync(folder)) return `Error: the folder ${folder} does not exist.`;
+      where = (ctx.backend ?? localBackend).prepare(command, folder);
+    } catch (e) { return `Error: ${e instanceof Error ? e.message : String(e)}`; }
     if (a.interactive === true) {
       if (ctx.backend && ctx.backend.id !== "local") return "Error: a program you type to runs on this computer only, and commands are set to run elsewhere.";
       const job = ctx.jobs.start(inTerminal(where.argv) ?? where.argv, where.cwd, str(a.description) || command.slice(0, 80), undefined, true);
@@ -47,34 +54,47 @@ export const bash: Tool = {
       return `Started ${job.id} in the background. Read what it prints with BashOutput (job_id "${job.id}"), stop it with KillShell.`;
     }
     const seconds = Math.min(Math.max(1, num(a.timeout, 120)), 600);
-    const r = await run(where.argv, { cwd: where.cwd, signal: ctx.signal, timeoutMs: seconds * 1000, ...(ctx.live ? { onChunk: ctx.live } : {}) });
-    ctx.report?.({ code: r.code, truncated: r.output.trimEnd().length > MAX_OUTPUT, timedOut: r.timedOut });
+    // A command that is not done in time is not killed: it goes on as a job, and what it printed so far is not lost.
+    let handedOn: string | undefined;
+    const title = str(a.description) || command.slice(0, 80);
+    const r = await run(where.argv, { cwd: where.cwd, signal: ctx.signal, timeoutMs: seconds * 1000, ...(ctx.live ? { onChunk: ctx.live } : {}), onTimeout: (child, printed) => { handedOn = ctx.jobs.adopt(child, title, printed).id; return true; } });
+    ctx.report?.({ code: r.code, truncated: r.output.trimEnd().length > MAX_OUTPUT, timedOut: r.timedOut && !r.adopted, ...(r.adopted ? { background: true } : {}) });
     const full = cleanOutput(r.output).trimEnd();
     // Whole output kept in a file (not in a conversation held to a folder, which may not read outside it).
     const saved = full.length > MAX_OUTPUT && !ctx.root ? spill(full) : undefined;
     const body = clip(full) + (saved ? `\n[the whole output is saved in ${saved}: read the part you need with Read]` : "");
     if (r.interrupted) return `${body}\n[interrupted]`;
-    if (r.timedOut) return `${body}\n[timed out after ${seconds}s and was killed]`;
+    if (r.adopted && handedOn) return `${body}${body ? "\n" : ""}[still running after ${seconds}s as ${handedOn}: BashOutput job_id "${handedOn}" shows what it prints next, KillShell stops it]`;
     return `${body}${body ? "\n" : ""}[exit ${r.code}${exitNote(command, r.code)}]`;
   },
 };
 
 const unknownJob = (id: string, jobs: { list(): { id: string }[] }): string => `Error: there is no job "${id}". ${jobs.list().length ? `Jobs: ${jobs.list().map((j) => j.id).join(", ")}.` : "No command is running in the background."}`;
 
+const age = (ms: number): string => (ms < 60_000 ? `${Math.max(1, Math.round(ms / 1000))} s` : ms < 3_600_000 ? `${Math.round(ms / 60_000)} min` : `${Math.round(ms / 3_600_000)} h`);
+
+function listJobs(jobs: Jobs, now: Date): string {
+  const all = jobs.list();
+  if (!all.length) return "No command is running in the background.";
+  return all.map((j) => `${j.id} ${j.status === "running" ? `running ${age(now.getTime() - j.startedAt)}` : `${j.status}${j.code !== null ? `, exit ${j.code}` : ""}`}: ${j.title}`).join("\n");
+}
+
 export const bashOutput: Tool = {
   name: "BashOutput",
   readOnly: true,
-  description: "Read what a background command has printed since you last read it, and whether it is still running. Set wait (seconds, at most 120) to wait until it prints something new or ends, instead of asking again and again.",
-  parameters: { type: "object", properties: { job_id: { type: "string" }, wait: { type: "number", description: "seconds to wait for new output or the end" } }, required: ["job_id"] },
+  description: "Read what a background command has printed since you last read it, and whether it is still running. Set wait (seconds, at most 120) to wait until it prints something new or ends, instead of asking again and again. Without job_id it lists the jobs.",
+  parameters: { type: "object", properties: { job_id: { type: "string" }, wait: { type: "number", description: "seconds to wait for new output or the end" }, until: { type: "string", description: "wait until this text has appeared" } } },
   offeredWhen: ({ jobs }) => jobs > 0,
   title: (a) => `Read output of ${str(a.job_id)}`,
   async run(a, ctx) {
     const id = str(a.job_id);
+    if (!id) return listJobs(ctx.jobs, new Date());
     const wait = Math.min(Math.max(0, num(a.wait, 0)), 120);
-    if (wait > 0) await ctx.jobs.waitFor(id, wait * 1000, ctx.signal);
+    const until = str(a.until);
+    if (wait > 0 || until) await ctx.jobs.waitFor(id, (wait || 30) * 1000, ctx.signal, until || undefined);
     const r = ctx.jobs.read(id);
     if (!r) return unknownJob(id, ctx.jobs);
-    const state = r.view.status === "running" ? "still running" : `${r.view.status}${r.view.code !== null ? `, exit ${r.view.code}` : ""}`;
+    const state = r.view.status === "running" ? `still running${r.ports.length ? `, listening on ${r.ports.join(", ")}` : ""}` : `${r.view.status}${r.view.code !== null ? `, exit ${r.view.code}` : ""}`;
     const body = clip(cleanOutput(r.output).trimEnd());
     return `${r.skipped ? `[${r.skipped} earlier characters were dropped]\n` : ""}${body || "(no new output)"}\n[${r.view.id}: ${state}]`;
   },
@@ -99,12 +119,12 @@ export const bashInput: Tool = {
 export const killShell: Tool = {
   name: "KillShell",
   readOnly: false,
-  description: "Stop a background command and everything it started.",
+  description: "Stop a background command and everything it started. It is asked to quit first and forced after a few seconds.",
   parameters: { type: "object", properties: { job_id: { type: "string" } }, required: ["job_id"] },
   offeredWhen: ({ jobs }) => jobs > 0,
   title: (a) => `Stop ${str(a.job_id)}`,
   async run(a, ctx) {
-    const id = str(a.job_id), v = ctx.jobs.stop(id);
-    return v ? `${v.id} is ${v.status === "running" ? "stopping" : v.status}.` : unknownJob(id, ctx.jobs);
+    const id = str(a.job_id), before = ctx.jobs.list().find((j) => j.id === id)?.status, v = ctx.jobs.stop(id, true);
+    return v ? `${v.id} is ${before === "running" ? "stopping" : v.status}.` : unknownJob(id, ctx.jobs);
   },
 };

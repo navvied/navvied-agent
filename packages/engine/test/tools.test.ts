@@ -123,12 +123,15 @@ describe("Bash", () => {
     expect(ok.trimEnd().endsWith("[exit 0]")).toBe(true);
     expect(await tool("Bash").run({ command: "echo bad >&2; exit 3" }, ctx(d))).toMatch(/bad[\s\S]*\[exit 3\]/);
   });
-  test("a timeout kills the command and says so", async () => {
+  test("a timeout does not kill the command: it goes on as a job, and the answer says which", async () => {
     const d = workdir();
     const t0 = Date.now();
-    const out = await tool("Bash").run({ command: "sleep 30", timeout: 1 }, ctx(d));
-    expect(out).toMatch(/timed out after 1s/);
+    const c = ctx(d);
+    const out = await tool("Bash").run({ command: "sleep 30", timeout: 1 }, c);
+    expect(out).toBe('[still running after 1s as job1: BashOutput job_id "job1" shows what it prints next, KillShell stops it]');
+    expect(c.jobs.list()).toMatchObject([{ id: "job1", status: "running" }]);
     expect(Date.now() - t0).toBeLessThan(5000);
+    c.jobs.stopAll();
   });
   test("aborting kills the whole process group (children included)", async () => {
     const d = workdir();

@@ -127,6 +127,23 @@ describe("the engine with a connected program", () => {
     r.engine.close();
     r.cleanup();
   });
+  test.skipIf(process.platform === "win32")("closing the engine while a program is still being connected stops that program, and one that connects after is stopped on arrival", async () => {
+    const marker = `navvied-mcp-marker-${Math.random().toString(36).slice(2)}`;
+    const alive = (): boolean => Bun.spawnSync(["pgrep", "-f", marker]).stdout.toString().trim() !== "";
+    const r = rig(() => ({ text: "x" }));
+    r.engine.loadTools(connectMcp({ quiet: { command: process.execPath, args: [FAKE, marker], env: { FAKE_MODE: "silent" } } }, false, r.engine.closing));
+    await until(alive);
+    r.engine.close();
+    await until(() => !alive(), 3000);
+    const late = rig(() => ({ text: "x" }));
+    const marker2 = `${marker}-late`;
+    late.engine.close();
+    late.engine.loadTools(connectMcp({ notes: { command: process.execPath, args: [FAKE, marker2] } }));
+    await Bun.sleep(1500);
+    expect(Bun.spawnSync(["pgrep", "-f", marker2]).stdout.toString().trim()).toBe("");
+    r.cleanup();
+    late.cleanup();
+  });
   test("tools are not added twice", () => {
     const r = rig(() => ({ text: "x" }));
     const tool: Tool = { name: "t", readOnly: true, description: "", parameters: { type: "object", properties: {} }, title: () => "t", run: async () => "ok" };

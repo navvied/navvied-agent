@@ -154,11 +154,12 @@ export class McpClient implements McpLike {
   }
 
   /** Starts the server and completes the handshake, or throws with the reason. */
-  static async start(name: string, config: McpServerConfig): Promise<McpClient> {
+  static async start(name: string, config: McpServerConfig, started?: (client: McpClient) => void): Promise<McpClient> {
     if (!config.command) throw new Error("a connected program needs a command or an address");
     const [program, ...args] = launch([config.command, ...(config.args ?? [])]);
     const child = spawn(program!, args, { cwd: config.cwd, env: { ...process.env, ...config.env }, detached: usesProcessGroups(), windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     const client = new McpClient(name, child);
+    started?.(client);
     try {
       await client.#request("initialize", { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: "navvied", version: "1" } }, HANDSHAKE_MS);
       client.#notify("notifications/initialized");
@@ -267,15 +268,21 @@ export interface McpConnection {
   close(): void;
 }
 
-/** Starts every configured server at once. One that fails does not stop the others. */
-export async function connectMcp(servers: Record<string, McpServerConfig>, small = false): Promise<McpConnection> {
+/**
+ * Starts every configured server at once. One that fails does not stop the others. When `until` aborts (the engine was closed),
+ * every program already started is stopped, also one still being connected: it would otherwise run on with nobody to close it.
+ */
+export async function connectMcp(servers: Record<string, McpServerConfig>, small = false, until?: AbortSignal): Promise<McpConnection> {
   const clients: McpLike[] = [];
+  let over = until?.aborted ?? false;
+  until?.addEventListener("abort", () => { over = true; clients.forEach((c) => c.close()); }, { once: true });
+  const track = (c: McpLike): void => { clients.push(c); if (over) c.close(); };
   const tools: Tool[] = [];
   const problems: { server: string; reason: string }[] = [];
   await Promise.all(Object.entries(servers).map(async ([name, config]) => {
     try {
-      const client = config.url ? await McpHttpClient.start(name, config) : await McpClient.start(name, config);
-      clients.push(client);
+      const client = config.url ? await McpHttpClient.start(name, config) : await McpClient.start(name, config, track);
+      if (config.url) track(client);
       const seen = new Set<string>();
       for (const info of await client.tools()) {
         const tool = toTool(client, info, small);
