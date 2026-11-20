@@ -5,11 +5,11 @@ import { join } from "node:path";
 import { Checkpoints, Engine, type SessionStore, type Tool } from "../src/index.ts";
 import { cleanupAll, prompt, rig, ScriptedProvider, type Step } from "./helpers.ts";
 import { stopAllJobs } from "../src/index.ts";
-import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const dirs: string[] = [];
 const tmp = (): string => { const d = realpathSync(mkdtempSync(join(tmpdir(), "navvied-hard-"))); dirs.push(d); return d; };
-afterAll(hook("hardening removes what it made", async () => { await stopAllJobs(); await cleanupAll(); await removeTrees(dirs); }));
+afterAll(hook("hardening removes what it made", async () => { await stopAllJobs(); await cleanupAll(); await removeTrees(dirs); }), HOOK_MS);
 
 const toolRoles = (r: ReturnType<typeof rig>, call: number) => r.provider.requests[call]!.messages.map((m) => m.role);
 

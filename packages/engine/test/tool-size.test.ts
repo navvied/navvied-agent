@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { defaultTools } from "../src/index.ts";
-import { cleanupAll, prompt, rig } from "./helpers.ts";
+import { HOOK_MS, cleanupAll, prompt, rig } from "./helpers.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 
 describe("the weight of the tools a small model is shown", () => {
   test("Bash, the one tool always offered, takes at most 600 characters", () => {

@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DeviceStore } from "../src/devices.ts";
 import { createPairing, newCode, type Decision } from "../src/pairing.ts";
-import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const dirs: string[] = [];
 const temp = (): string => { const d = mkdtempSync(join(tmpdir(), "navvied-pair-")); dirs.push(d); return d; };
-afterAll(hook("pairing removes what it made", async () => { await removeTrees(dirs);; }));
+afterAll(hook("pairing removes what it made", async () => { await removeTrees(dirs);; }), HOOK_MS);
 
 const SITE = "https://navvied.com";
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 10));

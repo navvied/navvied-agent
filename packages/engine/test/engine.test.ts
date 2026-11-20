@@ -4,9 +4,9 @@ import { join } from "node:path";
 import type { EngineEvent } from "@navvied/protocol";
 import { FileSessionStore, MemorySessionStore } from "../src/index.ts";
 import type { Message, ModelRequest } from "../src/types.ts";
-import { cleanupAll, prompt, rig, until, wait, type Step } from "./helpers.ts";
+import { HOOK_MS, cleanupAll, prompt, rig, until, wait, type Step } from "./helpers.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 
 const lastUser = (req: ModelRequest): string => {
   for (let i = req.messages.length - 1; i >= 0; i--) {

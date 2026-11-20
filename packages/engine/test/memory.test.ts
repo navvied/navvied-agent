@@ -5,11 +5,11 @@ import { join } from "node:path";
 import { MEMORY_FILE, loadInstructions, memoryText, readNotes, remember } from "../src/index.ts";
 import { cleanupAll, prompt, rig } from "./helpers.ts";
 import { stopAllJobs } from "../src/index.ts";
-import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const dirs: string[] = [];
 const temp = (): string => { const d = mkdtempSync(join(tmpdir(), "navvied-memory-")); dirs.push(d); return d; };
-afterAll(hook("memory removes what it made", async () => { await stopAllJobs(); await removeTrees(dirs); await cleanupAll(); }));
+afterAll(hook("memory removes what it made", async () => { await stopAllJobs(); await removeTrees(dirs); await cleanupAll(); }), HOOK_MS);
 
 const paths = () => { const root = temp(); return { user: join(root, "config", MEMORY_FILE), project: join(root, "project", ".navvied", MEMORY_FILE) }; };
 

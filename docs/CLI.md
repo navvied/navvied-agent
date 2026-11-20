@@ -92,7 +92,11 @@ The `Remember` tool keeps one short fact for later: in `.navvied/memory.md` of t
 
 ## Searching the web
 
-The agent can search the web with `WebSearch`. By default it reads a public search page. To use your own search server (one that answers `?q=…&format=json`, such as SearXNG), set `NAVVIED_SEARCH_URL`. When the public page asks for a human check, the tool says so instead of failing silently.
+The agent can search the web with `WebSearch` and read a page with `WebFetch`. By default search reads a public search page; when that asks for a human check it tries the engine's lighter page once, then says so. To use your own search server (one that answers `?q=…&format=json`, such as SearXNG), set `NAVVIED_SEARCH_URL`.
+
+`WebFetch` gives a page as text: the main content, headings, lists, code, tables, and the page's links as `[n]` with their addresses at the end. A long page ends with the call that reads on (`offset`); the text is kept 15 minutes, so reading on costs no second visit. PDFs are read; pictures and other files are refused with a sentence. Redirects on the same site are followed, another site is named and left to the model. Every name is looked up and every address must be public, on each hop; a name that does not resolve is refused. The page comes under one line that says it is data, not instructions.
+
+An address the model made up is asked about (in Ask and Plan modes; refused in Edits; Auto and Bypass go through): only addresses the person wrote, a search returned or a page that was read are fetched without asking, and allowing a site remembers the site for the session. `NAVVIED_ALLOW_PRIVATE_NETWORK=1` lets the agent reach local and private addresses (for a test server of your own).
 
 ## Checkpoints
 

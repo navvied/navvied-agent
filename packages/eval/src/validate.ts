@@ -1,6 +1,6 @@
 import { rmSync } from "node:fs";
 import type { Task } from "./task.ts";
-import { applySolution, check, killProcesses, leftovers, missingPrograms, newSecret, prepare, protectedHashes, shell } from "./workspace.ts";
+import { applySolution, check, killProcesses, leftovers, missingPrograms, newSecret, prepare, protectedHashes, scriptEnv, shell } from "./workspace.ts";
 
 export interface Validation { task: string; status: "ok" | "fail" | "skipped"; problems: string[] }
 
@@ -11,7 +11,7 @@ export interface Validation { task: string; status: "ok" | "fail" | "skipped"; p
 export async function validateTask(task: Task): Promise<Validation> {
   const missing = missingPrograms(task);
   if (missing.length) return { task: task.id, status: "skipped", problems: [`needs ${missing.join(", ")}`] };
-  const env = { BENCH_SECRET: newSecret() };
+  const env = scriptEnv({ BENCH_SECRET: newSecret() });
   const dir = prepare(task);
   const problems: string[] = [];
   try {

@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { cleanupAll, prompt, rig, until } from "./helpers.ts";
+import { HOOK_MS, cleanupAll, prompt, rig, until } from "./helpers.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 
 /** A turn that takes a second (a command that sleeps), so there is time to send more while it runs. */
 const busy = (req: { messages: { role: string }[] }) => (req.messages[req.messages.length - 1]?.role === "tool" ? { text: "an answer" } : { calls: [{ name: "Bash", args: { command: "sleep 1" } }] });

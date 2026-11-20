@@ -1,5 +1,6 @@
 import type { Tool } from "../types.ts";
 import { clip, num, str } from "./util.ts";
+import { fixSearchArgs } from "./web-names.ts";
 import { viaProxy } from "./web-proxy.ts";
 
 export interface SearchHit { title: string; url: string; snippet: string }
@@ -28,6 +29,20 @@ export function parseHtmlResults(html: string): SearchHit[] {
   return hits;
 }
 
+/** Results from the lighter page of the same engine, tried once when the full page asks for a human check. */
+export function parseLiteResults(html: string): SearchHit[] {
+  const hits: SearchHit[] = [];
+  const link = /<a[^>]*href=["']([^"']+)["'][^>]*class=["']result-link["'][^>]*>([\s\S]*?)<\/a>|<a[^>]*class=["']result-link["'][^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/g;
+  for (let m = link.exec(html); m; m = link.exec(html)) {
+    const next = html.indexOf("result-link", m.index + m[0].length);
+    const section = html.slice(m.index, next < 0 ? undefined : next);
+    const snippet = /class=["']result-snippet["'][^>]*>([\s\S]*?)<\/td>/.exec(section)?.[1] ?? "";
+    const url = target(m[1] ?? m[3]!);
+    if (/^https?:\/\//.test(url)) hits.push({ title: text(m[2] ?? m[4]!), url, snippet: text(snippet) });
+  }
+  return hits;
+}
+
 /** Results from a search server that answers in JSON, such as SearXNG. */
 export function parseJsonResults(body: unknown): SearchHit[] {
   const list = (body as { results?: unknown }).results;
@@ -38,19 +53,24 @@ export function parseJsonResults(body: unknown): SearchHit[] {
   });
 }
 
+const short = (s: string): string => (s.length > 200 ? `${s.slice(0, 199).trimEnd()}…` : s);
+
 const format = (query: string, hits: SearchHit[]): string =>
-  hits.length ? clip(`Results for "${query}":\n\n${hits.map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}${h.snippet ? `\n   ${h.snippet}` : ""}`).join("\n\n")}`) : `No results for "${query}".`;
+  hits.length ? clip(`Results for "${query}":\n\n${hits.map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}${h.snippet ? `\n   ${short(h.snippet)}` : ""}`).join("\n\n")}`) : `No results for "${query}". Try other words: ${JSON.stringify({ query: `${query.split(/\s+/).slice(0, 3).join(" ")} documentation` })}`;
+
+const HUMAN_CHECK = "Error: the search engine asked for a human check, so the search could not run. Do not search again; say so to the user, who can set NAVVIED_SEARCH_URL to a search server that answers in JSON.";
 
 export const webSearch: Tool = {
   name: "WebSearch",
   readOnly: true,
   offeredWhen: ({ userText, chat }) => chat === true || /\b(search|internet|online|on the web|latest|news|price|look up|google)\b/i.test(userText),
-  description: "Search the web: titles, addresses and short summaries.",
+  description: "Search the web: links and summaries.",
   parameters: { type: "object", properties: { query: { type: "string" }, max_results: { type: "number" } }, required: ["query"] },
+  fixArgs: fixSearchArgs,
   title: (a) => `Search the web for ${str(a.query)}`,
   async run(a, ctx) {
     const query = str(a.query).trim();
-    if (!query) return "Error: the query is empty.";
+    if (!query) return `Error: the query is empty. Retry: WebSearch ${JSON.stringify({ query: "words to look for" })}`;
     const limit = Math.min(Math.max(1, Math.round(num(a.max_results, 5))), 10);
     const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(20_000)]);
     const configured = ctx.search?.url;
@@ -70,7 +90,11 @@ export const webSearch: Tool = {
       if (!res.ok && res.status !== 202) return `Error: the search page answered ${res.status}.`;
       const html = await res.text();
       const hits = parseHtmlResults(html);
-      if (!hits.length && (res.status === 202 || /anomaly|captcha|challenge/i.test(html))) return "Error: the search engine asked for a human check, so the search could not run. Try again later, or ask the user to set NAVVIED_SEARCH_URL to a search server.";
+      if (!hits.length && (res.status === 202 || /anomaly|captcha|challenge/i.test(html))) {
+        const lite = await fetch(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`, { signal, headers: { "user-agent": "Mozilla/5.0 (compatible; navvied-agent)" } }).catch(() => undefined);
+        const found = lite && (lite.ok || lite.status === 202) ? parseLiteResults(await lite.text()) : [];
+        return found.length ? format(query, found.slice(0, limit)) : HUMAN_CHECK;
+      }
       return format(query, hits.slice(0, limit));
     } catch (e) { return `Error: ${e instanceof Error ? e.message : String(e)}`; }
   },

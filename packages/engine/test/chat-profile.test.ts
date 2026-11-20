@@ -2,12 +2,12 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cleanupAll, prompt, rig } from "./helpers.ts";
+import { HOOK_MS, cleanupAll, prompt, rig } from "./helpers.ts";
 import { place } from "../src/tools/util.ts";
 import { profileTools } from "../src/profiles.ts";
 import { defaultTools } from "../src/tools/index.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 
 const names = (r: ReturnType<typeof rig>): string[] => r.provider.requests[0]!.tools.map((t) => t.name).sort();
 

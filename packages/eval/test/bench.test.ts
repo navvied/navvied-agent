@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { readFileSync, writeFileSync } from "node:fs";
 import { main } from "../src/main.ts";
 import { loadTasks, parseAdapter, runTask, startMeter, startMock, type Behaviour, type Meter, type Mock, type Task } from "../src/index.ts";
-import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const TASKS = join(import.meta.dir, "../tasks");
 const CLI = join(import.meta.dir, "../../cli/src/main.ts");
@@ -16,7 +16,7 @@ const tasks = loadTasks(TASKS);
 let behaviour: Behaviour = "oracle";
 let mock: Mock, meter: Meter;
 beforeAll(() => { mock = startMock(tasks, () => behaviour); meter = startMeter(mock.url); });
-afterAll(hook("bench removes what it made", async () => { meter.stop(); mock.stop(); await removeTree(home); }));
+afterAll(hook("bench removes what it made", async () => { meter.stop(); mock.stop(); await removeTree(home); }), HOOK_MS);
 
 const world = { HOME: home, XDG_STATE_HOME: home, XDG_CONFIG_HOME: home, NAVVIED_MODEL: "scripted", NAVVIED_WINDOW: "100000" };
 const run = (task: Task, how: Behaviour) => { behaviour = how; mock.requests.length = 0; return runTask(task, { command: ["bun", CLI], label: `mock:${how}`, env: world, meter, agentEnv: (base) => ({ NAVVIED_BASE_URL: base }) }); };
@@ -34,8 +34,10 @@ describe("every task can be solved by an agent run, not only by the validator", 
       const r = await run(task, "oracle");
       expect(r, task.id).toMatchObject({ passed: true, reason: "solved" });
       // Whatever the task says, the first request stays light: a task is never a reason to send the long text about the program.
-      expect(r.prompt!.systemChars + r.prompt!.toolChars, task.id).toBeLessThanOrEqual(3000);
-      expect(r.prompt!.tools, task.id).toBeLessThanOrEqual(6);
+      // A web task also offers the two web tools (about 440 characters, and a seventh and eighth tool); the one that says a browser can read what a plain fetch cannot also offers the browser, whose text is the longest.
+      const web = task.kind === "web";
+      expect(r.prompt!.systemChars + r.prompt!.toolChars, task.id).toBeLessThanOrEqual(task.id === "web-script-page" ? 4500 : web ? 3400 : 3000);
+      expect(r.prompt!.tools, task.id).toBeLessThanOrEqual(web ? 8 : 6);
     }
   }, 240_000);
 });

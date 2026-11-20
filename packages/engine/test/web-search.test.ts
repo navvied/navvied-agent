@@ -63,18 +63,31 @@ describe("the WebSearch tool", () => {
     } finally { await server.stop(true); }
   });
   test("an empty query, a server error and a search page that wants a human are said plainly", async () => {
-    expect(await tool.run({ query: "  " }, ctx())).toBe("Error: the query is empty.");
+    expect(await tool.run({ query: "  " }, ctx())).toBe('Error: the query is empty. Retry: WebSearch {"query":"words to look for"}');
     const server = Bun.serve({ port: 0, fetch: () => new Response("no", { status: 503 }) });
     try { expect(await tool.run({ query: "x" }, ctx({ search: { url: `http://127.0.0.1:${server.port}/s` } }))).toBe("Error: the search server answered 503."); } finally { await server.stop(true); }
     const real = globalThis.fetch;
     const asked: string[] = [];
     globalThis.fetch = (async (url: string) => { asked.push(String(url)); return new Response("<html>Unfortunately, bots use DuckDuckGo too. anomaly-modal challenge</html>", { status: 202 }); }) as unknown as typeof fetch;
     try { expect(await tool.run({ query: "x y" }, ctx())).toContain("asked for a human check"); } finally { globalThis.fetch = real; }
-    expect(asked).toEqual(["https://html.duckduckgo.com/html/?q=x%20y"]);
+    // The lighter page of the same engine is tried once before giving up.
+    expect(asked).toEqual(["https://html.duckduckgo.com/html/?q=x%20y", "https://lite.duckduckgo.com/lite/?q=x%20y"]);
+  });
+  test("when the full page asks for a human check, the lighter page of the engine answers instead", async () => {
+    const real = globalThis.fetch;
+    const lite = `<table><tr><td><a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Fa&rut=x" class='result-link'>Example A</a></td></tr><tr><td class='result-snippet'>About <b>A</b></td></tr>
+      <tr><td><a class='result-link' href="https://example.org/b">Example B</a></td></tr><tr><td class='result-snippet'>${"long ".repeat(80)}</td></tr></table>`;
+    globalThis.fetch = (async (url: string) => (String(url).includes("lite.") ? new Response(lite) : new Response("<html>anomaly challenge</html>", { status: 202 }))) as unknown as typeof fetch;
+    try {
+      const out = await tool.run({ query: "x" }, ctx());
+      expect(out).toContain("1. Example A\n   https://example.org/a\n   About A");
+      expect(out).toContain("2. Example B\n   https://example.org/b");
+      expect(out.split("\n").every((l) => l.length <= 230)).toBe(true);
+    } finally { globalThis.fetch = real; }
   });
   test("no results is an answer, not an error", async () => {
     const real = globalThis.fetch;
     globalThis.fetch = (async () => new Response("<html></html>")) as unknown as typeof fetch;
-    try { expect(await tool.run({ query: "zzz" }, ctx())).toBe('No results for "zzz".'); } finally { globalThis.fetch = real; }
+    try { expect(await tool.run({ query: "zzz" }, ctx())).toBe('No results for "zzz". Try other words: {"query":"zzz documentation"}'); } finally { globalThis.fetch = real; }
   });
 });

@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { posix, win32 } from "node:path";
 import { Rules, hardBlock, parseRules, riskOf, splitCommand } from "../src/index.ts";
-import { cleanupAll, prompt, rig, until } from "./helpers.ts";
+import { HOOK_MS, cleanupAll, prompt, rig, until } from "./helpers.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 
 const cwd = "/work/project";
 const rules = (set: { allow?: string[]; ask?: string[]; deny?: string[] }) => new Rules({ allow: [], ask: [], deny: [], ...set }, cwd);

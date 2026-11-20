@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import type { Effort, ModelInfo } from "@navvied/protocol";
 import type { ModelSwitch } from "../src/index.ts";
-import { ScriptedProvider, cleanupAll, prompt, rig } from "./helpers.ts";
+import { HOOK_MS, ScriptedProvider, cleanupAll, prompt, rig } from "./helpers.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 
 const MODELS: ModelInfo[] = [{ id: "big", name: "Big Model", brand: "one", badge: "MAX" }, { id: "small", name: "Small Model" }];
 

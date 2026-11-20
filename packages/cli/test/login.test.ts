@@ -7,10 +7,10 @@ import { clearAccount, hostedEntries, readAccount, readHostedModels, writeAccoun
 import { accountPath, hostedModelsPath, loadConfig, resolveModel } from "../src/config.ts";
 import type { Choice, Frame, IO } from "../src/io.ts";
 import { login, signOutScreen } from "../src/login-ui.ts";
-import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-login-"));
-afterAll(hook("login removes what it made", async () => { await removeTree(dir); }));
+afterAll(hook("login removes what it made", async () => { await removeTree(dir); }), HOOK_MS);
 let n = 0;
 const fresh = (): string => { const d = join(dir, `c${n++}`); mkdirSync(d, { recursive: true }); return d; };
 

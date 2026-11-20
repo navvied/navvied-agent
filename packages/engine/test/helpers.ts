@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Command, EngineEvent } from "@navvied/protocol";
 import { Engine, stopAllJobs, type EngineOptions } from "../src/index.ts";
-import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 import { estimateTokens } from "../src/context.ts";
 import type { ModelRequest, Provider, StreamHandlers, ToolCall } from "../src/types.ts";
 
@@ -70,6 +70,7 @@ export interface Rig {
 const made: string[] = [];
 const open: Engine[] = [];
 /** Closes the engines that were made, waits until what they started has exited, then removes their folders. */
+export { HOOK_MS };
 export const cleanupAll = hook("the engine tests remove their folders", async () => {
   await Promise.all(open.splice(0).map((e) => e.shutdown()));
   await stopAllJobs();

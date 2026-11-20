@@ -5,10 +5,10 @@ import { join } from "node:path";
 import { loadAgents, parseAgent } from "../src/index.ts";
 import { cleanupAll, prompt, rig } from "./helpers.ts";
 import { stopAllJobs } from "../src/index.ts";
-import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-agents-"));
-afterAll(hook("agents removes what it made", async () => { await stopAllJobs(); await removeTree(dir); await cleanupAll(); }));
+afterAll(hook("agents removes what it made", async () => { await stopAllJobs(); await removeTree(dir); await cleanupAll(); }), HOOK_MS);
 
 const reviewer = "---\nname: reviewer\ndescription: Reviews a change for bugs\ntools: Read, Grep\n---\nYou review code. Be strict.\n";
 

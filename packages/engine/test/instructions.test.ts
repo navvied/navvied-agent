@@ -6,11 +6,11 @@ import { INSTRUCTION_FILE, loadInstructions } from "../src/index.ts";
 import { systemPrompt } from "../src/prompt.ts";
 import { cleanupAll, prompt, rig } from "./helpers.ts";
 import { stopAllJobs } from "../src/index.ts";
-import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const dirs: string[] = [];
 const tmp = () => { const d = realpathSync(mkdtempSync(join(tmpdir(), "navvied-instr-"))); dirs.push(d); return d; };
-afterAll(hook("instructions removes what it made", async () => { await stopAllJobs(); await cleanupAll(); await removeTrees(dirs); }));
+afterAll(hook("instructions removes what it made", async () => { await stopAllJobs(); await cleanupAll(); await removeTrees(dirs); }), HOOK_MS);
 const put = (dir: string, text: string) => { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, INSTRUCTION_FILE), text); };
 
 describe("loadInstructions", () => {

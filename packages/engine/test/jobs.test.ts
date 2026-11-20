@@ -8,10 +8,10 @@ import { toolsFor } from "../src/permissions.ts";
 import type { Tool, ToolContext } from "../src/types.ts";
 import { until, wait } from "./helpers.ts";
 import { stopAllJobs } from "../src/index.ts";
-import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-jobs-"));
-afterAll(hook("jobs removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }));
+afterAll(hook("jobs removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }), HOOK_MS);
 
 const node = (code: string): string[] => [process.execPath, "-e", code];
 const tool = (name: string): Tool => defaultTools().find((t) => t.name === name)!;

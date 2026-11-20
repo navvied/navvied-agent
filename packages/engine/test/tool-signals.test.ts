@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { Rules } from "../src/index.ts";
-import { cleanupAll, prompt, rig, until } from "./helpers.ts";
+import { HOOK_MS, cleanupAll, prompt, rig, until } from "./helpers.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 
 type Tool = Extract<import("@navvied/protocol").EngineEvent, { ev: "tool" }>;
 const scripted = (name: string, args: object) => (req: { messages: { role: string }[] }) => (req.messages[req.messages.length - 1]?.role === "tool" ? { text: "done" } : { calls: [{ name, args }] });

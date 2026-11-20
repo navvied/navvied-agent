@@ -24,6 +24,16 @@ describe("what a test removes after itself", () => {
     expect(lines).toEqual(["::error title=hook failed: jobs.test removes its folder::Error EBUSY: resource busy or locked, rmdir 'C:\\\\x'"]);
   });
 
+  test("a hook that is still running when its time is up says its own name instead of being cut off as \"(unnamed)\"", async () => {
+    const lines: string[] = [];
+    const log = console.log, error = console.error;
+    console.log = (...a: unknown[]) => { lines.push(a.join(" ")); };
+    console.error = () => undefined;
+    try { await expect(hook("server.test stops its server", () => new Promise(() => undefined), 30)()).rejects.toThrow("still running after 0.03 s"); }
+    finally { console.log = log; console.error = error; }
+    expect(lines).toEqual(["::error title=hook failed: server.test stops its server::Error: still running after 0.03 s"]);
+  });
+
   test("a hook that works says nothing", async () => {
     const lines: string[] = [];
     const log = console.log;

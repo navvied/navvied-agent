@@ -3,10 +3,10 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Vault } from "../src/redact.ts";
-import { cleanupAll, prompt, rig, until } from "./helpers.ts";
+import { HOOK_MS, cleanupAll, prompt, rig, until } from "./helpers.ts";
 import type { ModelRequest } from "../src/types.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 const KEY = "k9Zq-3vXw_7LmPa2Rt8Yc4";
 const LIVE = "sk-liveabcdefghijklmnop1234";
 const PASS = "hunter2hunter2";

@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { cleanupAll, prompt, rig } from "./helpers.ts";
+import { HOOK_MS, cleanupAll, prompt, rig } from "./helpers.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 const lastIsTool = (req: { messages: { role: string }[] }): boolean => req.messages.at(-1)?.role === "tool";
 const calls = (...c: { name: string; args: object }[]) => (req: { messages: { role: string }[] }) => (lastIsTool(req) ? { text: "done" } : { calls: c });
 const outputs = (r: ReturnType<typeof rig>) => r.of("tool").filter((e) => e.status !== "running").map((e) => e.output ?? "");

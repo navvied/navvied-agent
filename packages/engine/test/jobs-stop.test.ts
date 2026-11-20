@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { Jobs, stopAllJobs } from "../src/index.ts";
-import { cleanupAll, prompt, rig } from "./helpers.ts";
+import { HOOK_MS, cleanupAll, prompt, rig, until } from "./helpers.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 
 describe("closing what an engine started, and waiting until it has really gone", () => {
   const sleeper = (): string[] => process.platform === "win32" ? ["ping", "-n", "30", "127.0.0.1"] : ["sleep", "30"];
@@ -32,6 +32,19 @@ describe("closing what an engine started, and waiting until it has really gone",
     expect(b.list()[0]!.status).toBe("stopped");
     b.close();
   }, 15_000);
+
+  test.skipIf(process.platform === "win32" || !Bun.which("setsid"))("stopped() also waits for the end to be reported: a program's output can stay open after it has exited", async () => {
+    const events: { status: string }[] = [];
+    const jobs = new Jobs((e) => { if (e.ev === "job") events.push(e); });
+    // A helper that left the program's group keeps the output open, so the end is only known once the stop gives up on it.
+    const { id } = jobs.start(["sh", "-c", "setsid sleep 30 & echo helper started; exec sleep 30"], process.cwd(), "holds its output");
+    let seen = "";
+    await until(() => { seen += jobs.read(id)!.output; return seen.includes("helper started"); });
+    jobs.close();
+    await jobs.stopped();
+    expect(events.at(-1)!.status).toBe("stopped");
+    await stopAllJobs();
+  }, 20_000);
 
   test("an engine's shutdown() closes it and waits for its commands, so its folder can be removed", async () => {
     const r = rig((req) => (req.messages.at(-1)?.role === "tool" ? { text: "done" } : { calls: [{ name: "Bash", args: { command: process.platform === "win32" ? "ping -n 30 127.0.0.1" : "sleep 30", run_in_background: true } }] }));

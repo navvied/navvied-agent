@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REFUSED, type ModelInfo } from "@navvied/protocol";
 import type { ModelSwitch } from "../src/index.ts";
-import { ScriptedProvider, cleanupAll, prompt, rig } from "./helpers.ts";
+import { HOOK_MS, ScriptedProvider, cleanupAll, prompt, rig } from "./helpers.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 
 const attachments = mkdtempSync(join(tmpdir(), "navvied-files-closed-"));
 const file = { name: "n.txt", mime: "text/plain", data: Buffer.from("hello").toString("base64") };

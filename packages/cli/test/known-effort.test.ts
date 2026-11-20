@@ -6,10 +6,10 @@ import type { Effort } from "@navvied/protocol";
 import { loadConfig } from "../src/config.ts";
 import { resolved } from "../src/create.ts";
 import { knownEffort } from "../src/presets.ts";
-import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-effort-"));
-afterAll(hook("known-effort removes what it made", () => removeTree(dir)));
+afterAll(hook("known-effort removes what it made", () => removeTree(dir)), HOOK_MS);
 
 describe("the effort levels of the services that document them", () => {
   test("Claude: five levels on the models of the 5 family and on Opus 4.8 and 4.7, four (no xhigh) on 4.6 and Mythos Preview, three on Opus 4.5, none on models without the setting", () => {

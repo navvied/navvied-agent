@@ -6,10 +6,10 @@ import { Jobs, defaultTools } from "../src/index.ts";
 import { portsIn } from "../src/jobs.ts";
 import type { ToolContext } from "../src/types.ts";
 import { stopAllJobs } from "../src/index.ts";
-import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-terminal-tools-"));
-afterAll(hook("terminal removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }));
+afterAll(hook("terminal removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }), HOOK_MS);
 const tool = (name: string) => defaultTools().find((t) => t.name === name)!;
 const rig = (extra: Partial<ToolContext> = {}) => {
   const events: { ev: string; status?: string }[] = [];

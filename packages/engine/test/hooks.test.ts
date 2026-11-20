@@ -5,10 +5,10 @@ import { join, sep } from "node:path";
 import { commandHooks } from "../src/index.ts";
 import { cleanupAll, prompt, rig, until } from "./helpers.ts";
 import { stopAllJobs } from "../src/index.ts";
-import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-hooks-"));
-afterAll(hook("hooks removes what it made", async () => { await stopAllJobs(); await removeTree(dir); await cleanupAll(); }));
+afterAll(hook("hooks removes what it made", async () => { await stopAllJobs(); await removeTree(dir); await cleanupAll(); }), HOOK_MS);
 
 // Forward slashes: on Windows the hook runs in Git Bash, which takes a word for a program's path only when it has a slash.
 const slashed = (p: string): string => p.replaceAll(sep, "/");
