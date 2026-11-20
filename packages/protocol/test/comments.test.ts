@@ -1,17 +1,12 @@
 import { expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { relative } from "node:path";
+import { ROOT, repoFiles } from "./repo-files.ts";
 
-const ROOT = resolve(import.meta.dir, "../../..");
-const SKIP = new Set(["node_modules", ".worktrees", ".git", "dist", "bun.lock", "bun.lockb", "comments.test.ts"]);
+const SKIP = new Set(["bun.lock", "bun.lockb", "comments.test.ts"]);
 
-function* sources(dir: string): Generator<string> {
-  for (const name of readdirSync(dir)) {
-    if (SKIP.has(name)) continue;
-    const path = join(dir, name);
-    if (statSync(path).isDirectory()) yield* sources(path);
-    else if (/\.(ts|json|md)$/.test(name)) yield path;
-  }
+function* sources(): Generator<string> {
+  for (const p of repoFiles(ROOT, SKIP)) if (/\.(ts|json|md)$/.test(p)) yield p;
 }
 
 const RULES: [string, RegExp][] = [
@@ -23,7 +18,7 @@ const RULES: [string, RegExp][] = [
 
 test("source files carry no decorative dividers, commented-out code, stray markers or trailing whitespace", () => {
   const hits: string[] = [];
-  for (const file of sources(ROOT)) {
+  for (const file of sources()) {
     if (file.endsWith(".md")) continue;
     readFileSync(file, "utf8").split("\n").forEach((line, i) => {
       for (const [name, rule] of RULES) if (rule.test(line)) hits.push(`${relative(ROOT, file)}:${i + 1}: ${name}`);
@@ -34,7 +29,7 @@ test("source files carry no decorative dividers, commented-out code, stray marke
 
 test("a comment never merely restates the line it sits on", () => {
   const hits: string[] = [];
-  for (const file of sources(ROOT)) {
+  for (const file of sources()) {
     if (!file.endsWith(".ts")) continue;
     const lines = readFileSync(file, "utf8").split("\n");
     lines.forEach((line, i) => {

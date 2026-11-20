@@ -1,4 +1,5 @@
 import { loginStoreFor } from "./logins.ts";
+import type { Effort } from "@navvied/protocol";
 import type { ModelEntry } from "./config.ts";
 import { guestModelsPath } from "./config.ts";
 import { DEFAULT_SERVER, GUEST_PREFIX, guestEntries, writeHostedModels } from "./account.ts";
@@ -600,3 +601,26 @@ export const PRESETS: Preset[] = [
 
 /** The files a project may keep its standing instructions in. NAVVIED.md first; the others are read when it is absent, so projects set up for other agents work as they are. */
 export const INSTRUCTION_FILE_NAMES: readonly string[] = ["NAVVIED.md", "AGENTS.md", "CLAUDE.md"];
+
+/**
+ * The effort levels a service takes, and where its request wants them, for the services whose own documentation says so. Left out when it
+ * does not: a model with no levels listed shows only Auto, and a level that was never promised is never sent. Sources (read 2026-11-20):
+ * Anthropic, platform.claude.com/docs/en/build-with-claude/effort (per-model levels; `output_config.effort` in the messages API);
+ * DeepSeek, api-docs.deepseek.com/guides/thinking_mode (`reasoning_effort` low, high, max);
+ * OpenRouter, openrouter.ai/docs/use-cases/reasoning-tokens (`reasoning.effort`: max, xhigh, high, medium, low, minimal, none).
+ * OpenAI's own page says the levels depend on the model and lists them for only some of its newest ones, so none are listed for it.
+ */
+export function knownEffort(entry: { baseUrl?: string; model?: string; signIn?: { provider: string } }): { efforts: Effort[]; field?: "reasoning" } | undefined {
+  let host = "";
+  try { host = new URL(entry.baseUrl ?? "").hostname; } catch { /* not an address */ }
+  const model = entry.model ?? "";
+  if (host === "api.anthropic.com" || entry.signIn?.provider === "claude") {
+    if (/^claude-(fable|mythos|opus|sonnet|haiku)-5/.test(model) || /^claude-opus-4-[78]/.test(model)) return { efforts: ["low", "medium", "high", "xhigh", "max"] };
+    if (/^claude-(opus|sonnet)-4-6/.test(model) || /^claude-mythos-preview/.test(model)) return { efforts: ["low", "medium", "high", "max"] };
+    if (/^claude-opus-4-5/.test(model)) return { efforts: ["low", "medium", "high"] };
+    return undefined;
+  }
+  if (host === "api.deepseek.com") return { efforts: ["low", "high", "max"] };
+  if (host === "openrouter.ai") return { efforts: ["minimal", "low", "medium", "high", "xhigh", "max"], field: "reasoning" };
+  return undefined;
+}

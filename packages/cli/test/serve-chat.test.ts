@@ -78,9 +78,10 @@ describe("serve --stdio", () => {
     const { env } = setup();
     const f = fakeIO({ env });
     const done = main(["serve", "--stdio"], f.io);
-    f.input.push(encodeCommand({ cmd: "prompt", text: "be slow please" }));
-    await wait(100);
+    f.input.push(encodeCommand({ cmd: "prompt", text: "be held please" }));
+    await until(() => mock.streaming() > 0);
     f.input.end();
+    mock.release(); // the turn is still going when the input closes: it can only end now
     expect(await done).toBe(0);
     expect(events(f.out()).at(-1)).toMatchObject({ ev: "done", stop: "end_turn" });
   });
@@ -175,17 +176,19 @@ describe("interactive session", () => {
     const { env } = setup();
     const f = fakeIO({ env, interactive: true });
     const done = main(["chat"], f.io);
-    await wait(100);
+    await until(f.listening);
     f.interrupt();
-    expect(await Promise.race([done, wait(2000).then(() => "hung")])).toBe(0);
+    // Quitting must not wait for another keystroke: a hang is what fails, not a slow machine.
+    expect(await Promise.race([done, wait(20_000).then(() => "hung")])).toBe(0);
   });
 
   test("Ctrl+C during a turn cancels it and the session stays open", async () => {
     const { env } = setup();
     const f = fakeIO({ env, interactive: true });
     const done = main(["chat"], f.io);
+    mock.requests.length = 0;
     f.input.push("be slow please\n");
-    await wait(300);
+    await until(() => mock.requests.length > 0);
     f.interrupt();
     await until(() => f.err().includes("Stopped"));
     f.input.push("hello again\n");
@@ -239,8 +242,9 @@ describe("interactive session", () => {
     const done = main(["chat"], f.io);
     mock.requests.length = 0;
     f.input.push("\n   \n");
-    await wait(150);
-    expect(mock.requests).toHaveLength(0);
+    f.input.push("hello after the blanks\n");
+    await until(() => f.out().includes("all done here"));
+    expect(mock.requests).toHaveLength(1);
     f.input.push("/exit\n");
     await done;
   });

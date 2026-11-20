@@ -3,32 +3,23 @@
  * appear in code, tests, docs or configuration. The terms are assembled from fragments so this file does not match itself.
  */
 import { expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { join, relative, sep } from "node:path";
+import { ROOT, repoFiles } from "./repo-files.ts";
 
-const ROOT = resolve(import.meta.dir, "../../..");
 const FRAGMENTS: [string, string][] = [
   ["her", "mes"], ["cla", "ude"], ["co", "dex"], ["open", "ai"], ["anthr", "opic"], ["gem", "ini"], ["chat", "gpt"],
   ["co", "pilot"], ["gp", "t-"], ["gp", "t5"], ["wind", "surf"], ["ai", "der"],
 ];
 const BANNED = FRAGMENTS.map(([a, b]) => a + b);
-const SKIP = new Set(["node_modules", ".worktrees", ".git", "dist", "target", "bun.lock", "bun.lockb"]);
+const SKIP = new Set(["bun.lock", "bun.lockb"]);
 /** The service presets and the standing brief name outside services on purpose: one so a newcomer can pick theirs, the other to state our priorities. */
-const NAMING_ALLOWED = new Set(["packages/cli/src/presets.ts", "packages/cli/test/presets.test.ts", "packages/protocol/test/hygiene.test.ts", "packages/engine/src/providers/messages-api.ts", "packages/stream-engine/src/codex-engine.ts", "packages/stream-engine/src/codex-translate.ts", "packages/stream-engine/src/index.ts", "packages/stream-engine/test/codex-engine.test.ts", "packages/stream-engine/test/codex-translate.test.ts", "packages/cli/src/config.ts", "packages/cli/src/create.ts", "packages/engine/src/signin-program.ts", "packages/cli/src/logins.ts", "packages/cli/test/logins.test.ts", "packages/engine/src/signin.ts", "packages/server/src/hosted/signin-program.ts", "packages/server/test/signin.test.ts", "packages/server/test/admin.test.ts", "packages/engine/test/messages-api.test.ts", "AGENTS.md", "CLAUDE.md", "scripts/export-public.sh", "docs/research/TERMINAL.md", "docs/research/WEB.md", "docs/design/cli-preview/index.html", "docs/design/liquid-glass-preview/template.html", "docs/design/liquid-glass-preview/index.html"]);
+const NAMING_ALLOWED = new Set(["packages/cli/src/presets.ts", "packages/cli/test/presets.test.ts", "packages/cli/test/known-effort.test.ts", "packages/protocol/test/hygiene.test.ts", "packages/engine/src/providers/messages-api.ts", "packages/stream-engine/src/codex-engine.ts", "packages/stream-engine/src/codex-translate.ts", "packages/stream-engine/src/index.ts", "packages/stream-engine/test/codex-engine.test.ts", "packages/stream-engine/test/codex-translate.test.ts", "packages/cli/src/config.ts", "packages/cli/src/create.ts", "packages/engine/src/signin-program.ts", "packages/cli/src/logins.ts", "packages/cli/test/logins.test.ts", "packages/engine/src/signin.ts", "packages/server/src/hosted/signin-program.ts", "packages/server/test/signin.test.ts", "packages/server/test/admin.test.ts", "packages/engine/test/messages-api.test.ts", "AGENTS.md", "CLAUDE.md", "scripts/export-public.sh", "docs/research/TERMINAL.md", "docs/research/WEB.md", "docs/design/cli-preview/index.html", "docs/design/liquid-glass-preview/template.html", "docs/design/liquid-glass-preview/index.html"]);
 
-function* files(dir: string): Generator<string> {
-  for (const name of readdirSync(dir)) {
-    if (SKIP.has(name)) continue;
-    const p = join(dir, name);
-    const st = statSync(p);
-    if (st.isDirectory()) yield* files(p);
-    else if (st.size < 2_000_000) yield p;
-  }
-}
 
 test("no foreign brand or product names anywhere in the repository", () => {
   const hits: string[] = [];
-  for (const f of files(ROOT)) {
+  for (const f of repoFiles(ROOT, SKIP)) {
     const text = readFileSync(f, "utf8").toLowerCase();
     const path = relative(ROOT, f).replaceAll(sep, "/");
     if (NAMING_ALLOWED.has(path)) continue;

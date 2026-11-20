@@ -50,6 +50,8 @@ export interface EngineOptions {
   provider: Provider;
   /** Where the files a person attaches are saved: one folder per session below it (default: a folder of the system's temporary files). */
   attachments?: string;
+  /** The effort levels the model supports, for an engine with one model (with a switcher, the switcher says). */
+  efforts?: Effort[];
   /** Whether the model can see pictures. Absent: not known, so a picture is sent and a refusal is turned into a plain message. */
   vision?: boolean;
   cwd: string;
@@ -136,6 +138,9 @@ const asParts = (q: Queued): string | Part[] => {
 /** The arguments of Edit and Write that are text going into a file. */
 const CHANGED = ["content", "old_string", "new_string"];
 
+/** The server turned the request down because of the effort field: a 400 that names it, or a parameter it does not know. */
+const refusesEffort = (e: unknown): boolean => (e as { status?: number } | undefined)?.status === 400 && /effort|reasoning|unknown (parameter|field|argument|name)|unrecognized (parameter|field|request argument)|unsupported (parameter|field)|extra inputs|additional properties|not permitted/i.test(e instanceof Error ? e.message : "");
+
 /** The words a person is shown when the model cannot see pictures. */
 const BLIND = "This model cannot see pictures, so they were not sent.";
 const REFUSES_PICTURES = /image|picture|vision|multimodal|multi-modal|modalit/i;
@@ -166,6 +171,8 @@ export class Engine implements AgentEngine {
   #reference: string | undefined;
   #model: string | undefined;
   #efforts: Effort[] | undefined;
+  /** Models that turned the effort field down in this session: none is offered for them again. */
+  readonly #noEffort = new Set<string>();
   #busy = false;
   readonly #qids = new RecentIds();
   /** The prompt that started the running turn, and what the turn has used so far. */
@@ -199,7 +206,7 @@ export class Engine implements AgentEngine {
     this.#persona = opts.persona;
     this.#reference = opts.reference;
     this.#model = opts.switcher?.current;
-    this.#efforts = opts.switcher?.efforts;
+    this.#efforts = opts.switcher?.efforts ?? opts.efforts;
     this.#tools = profileTools(opts.kind ?? "agent", opts.tools ?? defaultTools(), { sandboxed: opts.sandboxed === true }).map((t) => (t.name === AGENT_TOOL_NAME && opts.agents?.length ? agentTool(opts.agents) : t));
     this.sessionId = opts.sessionId ?? crypto.randomUUID();
     if (opts.sessionId && opts.store) this.#messages = opts.store.load(opts.sessionId) ?? [];
@@ -311,6 +318,15 @@ export class Engine implements AgentEngine {
     return info?.files !== false;
   }
 
+  /** The model in use does not take an effort setting after all: Auto from now on, and the person is told in one sentence. */
+  #dropEffort(): void {
+    this.#noEffort.add(this.#model ?? "");
+    this.#effort = undefined;
+    this.#efforts = undefined;
+    this.#announce();
+    this.#emit({ ev: "notice", msg: "This model does not take an effort setting, so it runs on Auto." });
+  }
+
   /** A service turned a picture down that the engine did not know it could not read: the pictures leave the conversation and the model is known as blind from now on. */
   #learnBlind(): boolean {
     let found = false;
@@ -397,7 +413,7 @@ export class Engine implements AgentEngine {
       if (next.persona !== undefined) this.#persona = next.persona;
       if (next.reference !== undefined) this.#reference = next.reference;
       this.#model = id;
-      this.#efforts = next.efforts;
+      this.#efforts = this.#noEffort.has(id) ? undefined : next.efforts;
       this.#vision = next.vision;
       if (this.#effort && !next.efforts?.includes(this.#effort)) this.#effort = undefined;
     } else this.#emit({ ev: "error", msg: "The last messages are longer than that model can read, so nothing was changed. Choose a model with more room." });
@@ -535,12 +551,12 @@ export class Engine implements AgentEngine {
       let thinkingSince: number | undefined;
       const endThought = (): void => { if (thinkingSince !== undefined) { this.#emit({ ev: "thought_end", ms: Date.now() - thinkingSince }); thinkingSince = undefined; } };
       const said = (text: string): void => { if (text) { endThought(); this.#emit({ ev: "text", text }); } };
-      const model = await this.#provider.stream(
+      const ask = (effort: Effort | undefined): Promise<ModelReply> => this.#provider.stream(
         {
           system: systemPrompt({ cwd: this.#o.cwd, platform: process.platform, date: (this.#o.now?.() ?? new Date()).toISOString().slice(0, 10), ...(this.#persona ? { persona: this.#persona } : {}), ...(this.#reference && asksAboutProgram(this.#lastUserText()) ? { reference: this.#reference } : {}), tools: tools.map((t) => t.name), ...(also.length ? { also } : {}), ...(finished.length ? { finished } : {}), ...(instructions ? { instructions } : {}), ...(skills.length ? { skills: skillsPrompt(skills, small)! } : {}), small, ...(this.#kind === "chat" ? { kind: "chat" as const, sandboxed: this.#o.sandboxed === true } : {}) }, this.#mode),
           messages: this.#messages,
           tools: tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
-          ...(this.#effort ? { effort: this.#effort } : {}),
+          ...(effort ? { effort } : {}),
         },
         this.#abort.signal,
         {
@@ -549,6 +565,14 @@ export class Engine implements AgentEngine {
           toolStarted: (id, name) => { endThought(); if (name !== PLAN_TOOL_NAME) this.#emit({ ev: "tool", id, name, status: "running", progress: 0 }); },
         },
       );
+      // A server that does not know the effort field answers 400; the same request goes again without it, once, and the model is taken as one without an effort setting.
+      let model: ModelReply;
+      try { model = await ask(this.#effort); }
+      catch (e) {
+        if (!this.#effort || !refusesEffort(e)) throw e;
+        this.#dropEffort();
+        model = await ask(undefined);
+      }
 
       // The model has the news only once its request has gone through: a request that failed does not use it up.
       this.#jobs.told(news.map((n) => n.id));

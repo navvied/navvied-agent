@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseEvent } from "@navvied/protocol";
 import { main } from "../src/main.ts";
-import { fakeIO, remove, startMockModel, tempDir, until, wait } from "./helpers.ts";
+import { fakeIO, remove, startMockModel, tempDir, until } from "./helpers.ts";
 
 let mock: ReturnType<typeof startMockModel>;
 const dirs: string[] = [];
@@ -120,7 +120,7 @@ describe("run", () => {
     const { env } = setup();
     const f = fakeIO({ env });
     const p = main(["run", "be slow please"], f.io);
-    await wait(300);
+    await until(() => f.listening() && mock.streaming() > 0);
     f.interrupt();
     expect(await p).toBe(130);
     expect(f.err()).toContain("Stopped");
@@ -129,12 +129,12 @@ describe("run", () => {
   test("a second Ctrl+C gives up at once", async () => {
     const { env } = setup();
     const f = fakeIO({ env });
-    const started = Date.now();
     const p = main(["run", "be slow please"], f.io);
-    await wait(150);
+    await until(() => f.listening() && mock.streaming() > 0);
     f.interrupt(); f.interrupt();
     expect(await p).toBe(130);
-    expect(Date.now() - started).toBeLessThan(2000);
+    // It gave up without waiting for the model: the answer was still being sent when the program ended.
+    expect(mock.streaming()).toBeGreaterThan(0);
   });
 
   test("a saved session can be continued with --session", async () => {
@@ -228,7 +228,7 @@ describe("an external command-line agent as the model", () => {
     const { env, cfg, work } = external();
     const f = fakeIO({ env });
     const done = main(["serve", "--stdio", "--config", cfg, "--cwd", work], f.io);
-    await wait(150);
+    await until(() => f.out().includes('"ev":"caps"'));
     f.input.end();
     await done;
     const caps = f.out().trim().split("\n").map((l) => JSON.parse(l)).find((e) => e.ev === "caps");
