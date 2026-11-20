@@ -6,19 +6,17 @@
   "lang": "none",
   "requires": [
     "bash",
-    "curl",
-    "python3",
     "bun"
   ],
   "prompt": "The page /app on the docs server (its address is in docs-url.txt) builds its text with a script, so a plain fetch cannot see it; a browser can. Read it and write the app code into ANSWER.txt. If you cannot read it, write one line saying why instead; do not guess.",
-  "check": "python3 \"$BENCH_FIXTURES/web-check.py\" script-page",
+  "check": "bun \"$BENCH_FIXTURES/web-check.ts\" script-page",
   "protect": [
     "README.md"
   ],
   "maxSteps": 20,
   "timeoutSeconds": 600,
-  "setup": "bash \"$BENCH_FIXTURES/start-web.sh\" && echo \"http://127.0.0.1:$(cat .bench-port)\" > docs-url.txt",
-  "teardown": "bash \"$BENCH_FIXTURES/stop-web.sh\"",
+  "setup": "bun \"$BENCH_FIXTURES/start-web.ts\" && echo \"http://127.0.0.1:$(cat .bench-port)\" > docs-url.txt",
+  "teardown": "bun \"$BENCH_FIXTURES/stop-web.ts\"",
   "env": {
     "NAVVIED_ALLOW_PRIVATE_NETWORK": "1"
   }

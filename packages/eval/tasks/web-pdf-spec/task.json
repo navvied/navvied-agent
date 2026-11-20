@@ -6,19 +6,17 @@
   "lang": "none",
   "requires": [
     "bash",
-    "curl",
-    "python3",
     "bun"
   ],
   "prompt": "The protocol specification is a PDF, /spec.pdf on the docs server (its address is in docs-url.txt). Find the heartbeat interval code in Table 2 and write only the code into ANSWER.txt.",
-  "check": "python3 \"$BENCH_FIXTURES/web-check.py\" pdf-spec",
+  "check": "bun \"$BENCH_FIXTURES/web-check.ts\" pdf-spec",
   "protect": [
     "README.md"
   ],
   "maxSteps": 20,
   "timeoutSeconds": 600,
-  "setup": "bash \"$BENCH_FIXTURES/start-web.sh\" && echo \"http://127.0.0.1:$(cat .bench-port)\" > docs-url.txt",
-  "teardown": "bash \"$BENCH_FIXTURES/stop-web.sh\"",
+  "setup": "bun \"$BENCH_FIXTURES/start-web.ts\" && echo \"http://127.0.0.1:$(cat .bench-port)\" > docs-url.txt",
+  "teardown": "bun \"$BENCH_FIXTURES/stop-web.ts\"",
   "env": {
     "NAVVIED_ALLOW_PRIVATE_NETWORK": "1"
   }

@@ -6,19 +6,17 @@
   "lang": "none",
   "requires": [
     "bash",
-    "curl",
-    "python3",
     "bun"
   ],
   "prompt": "Two pages have moved: /old and /away on the docs server (its address is in docs-url.txt). Read both and write the first code and the second code, one per line, into ANSWER.txt.",
-  "check": "python3 \"$BENCH_FIXTURES/web-check.py\" redirects",
+  "check": "bun \"$BENCH_FIXTURES/web-check.ts\" redirects",
   "protect": [
     "README.md"
   ],
   "maxSteps": 20,
   "timeoutSeconds": 600,
-  "setup": "bash \"$BENCH_FIXTURES/start-web.sh\" && echo \"http://127.0.0.1:$(cat .bench-port)\" > docs-url.txt",
-  "teardown": "bash \"$BENCH_FIXTURES/stop-web.sh\"",
+  "setup": "bun \"$BENCH_FIXTURES/start-web.ts\" && echo \"http://127.0.0.1:$(cat .bench-port)\" > docs-url.txt",
+  "teardown": "bun \"$BENCH_FIXTURES/stop-web.ts\"",
   "env": {
     "NAVVIED_ALLOW_PRIVATE_NETWORK": "1"
   }

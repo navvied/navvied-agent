@@ -1,3 +1,4 @@
+import { readFileSync, readdirSync, readlinkSync } from "node:fs";
 import { rm } from "node:fs/promises";
 
 /**
@@ -6,10 +7,32 @@ import { rm } from "node:fs/promises";
  */
 const TRANSIENT = new Set(["EBUSY", "EPERM", "ENOTEMPTY", "EACCES", "EMFILE", "ENFILE"]);
 
+/**
+ * The programs still running with `dir` as their folder, as `pid name`. Linux lets a folder be removed under a running program, Windows does
+ * not, so a test that leaves one behind would pass here and fail there; looking for them makes it fail here too. Nothing to look with elsewhere.
+ */
+export function stragglers(dir: string): string[] {
+  if (process.platform !== "linux") return [];
+  const found: string[] = [];
+  for (const name of readdirSync("/proc")) {
+    const pid = Number(name);
+    if (!Number.isInteger(pid) || pid === process.pid) continue;
+    try {
+      const cwd = readlinkSync(`/proc/${pid}/cwd`);
+      if (cwd === dir || cwd.startsWith(`${dir}/`)) found.push(`${pid} ${readFileSync(`/proc/${pid}/cmdline`, "utf8").replaceAll("\0", " ").trim().slice(0, 80)}`);
+    } catch { /* gone, or not ours to look at */ }
+  }
+  return found;
+}
+
 export async function removeTree(dir: string): Promise<void> {
   for (let attempt = 0; ; attempt++) {
-    try { await rm(dir, { recursive: true, force: true }); return; }
-    catch (e) {
+    const holding = stragglers(dir);
+    try {
+      if (holding.length) throw Object.assign(new Error(`still in use by: ${holding.join("; ")}`), { code: "EBUSY" });
+      await rm(dir, { recursive: true, force: true });
+      return;
+    } catch (e) {
       if (attempt >= 50 || !TRANSIENT.has((e as NodeJS.ErrnoException).code ?? "")) throw e;
       await Bun.sleep(100);
     }

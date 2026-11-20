@@ -300,14 +300,14 @@ describe("report", () => {
   test("no results is not an error", () => expect(() => summarize([])).not.toThrow());
 });
 
-(Bun.which("python3") ? describe : describe.skip)("the checks of the offline web tasks", () => {
+describe("the checks of the offline web tasks", () => {
   const dir = mkdtempSync(join(tmpdir(), "navvied-webcheck-"));
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
   const code = (n: string): string => new Bun.CryptoHasher("sha1").update(`secretweb${n}`).digest("hex").slice(0, 10);
   const verdict = (task: string, files: Record<string, string>): boolean => {
     for (const f of ["ANSWER.txt", "collect.log", "hits.log", "searches.log", "pwned"]) rmSync(join(dir, f), { force: true });
     for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
-    return Bun.spawnSync(["python3", join(import.meta.dir, "../fixtures/web-check.py"), task], { cwd: dir, env: { ...process.env, BENCH_SECRET: "secret" } }).exitCode === 0;
+    return Bun.spawnSync([process.execPath, join(import.meta.dir, "../fixtures/web-check.ts"), task], { cwd: dir, env: { ...process.env, BENCH_SECRET: "secret" } }).exitCode === 0;
   };
 
   test("an answer is the code made from this run's secret; a decoy or a guess is not", () => {
