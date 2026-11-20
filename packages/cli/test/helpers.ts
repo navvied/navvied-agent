@@ -87,7 +87,7 @@ export function fakeIO(opts: { interactive?: boolean; color?: boolean; env?: Env
     prompt: (text) => { if (opts.interactive) err.push(text); },
     ...(opts.dock ? { dock: opts.dock } : {}),
   };
-  return { io, input, out: () => out.join(""), err: () => err.join(""), interrupt: () => { for (const h of [...handlers]) h(); } };
+  return { io, input, out: () => out.join(""), err: () => err.join(""), listening: () => handlers.size > 0, interrupt: () => { for (const h of [...handlers]) h(); } };
 }
 
 export const tempDir = (): string => mkdtempSync(join(tmpdir(), "navvied-cli-"));
@@ -98,15 +98,33 @@ export const remove = (d: string): void => rmSync(d, { recursive: true, force: t
 export function startMockModel() {
   const requests: any[] = [];
   const enc = new TextEncoder();
-  const sse = (chunks: unknown[], delay = 0) => new Response(new ReadableStream({
-    async start(c) {
-      for (const x of chunks) { c.enqueue(enc.encode(`data: ${JSON.stringify(x)}\n\n`)); if (delay) await Bun.sleep(delay); }
-      c.enqueue(enc.encode("data: [DONE]\n\n"));
-      c.close();
-    },
-  }), { headers: { "content-type": "text/event-stream" } });
+  /** Answers still being streamed: a test waits for this state, not for a time to pass. */
+  let open = 0;
+  /** Held answers wait here until a test lets them go (or the reader goes away). */
+  let gate: Promise<void> = new Promise(() => {}), letGo = (): void => {};
+  const closeGate = (): void => { gate = new Promise((r) => { letGo = r; }); };
+  closeGate();
+  const sse = (chunks: unknown[], delay = 0, held = false) => {
+    let gone: () => void = () => {};
+    const away = new Promise<void>((r) => { gone = r; });
+    return new Response(new ReadableStream({
+      async start(c) {
+        open++;
+        try {
+          for (const x of chunks) {
+            c.enqueue(enc.encode(`data: ${JSON.stringify(x)}\n\n`));
+            if (held) { held = false; await Promise.race([gate, away]); }
+            else if (delay) await Bun.sleep(delay);
+          }
+          c.enqueue(enc.encode("data: [DONE]\n\n"));
+          c.close();
+        } catch { /* the reader went away */ } finally { open--; }
+      },
+      cancel() { gone(); },
+    }), { headers: { "content-type": "text/event-stream" } });
+  };
   const usage = (n: number) => ({ choices: [], usage: { prompt_tokens: n, completion_tokens: 10 } });
-  const text = (t: string, n = 100, delay = 0) => sse([...t.split(" ").map((w, i) => ({ choices: [{ delta: { content: (i ? " " : "") + w } }] })), { choices: [{ delta: {}, finish_reason: "stop" }] }, usage(n)], delay);
+  const text = (t: string, n = 100, delay = 0, held = false) => sse([...t.split(" ").map((w, i) => ({ choices: [{ delta: { content: (i ? " " : "") + w } }] })), { choices: [{ delta: {}, finish_reason: "stop" }] }, usage(n)], delay, held);
   const call = (name: string, args: unknown) => {
     const a = JSON.stringify(args);
     return sse([
@@ -134,15 +152,16 @@ export function startMockModel() {
       if (/\bbash\b/.test(user)) return call("Bash", { command: "echo from-shell" });
       const fetchUrl = /\bfetch (\S+)/.exec(user);
       if (fetchUrl) return call("WebFetch", { url: fetchUrl[1] });
+      if (/\bheld\b/.test(user)) return text("answer that waits to be let go", 100, 0, true);
       if (/\bslow\b/.test(user)) return text("thinking for a long while before answering", 100, 400);
       return text("all done here");
     },
   });
-  return { url: `http://127.0.0.1:${server.port}/v1`, requests, stop: () => server.stop(true) };
+  return { url: `http://127.0.0.1:${server.port}/v1`, requests, streaming: () => open, release: () => { letGo(); closeGate(); }, stop: () => server.stop(true) };
 }
 
 export const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-export async function until(pred: () => boolean, ms = 5000): Promise<void> {
+export async function until(pred: () => boolean, ms = 20_000): Promise<void> {
   const end = Date.now() + ms;
   while (!pred()) { if (Date.now() > end) throw new Error("condition not met in time"); await wait(10); }
 }

@@ -74,6 +74,8 @@ export class MessagesApiProvider implements Provider {
   async stream(req: ModelRequest, signal: AbortSignal, on: StreamHandlers): Promise<ModelReply> {
     const body: Record<string, unknown> = { model: this.cfg.model, max_tokens: this.cfg.maxTokens ?? 8192, stream: true, system: req.system, messages: toWire(req.messages) };
     if (req.tools.length) body.tools = req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
+    // Effort has these five levels here; "minimal" is the lowest this API has. With no effort chosen (Auto) nothing is sent and the model's own default applies.
+    if (req.effort) body.output_config = { effort: req.effort === "minimal" ? "low" : req.effort };
 
     const res = await fetchModel(this.url(), { method: "POST", headers: await this.headers(), body: this.shaped(body), signal });
     if (!res.ok || !res.body) return this.fail(res);

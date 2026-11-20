@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { browser, closeBrowser, findChrome } from "../src/index.ts";
-import { devToolsEndpoint } from "../src/tools/browser.ts";
+import { devToolsEndpoint, openWithRetry } from "../src/tools/browser.ts";
 import { stopAllJobs } from "../src/index.ts";
 import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
@@ -144,5 +144,47 @@ describe("where the browser says it listens", () => {
     expect(devToolsEndpoint(file)).toEqual({ port: "9222", path: "/devtools/browser/4f2a-91" });
     write("38211\r\n/devtools/browser/abc\r\n");
     expect(devToolsEndpoint(file)).toEqual({ port: "38211", path: "/devtools/browser/abc" });
+  });
+});
+
+describe("a page that fails once because the network changed under the browser", () => {
+  const waits: number[] = [];
+  const wait = async (ms: number): Promise<void> => { waits.push(ms); };
+  const failing = (...errors: (string | undefined)[]) => { let n = 0; return { go: async () => errors[Math.min(n++, errors.length - 1)], calls: () => n }; };
+
+  test("the page is asked for once more after a short pause, and the second answer is the answer", async () => {
+    waits.length = 0;
+    const a = failing("net::ERR_NETWORK_CHANGED", undefined);
+    expect(await openWithRetry(a.go, wait)).toBeUndefined();
+    expect(a.calls()).toBe(2);
+    expect(waits).toEqual([300]);
+    waits.length = 0;
+    const b = failing("net::ERR_INTERNET_DISCONNECTED", undefined);
+    expect(await openWithRetry(b.go, wait)).toBeUndefined();
+    expect(waits).toEqual([1_500]);
+  });
+
+  test("only once: a second failure is reported as it is, and so is every other error, with no pause", async () => {
+    waits.length = 0;
+    const twice = failing("net::ERR_NETWORK_CHANGED");
+    expect(await openWithRetry(twice.go, wait)).toBe("net::ERR_NETWORK_CHANGED");
+    expect(twice.calls()).toBe(2);
+    for (const error of ["net::ERR_NAME_NOT_RESOLVED", "net::ERR_CONNECTION_REFUSED", "net::ERR_ABORTED"]) {
+      const once = failing(error, undefined);
+      expect(await openWithRetry(once.go, wait)).toBe(error);
+      expect(once.calls()).toBe(1);
+    }
+    const fine = failing(undefined);
+    expect(await openWithRetry(fine.go, wait)).toBeUndefined();
+    expect(fine.calls()).toBe(1);
+    expect(waits).toEqual([300]);
+  });
+
+  test("with the real clock the pause is the short one and the retry costs under two seconds", async () => {
+    const a = failing("net::ERR_NETWORK_CHANGED", undefined);
+    const t0 = Date.now();
+    await openWithRetry(a.go);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(290);
+    expect(Date.now() - t0).toBeLessThan(2_000);
   });
 });

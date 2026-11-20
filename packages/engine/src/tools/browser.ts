@@ -48,6 +48,22 @@ export function devToolsEndpoint(file: string): { port: string; path: string } |
   return m ? { port: m[1]!, path: m[2]! } : undefined;
 }
 
+/**
+ * What a browser says when the network under it changed at the moment it went to a page (a new browser sees this on its first
+ * navigation, and so does a person whose Wi-Fi or VPN switches): the page is asked for once more after a pause, and only once. Other
+ * errors, and a second failure, are the answer. The pause comes before the page is waited for, so it is not part of the time the page
+ * is given to load.
+ */
+const RETRIED: Record<string, number> = { "net::ERR_NETWORK_CHANGED": 300, "net::ERR_INTERNET_DISCONNECTED": 1_500 };
+
+export async function openWithRetry(go: () => Promise<string | undefined>, wait: (ms: number) => Promise<unknown> = (ms) => new Promise((r) => setTimeout(r, ms))): Promise<string | undefined> {
+  const first = await go();
+  const pause = first === undefined ? undefined : RETRIED[first];
+  if (pause === undefined) return first;
+  await wait(pause);
+  return go();
+}
+
 class Session {
   #socket!: WebSocket;
   #next = 1;
@@ -131,8 +147,8 @@ class Session {
 
   async navigate(url: string): Promise<void> {
     this.touch();
-    const r = (await this.#send("Page.navigate", { url })) as { errorText?: string };
-    if (r.errorText) throw new Error(`the page could not be opened (${r.errorText})`);
+    const error = await openWithRetry(async () => ((await this.#send("Page.navigate", { url })) as { errorText?: string }).errorText);
+    if (error) throw new Error(`the page could not be opened (${error})`);
     await this.settle();
   }
 

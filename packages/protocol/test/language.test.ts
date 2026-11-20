@@ -4,11 +4,10 @@
  * similar are left out to avoid false positives.
  */
 import { expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { relative } from "node:path";
+import { ROOT, repoFiles } from "./repo-files.ts";
 
-const ROOT = resolve(import.meta.dir, "../../..");
-const SKIP_DIRS = new Set(["node_modules", ".worktrees", ".git", "dist", "target"]);
 const SKIP_FILES = new Set(["language.test.ts", "export-public.sh", "bun.lock", "bun.lockb", "Cargo.lock"]);
 
 const WORDS = [
@@ -19,19 +18,10 @@ const WORDS = [
 ];
 const PATTERN = new RegExp(`(^|[^\\p{L}])(${WORDS.join("|")})(?![\\p{L}])`, "iu");
 
-function* files(dir: string): Generator<string> {
-  for (const name of readdirSync(dir)) {
-    if (SKIP_DIRS.has(name) || SKIP_FILES.has(name)) continue;
-    const p = join(dir, name);
-    const st = statSync(p);
-    if (st.isDirectory()) yield* files(p);
-    else if (st.size < 2_000_000) yield p;
-  }
-}
 
 test("source, tests and documentation contain no Indonesian", () => {
   const hits: string[] = [];
-  for (const f of files(ROOT)) {
+  for (const f of repoFiles(ROOT, SKIP_FILES)) {
     readFileSync(f, "utf8").split("\n").forEach((line, i) => {
       const m = PATTERN.exec(line);
       if (m) hits.push(`${relative(ROOT, f)}:${i + 1}: "${m[2]}"`);

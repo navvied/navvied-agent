@@ -11,7 +11,7 @@ import { TerminalState, backendFor } from "./terminal.ts";
 import { attachmentsDir, chatFilesDir, chatSessionsDir, checkpointsDir, configPath, loadConfig, pluginStatePath, terminalStatePath, resolveModel, sessionsDir, type ConfigFile, type ModelEntry } from "./config.ts";
 import type { IO } from "./io.ts";
 import { memoryPathsFor } from "./memory-ui.ts";
-import { INSTRUCTION_FILE_NAMES } from "./presets.ts";
+import { INSTRUCTION_FILE_NAMES, knownEffort } from "./presets.ts";
 import { credentialsFor } from "./logins.ts";
 import { PluginState, activeHooks, activeSkills, mcpId } from "./plugins.ts";
 
@@ -53,7 +53,7 @@ function withFallback(first: Provider, name: string, file: ConfigFile | null, en
   const chain: FallbackLink[] = [{ name, provider: first }];
   for (const other of file?.fallback ?? []) {
     if (other === name || chain.some((l) => l.name === other)) continue;
-    const next = resolveModel(other, file, env, path);
+    const next = resolved(other, file, env, path);
     if (!next.ok || next.value.cli || !next.value.provider) continue;
     chain.push({ name: file?.models[other]?.display?.name ?? other, provider: providerFor(next.value.api, next.value.provider, next.value.window, next.value.signIn ? credentialsFor(next.value.signIn, env) : undefined, next.value.pdf) });
   }
@@ -78,6 +78,15 @@ const TOOL_NAMES = (): string[] => defaultTools().map((t) => t.name).filter((n) 
 const brainFor = (name: string, model: string | undefined, window: number, shown?: string): Brain => ({ label: `"${shown ?? model ?? name}"`, tools: TOOL_NAMES(), small: window <= SMALL_WINDOW });
 
 /** The models this engine can switch to without starting over: the ones it can run itself. A program is a different kind of engine. */
+/** The model as the configuration says, with the effort levels its service documents when the configuration lists none (and says nothing against). */
+export function resolved(choice: string | undefined, file: ConfigFile | null, env: Record<string, string | undefined>, path: string): ReturnType<typeof resolveModel> {
+  const r = resolveModel(choice, file, env, path);
+  if (!r.ok || !r.value.provider || r.value.cli || r.value.efforts || r.value.provider.reasoning === "none") return r;
+  const known = knownEffort({ baseUrl: r.value.provider.baseUrl, model: r.value.provider.model, ...(r.value.signIn ? { signIn: r.value.signIn } : {}) });
+  if (!known) return r;
+  return { ok: true, value: { ...r.value, efforts: known.efforts, provider: { ...r.value.provider, ...(known.field ? { effortField: known.field } : {}) } } };
+}
+
 function switcherFor(file: ConfigFile | null, current: string, env: Record<string, string | undefined>, path: string, window: number, efforts: Effort[] | undefined): ModelSwitch | undefined {
   const own = Object.entries(file?.models ?? {}).filter(([, e]) => !e.command);
   if (own.length < 2) return undefined;
@@ -87,7 +96,7 @@ function switcherFor(file: ConfigFile | null, current: string, env: Record<strin
     ...(efforts?.length ? { efforts } : {}),
     use(id) {
       if (file?.models[id]?.display?.locked) return { error: `${file.models[id]!.display!.name ?? id} is not available yet.` };
-      const next = resolveModel(id, file, env, path);
+      const next = resolved(id, file, env, path);
       if (!next.ok) return { error: next.error };
       if (next.value.cli || !next.value.provider) return { error: "That model runs in a different program, so it needs a new conversation." };
       return {
@@ -108,7 +117,7 @@ export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) =>
   const path = configPath(io.env, options.config);
   const file = loadConfig(path, io.env);
   if (!file.ok) return file;
-  const model = resolveModel(options.model, file.value, io.env, path);
+  const model = resolved(options.model, file.value, io.env, path);
   if (!model.ok) return model;
 
   const kind = options.kind ?? "agent";
@@ -133,6 +142,7 @@ export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) =>
         sessionId,
         attachments: attachmentsDir(io.env),
         ...(model.value.vision !== undefined ? { vision: model.value.vision } : {}),
+        ...(!switcher && model.value.efforts?.length ? { efforts: model.value.efforts } : {}),
         tools: activeTools(new PluginState(pluginStatePath(io.env))),
         backend: backendFor(new TerminalState(terminalStatePath(io.env)), file.value?.terminal),
         ...(extras.recall && kind !== "chat" ? { recall: extras.recall } : {}),

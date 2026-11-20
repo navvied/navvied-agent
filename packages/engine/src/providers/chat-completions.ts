@@ -14,6 +14,8 @@ export interface ChatCompletionsConfig {
   apiKey?: string;
   /** `effort`: send the effort as `reasoning_effort`. `none`: never send it (models that reject the field). */
   reasoning?: "effort" | "none";
+  /** Where the effort goes: `reasoning_effort` (the usual) or a `reasoning` object with `effort` in it (a few services take that one). */
+  effortField?: "reasoning_effort" | "reasoning";
   headers?: Record<string, string>;
 }
 
@@ -47,7 +49,7 @@ export class ChatCompletionsProvider implements Provider {
       messages: [{ role: "system", content: req.system }, ...req.messages.map(toWire)],
     };
     if (req.tools.length) body.tools = req.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } }));
-    if (req.effort && this.cfg.reasoning !== "none") body.reasoning_effort = req.effort;
+    if (req.effort && this.cfg.reasoning !== "none") { if (this.cfg.effortField === "reasoning") body.reasoning = { effort: req.effort }; else body.reasoning_effort = req.effort; }
 
     const res = await fetchModel(this.url(), { method: "POST", headers: this.headers(), body: JSON.stringify(body), signal });
     if (!res.ok || !res.body) {
