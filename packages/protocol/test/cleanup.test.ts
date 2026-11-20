@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hook, removeTree } from "./support/cleanup.ts";
+import { hook, removeTree, stragglers } from "./support/cleanup.ts";
 
 describe("what a test removes after itself", () => {
   test("a folder with files in it is gone, and one that is not there is not an error", async () => {
@@ -12,6 +12,18 @@ describe("what a test removes after itself", () => {
     await removeTree(dir);
     expect(existsSync(dir)).toBe(false);
     await removeTree(dir);
+  });
+
+  test.skipIf(process.platform !== "linux")("a program still running in a folder is found, so a test that leaves one fails here as it does on Windows", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "navvied-stragglers-"));
+    const child = Bun.spawn(["sleep", "30"], { cwd: dir, stdout: "ignore", stderr: "ignore" });
+    try {
+      expect(stragglers(dir)).toEqual([`${child.pid} sleep 30`]);
+      expect(stragglers(join(dir, "sub"))).toEqual([]);
+      child.kill();
+      await child.exited;
+      expect(stragglers(dir)).toEqual([]);
+    } finally { child.kill(); await removeTree(dir); }
   });
 
   test("a hook that fails says its own name in a line the CI turns into an annotation, and still fails", async () => {

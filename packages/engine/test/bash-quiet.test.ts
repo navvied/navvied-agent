@@ -25,7 +25,9 @@ describe("a command that nobody can type to", () => {
 
   test.skipIf(!posix)("a command that leaves something running behind it (a trailing &) is answered when the command ends", async () => {
     const started = Date.now();
-    const out = await bash.run({ command: "sleep 20 & echo started" }, ctx());
+    const out = await bash.run({ command: "sleep 20 & echo started $!" }, ctx());
+    // Left behind on purpose, so it is ended here: a program still running holds its folder on Windows.
+    try { process.kill(Number(/started (\d+)/.exec(out)?.[1])); } catch { /* already gone */ }
     expect(out).toContain("started");
     expect(Date.now() - started).toBeLessThan(20_000);
   });

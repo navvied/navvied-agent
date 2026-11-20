@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,10 +48,15 @@ describe("a command is timed by its silence, not by the clock", () => {
   }, 30_000);
 
   test("whatever it prints, the whole time is limited: past it the command is handed on, and the answer says it was the time", async () => {
-    const r = await run([process.execPath, "-e", "setInterval(() => console.log('x'), 50)"], { cwd: dir, signal: new AbortController().signal, idleMs: 500, timeoutMs: 1200, onTimeout: () => true });
+    // Handing a command on means somebody owns it now: here the jobs, which end it when the test is over (a program left running holds its folder on Windows).
+    const { jobs, done } = rig();
+    const take = (child: ChildProcess, printed: string): boolean => { jobs.adopt(child, "handed on", printed); return true; };
+    const r = await run([process.execPath, "-e", "setInterval(() => console.log('x'), 50)"], { cwd: dir, signal: new AbortController().signal, idleMs: 500, timeoutMs: 1200, onTimeout: take });
     expect(r).toMatchObject({ timedOut: true, ranOut: "time", adopted: true });
-    const quiet = await run([process.execPath, "-e", "setTimeout(() => {}, 5000)"], { cwd: dir, signal: new AbortController().signal, idleMs: 400, timeoutMs: 3000, onTimeout: () => true });
+    const quiet = await run([process.execPath, "-e", "setTimeout(() => {}, 5000)"], { cwd: dir, signal: new AbortController().signal, idleMs: 400, timeoutMs: 3000, onTimeout: take });
     expect(quiet).toMatchObject({ ranOut: "silence", adopted: true });
+    expect(jobs.running).toBe(2);
+    done();
   }, 30_000);
 });
 
