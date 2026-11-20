@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { LineSplitter, parseEvent } from "@navvied/protocol";
 import type { Adapter } from "./adapter.ts";
@@ -6,7 +6,7 @@ import { instantiate } from "./adapter.ts";
 import { watchMemory } from "./memory.ts";
 import type { Meter } from "./meter.ts";
 import type { Task } from "./task.ts";
-import { check, killProcesses, leftovers, missingPrograms, newSecret, prepare, protectedHashes, shell } from "./workspace.ts";
+import { check, killProcesses, leftovers, missingPrograms, newSecret, prepare, protectedHashes, scriptEnv, shell, taskEnv } from "./workspace.ts";
 
 export interface RunOptions {
   /** The program that runs a task, as an argument list (for example `["bun", "packages/cli/src/main.ts"]`). */
@@ -46,6 +46,34 @@ export function misuseOf(steps: readonly { name: string; input?: unknown; output
   return m;
 }
 
+/** How the web tools were used: calls, characters of web text that entered the conversation, the same page read twice from the start, addresses fetched that nobody had given, and calls the tool refused as wrongly made. */
+export interface WebUse { calls: number; chars: number; repeats: number; invented: number; badCalls: number }
+
+const WEB_TOOLS = new Set(["WebFetch", "WebSearch", "Browser"]);
+const key = (u: string): string => u.replace(/#.*$/, "").replace(/\/$/, "");
+
+/** From the steps of one run, how the web was used. `known` is the text the agent started with (the task, the files it was told to read). */
+export function webOf(steps: readonly { name: string; input?: unknown; output?: string; status: string }[], known: string): WebUse {
+  const w: WebUse = { calls: 0, chars: 0, repeats: 0, invented: 0, badCalls: 0 };
+  const seen = new Set((known.match(/https?:\/\/[^\s<>"')\]]+/g) ?? []).map(key));
+  const read = new Set<string>();
+  for (const s of steps) {
+    if (!WEB_TOOLS.has(s.name)) continue;
+    w.calls += 1;
+    w.chars += s.output?.length ?? 0;
+    const input = (s.input && typeof s.input === "object" ? s.input : {}) as Record<string, unknown>;
+    if (s.status === "error" && /^Error: (.* needs |that is not a valid URL|the query is empty)/.test(s.output ?? "")) w.badCalls += 1;
+    if (s.name === "WebFetch" && typeof input.url === "string") {
+      const at = `${key(input.url)}@${typeof input.offset === "number" ? input.offset : 0}`;
+      if (read.has(at)) w.repeats += 1;
+      read.add(at);
+      if (!seen.has(key(input.url))) w.invented += 1;
+    }
+    for (const u of s.output?.match(/https?:\/\/[^\s<>"')\]]+/g) ?? []) seen.add(key(u.replace(/[.,;:!?]+$/, "")));
+  }
+  return w;
+}
+
 export interface TaskResult {
   task: string;
   /** What kind of work the task is, how hard, in which language (as the task says), for the report. */
@@ -73,6 +101,8 @@ export interface TaskResult {
   checkedAtTimeout?: boolean;
   /** How the agent misused the terminal tools (ours only: another agent is measured from outside). */
   misuse?: Misuse;
+  /** How the agent used the web tools (ours only). */
+  web?: WebUse;
   /** How many requests the model answered with a server error or not at all. */
   modelErrors?: number;
   /** The biggest request of the run, whatever became of it (a request that was never answered is counted by its size, estimated): a run that stalls is often one whose request grew. */
@@ -86,9 +116,9 @@ export interface TaskResult {
   workspace?: string;
 }
 
-interface Metrics { misuse?: Misuse; modelCalls: number; toolCalls: number; outTokens: number; peakContext: number; error?: string; /** What the agent said in its last turn. */ said?: string; /** The tools it used, in order, with how each ended. */ steps?: string[] }
+interface Metrics { misuse?: Misuse; web?: WebUse; modelCalls: number; toolCalls: number; outTokens: number; peakContext: number; error?: string; /** What the agent said in its last turn. */ said?: string; /** The tools it used, in order, with how each ended. */ steps?: string[] }
 
-function measure(stdout: string): Metrics {
+function measure(stdout: string, known = ""): Metrics {
   const m: Metrics = { modelCalls: 0, toolCalls: 0, outTokens: 0, peakContext: 0 };
   const seenTools = new Set<string>();
   const inputs = new Map<string, unknown>();
@@ -107,6 +137,7 @@ function measure(stdout: string): Metrics {
     else if (e.ev === "text") m.said = `${m.said ?? ""}${e.text}`;
   }
   m.misuse = misuseOf(ended);
+  if (ended.some((s) => WEB_TOOLS.has(s.name))) m.web = webOf(ended, known);
   return m;
 }
 
@@ -120,7 +151,7 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
   const secret = { BENCH_SECRET: newSecret() };
   const dir = prepare(task);
   if (task.setup) {
-    const setup = await shell(dir, task.setup, secret);
+    const setup = await shell(dir, task.setup, scriptEnv(secret));
     if (!setup.ok) { killProcesses(leftovers(dir)); rmSync(dir, { recursive: true, force: true }); return { ...about(task), task: task.id, model, passed: false, reason: "setup failed", error: setup.output.trim().split("\n").at(-1)?.slice(0, 300) ?? "", ...none }; }
   }
   const before = protectedHashes(dir, task.protect);
@@ -132,7 +163,7 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
   const other = opts.agent ? instantiate(opts.agent, { prompt: task.prompt, dir, ...(opts.model ? { model: opts.model } : {}), ...(opts.meter && opts.agent.pointable ? { baseUrl: opts.meter.url(runId) } : {}), ...(opts.key ? { key: opts.key } : {}) }) : undefined;
   const proc = Bun.spawn(
     other ? other.argv : [program!, ...base, "run", task.prompt, "--cwd", dir, "--json", "--mode", "auto", "--max-steps", String(task.maxSteps), ...(opts.model ? ["--model", opts.model] : [])],
-    { cwd: dir, env: { ...process.env, ...secret, ...opts.env, ...counted, ...other?.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+    { cwd: dir, env: { ...process.env, ...secret, ...opts.env, ...taskEnv(dir, task), ...counted, ...other?.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
   );
   const memory = watchMemory(proc.pid);
   let timedOut = false;
@@ -152,14 +183,14 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
 
   const ms = Date.now() - started;
   // What an agent says about itself is read only for ours: another agent is measured from outside.
-  const metrics = opts.agent ? { modelCalls: 0, toolCalls: 0, outTokens: 0, peakContext: 0 } as Metrics : measure(stdout);
+  const metrics = opts.agent ? { modelCalls: 0, toolCalls: 0, outTokens: 0, peakContext: 0 } as Metrics : measure(stdout, `${task.prompt}\n${["docs-url.txt", "addresses.txt"].map((f) => { try { return readFileSync(join(dir, f), "utf8"); } catch { return ""; } }).join("\n")}`);
   const after = protectedHashes(dir, task.protect);
   const tampered = JSON.stringify(Object.entries(before).sort()) !== JSON.stringify(Object.entries(after).sort());
   // The check is made also when time ran out: an agent that had done the task and was only waiting for its last answer is told apart.
-  const result = await check(dir, task, 120_000, secret);
+  const result = await check(dir, task, 120_000, scriptEnv(secret));
   const left = leftovers(dir);
   killProcesses(left);
-  if (task.teardown) await shell(dir, task.teardown, secret).catch(() => undefined);
+  if (task.teardown) await shell(dir, task.teardown, scriptEnv(secret)).catch(() => undefined);
 
   const reason: TaskResult["reason"] = timedOut ? "timeout" : tampered ? "protected files changed" : !result?.ok ? (exitCode !== 0 && exitCode !== null ? "agent failed" : "check failed") : left.length ? "left a process running" : "solved";
   const error = metrics.error ?? (reason === "agent failed" ? stderr.trim().split("\n").at(-1) : undefined);
@@ -176,6 +207,7 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
     } : {}),
     ...(timedOut ? { checkedAtTimeout: result.ok } : {}),
     ...(metrics.misuse ? { misuse: metrics.misuse } : {}),
+    ...(metrics.web ? { web: metrics.web } : {}),
     ...(peak ? { peakMb: peak.agentMb, peakTreeMb: peak.treeMb } : {}),
     ...(reason !== "solved" ? { why: { said: clean(metrics.said ?? "").slice(-300), steps: (metrics.steps ?? []).slice(0, 40), check: clean(result?.output ?? "").slice(-400) } } : {}),
     ...(error ? { error: clean(error).slice(0, 300) } : {}),

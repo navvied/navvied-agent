@@ -2,9 +2,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { Jobs, defaultTools } from "../src/index.ts";
 import { MOST_JOBS } from "../src/jobs.ts";
 import type { ToolContext } from "../src/types.ts";
-import { cleanupAll, prompt, rig } from "./helpers.ts";
+import { HOOK_MS, cleanupAll, prompt, rig } from "./helpers.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 const node = (code: string): string[] => [process.execPath, "-e", code];
 const tool = (name: string) => defaultTools().find((t) => t.name === name)!;
 const waitFor = async (pred: () => boolean, ms = 8000): Promise<void> => { const end = Date.now() + ms; while (!pred()) { if (Date.now() > end) throw new Error("not in time"); await Bun.sleep(20); } };

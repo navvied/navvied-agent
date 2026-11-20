@@ -1,10 +1,10 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanupAll, prompt, rig, until } from "./helpers.ts";
+import { HOOK_MS, cleanupAll, prompt, rig, until } from "./helpers.ts";
 import type { ModelRequest } from "../src/types.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 
 const isMain = (req: ModelRequest): boolean => req.tools.some((t) => t.name === "Agent");
 const last = (req: ModelRequest): string => String(req.messages.at(-1)?.content ?? "");

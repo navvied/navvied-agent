@@ -8,9 +8,9 @@ import { MessagesApiProvider, toWire as messagesWire } from "../src/providers/me
 import { toInput } from "../src/providers/responses-api.ts";
 import type { Message, Part } from "../src/types.ts";
 import { PNG, b64, docxFile, pdf } from "./make-files.ts";
-import { cleanupAll, prompt, rig, until } from "./helpers.ts";
+import { HOOK_MS, cleanupAll, prompt, rig, until } from "./helpers.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 
 const attachments = mkdtempSync(join(tmpdir(), "navvied-attachments-test-"));
 const send = (name: string, bytes: Buffer | string, mime = "application/octet-stream") => ({ name, mime, data: b64(bytes) });

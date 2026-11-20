@@ -4,9 +4,9 @@ import { dirname } from "node:path";
 import { Jobs, defaultTools } from "../src/index.ts";
 import { Redactor, redact, registerSecrets, secretsNow } from "../src/redact.ts";
 import type { ToolContext } from "../src/types.ts";
-import { cleanupAll, prompt, rig } from "./helpers.ts";
+import { HOOK_MS, cleanupAll, prompt, rig } from "./helpers.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 const bash = defaultTools().find((t) => t.name === "Bash")!;
 const KEY = "k9Zq-3vXw_7LmPa2Rt8Yc4";
 

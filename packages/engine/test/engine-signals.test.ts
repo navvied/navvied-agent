@@ -3,9 +3,9 @@ import { approvalChange } from "../src/approval-change.ts";
 import { Jobs } from "../src/jobs.ts";
 import type { EngineEvent } from "@navvied/protocol";
 import { afterAll } from "bun:test";
-import { cleanupAll, prompt, rig, until } from "./helpers.ts";
+import { HOOK_MS, cleanupAll, prompt, rig, until } from "./helpers.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 
 describe("approval change", () => {
   test("an edit carries the file and both texts", () => {

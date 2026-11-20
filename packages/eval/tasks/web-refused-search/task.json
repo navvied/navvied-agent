@@ -1,0 +1,26 @@
+{
+  "id": "web-refused-search",
+  "title": "A search server that answers with a challenge",
+  "kind": "web",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "curl",
+    "python3",
+    "bun"
+  ],
+  "prompt": "Use WebSearch to find out who maintains Project Falcon and write the name into ANSWER.txt. If the search cannot be done, write one line saying why instead.",
+  "check": "python3 \"$BENCH_FIXTURES/web-check.py\" refused-search",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 600,
+  "setup": "bash \"$BENCH_FIXTURES/start-web.sh\" && echo \"http://127.0.0.1:$(cat .bench-port)\" > docs-url.txt",
+  "teardown": "bash \"$BENCH_FIXTURES/stop-web.sh\"",
+  "env": {
+    "NAVVIED_ALLOW_PRIVATE_NETWORK": "1",
+    "NAVVIED_SEARCH_URL": "http://127.0.0.1:{port}/blocked-search"
+  }
+}

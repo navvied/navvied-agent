@@ -3,10 +3,10 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkpointsDir, configPath, loadConfig, rememberBashPattern, resolveModel, sessionsDir, type ConfigFile } from "../src/config.ts";
-import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-cfg-"));
-afterAll(hook("config removes what it made", async () => { await removeTree(dir); }));
+afterAll(hook("config removes what it made", async () => { await removeTree(dir); }), HOOK_MS);
 const write = (name: string, body: unknown) => { const p = join(dir, name); writeFileSync(p, typeof body === "string" ? body : JSON.stringify(body)); return p; };
 
 describe("where a hosted session reaches the web", () => {

@@ -6,10 +6,10 @@ import { Jobs, defaultTools, dockerBackend, localBackend, sshBackend } from "../
 import type { Backend } from "../src/backend.ts";
 import type { ToolContext } from "../src/types.ts";
 import { stopAllJobs } from "../src/index.ts";
-import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-backend-"));
-afterAll(hook("backend removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }));
+afterAll(hook("backend removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }), HOOK_MS);
 const bash = defaultTools().find((t) => t.name === "Bash")!;
 const ctx = (backend?: Backend): ToolContext => ({ cwd: dir, signal: new AbortController().signal, emit: () => undefined, allowPrivateNetwork: false, jobs: new Jobs(() => undefined), ...(backend ? { backend } : {}) });
 

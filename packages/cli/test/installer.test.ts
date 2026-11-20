@@ -2,12 +2,12 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const SCRIPT = join(import.meta.dir, "../../../install.sh");
 const dirs: string[] = [];
 const tmp = (): string => { const d = mkdtempSync(join(tmpdir(), "navvied-install-")); dirs.push(d); return d; };
-afterAll(hook("installer removes what it made", async () => { await removeTrees(dirs);; }));
+afterAll(hook("installer removes what it made", async () => { await removeTrees(dirs);; }), HOOK_MS);
 
 const fakeProgram = (version: string) => `#!/bin/sh\necho "navvied ${version}"\n`;
 const sha = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex");

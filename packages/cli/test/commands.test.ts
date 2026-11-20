@@ -29,7 +29,7 @@ describe("a hosted session's web access", () => {
       const f = fakeIO({ env });
       expect(await main(["run", "fetch https://never-resolves.invalid/", "--cwd", work, "--config", config], f.io)).toBe(0);
       expect(seen).toEqual([{ auth: "Bearer grant-xyz", body: { url: "https://never-resolves.invalid/" } }]);
-      expect(f.out() + f.err()).toContain("page from the service");
+      expect(f.out() + f.err()).toContain("text from the web");
       expect(f.out() + f.err()).not.toContain("grant-xyz");
     } finally { service.stop(true); }
   });

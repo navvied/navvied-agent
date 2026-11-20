@@ -57,7 +57,7 @@ export function systemPrompt(info: PromptInfo, mode: PermMode): string {
   if (info.small) {
     return [
       info.persona?.trim(),
-      `You are a coding assistant working in ${info.cwd} on ${info.platform}.`,
+      `You are a coding assistant working in ${info.cwd} on ${info.platform}.${info.tools?.some((t) => t === "WebSearch" || t === "WebFetch") ? ` Date: ${info.date}.` : ""}`,
       SMALL_RULES,
       mode === "plan" ? PLAN_NOTE : "",
       info.also?.length ? `Also available, by name: ${info.also.join(", ")}.` : "",

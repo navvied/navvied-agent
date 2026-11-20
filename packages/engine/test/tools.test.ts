@@ -1,4 +1,5 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { pages } from "../src/tools/web-cache.ts";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -7,17 +8,19 @@ import { Jobs, defaultTools, isPrivateHost } from "../src/index.ts";
 import { clip, run } from "../src/tools/util.ts";
 import type { Tool, ToolContext } from "../src/types.ts";
 import { stopAllJobs } from "../src/index.ts";
-import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const dirs: string[] = [];
 const workdir = () => { const d = mkdtempSync(join(tmpdir(), "navvied-tools-")); dirs.push(d); return d; };
-afterAll(hook("tools removes what it made", async () => { await stopAllJobs(); await removeTrees(dirs); }));
+afterAll(hook("tools removes what it made", async () => { await stopAllJobs(); await removeTrees(dirs); }), HOOK_MS);
 
 const tool = (name: string): Tool => { const t = defaultTools().find((x) => x.name === name); if (!t) throw new Error(`no tool ${name}`); return t; };
 const ctx = (cwd: string, extra: Partial<ToolContext> = {}): ToolContext & { emitted: EngineEvent[] } => {
   const emitted: EngineEvent[] = [];
   return { cwd, signal: new AbortController().signal, emit: (e) => emitted.push(e), allowPrivateNetwork: false, jobs: new Jobs((e) => emitted.push(e)), ...extra, emitted };
 };
+
+beforeEach(() => pages.clear());
 
 describe("a command that is stopped", () => {
   test("is reported soon even when a child it started keeps the output open", async () => {
@@ -248,7 +251,7 @@ describe("WebFetch", () => {
       const f = tool("WebFetch");
       const c = ctx(workdir(), { allowPrivateNetwork: true });
       const html = await f.run({ url: `http://127.0.0.1:${server.port}/` }, c);
-      expect(html).toContain("Title Hello & welcome");
+      expect(html).toContain("# Title\n\nHello & welcome");
       expect(html).not.toContain("evil()");
       expect(await f.run({ url: `http://127.0.0.1:${server.port}/text` }, c)).toContain("plain body");
       expect(await f.run({ url: `http://127.0.0.1:${server.port}/redir` }, c)).toMatch(/Redirected \(302\) to http:\/\/example\.com\/x/);

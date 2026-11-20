@@ -1,0 +1,25 @@
+{
+  "id": "web-follow-link",
+  "title": "Follow a link from a start page to the page with the answer",
+  "kind": "web",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "curl",
+    "python3",
+    "bun"
+  ],
+  "prompt": "Start at the page /start on the docs server (its address is in docs-url.txt). Find the burst limit code, which is on the page about rate limits, and write only the code into ANSWER.txt.",
+  "check": "python3 \"$BENCH_FIXTURES/web-check.py\" follow-link",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 600,
+  "setup": "bash \"$BENCH_FIXTURES/start-web.sh\" && echo \"http://127.0.0.1:$(cat .bench-port)\" > docs-url.txt",
+  "teardown": "bash \"$BENCH_FIXTURES/stop-web.sh\"",
+  "env": {
+    "NAVVIED_ALLOW_PRIVATE_NETWORK": "1"
+  }
+}

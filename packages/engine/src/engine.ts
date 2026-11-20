@@ -29,6 +29,8 @@ import { PLAN_TOOL_NAME, defaultTools } from "./tools/index.ts";
 import { outputBudget, withinBudget } from "./tools/util.ts";
 import { receive } from "./attachments.ts";
 import { Vault } from "./redact.ts";
+import { WEB_ALIASES } from "./tools/web-names.ts";
+import { PageCache } from "./tools/web-cache.ts";
 import { tmpdir } from "node:os";
 import { AGENT_TOOL_NAME, agentTool } from "./tools/agent.ts";
 import type { AgentDef } from "./agents.ts";
@@ -115,7 +117,7 @@ function exampleArguments(schema: Record<string, unknown>): string {
 }
 
 /** The names models invent for the command tool, and what they stand for. */
-const ALIASES: Record<string, string> = { bash: "Bash", shell: "Bash", terminal: "Bash", run: "Bash", execute_bash: "Bash", run_command: "Bash", exec: "Bash", sh: "Bash" };
+const ALIASES: Record<string, string> = { ...WEB_ALIASES, bash: "Bash", shell: "Bash", terminal: "Bash", run: "Bash", execute_bash: "Bash", run_command: "Bash", exec: "Bash", sh: "Bash" };
 const squash = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 /** Tools that are named in the prompt, without their definitions, when the request has not brought them in. */
@@ -695,6 +697,7 @@ export class Engine implements AgentEngine {
 
     let args = parseLenient(call.arguments);
     if (!args) return fail(`Error: the arguments for ${call.name} must be a JSON object such as ${exampleArguments(tool.parameters)}. Send them again.`);
+    if (tool.fixArgs) args = tool.fixArgs(args);
     const missing = (Array.isArray(tool.parameters.required) ? (tool.parameters.required as string[]) : []).filter((k) => args![k] === undefined);
     if (missing.length) return fail(`Error: ${tool.name} needs ${missing.join(", ")}: ${exampleArguments(tool.parameters)}. Send the call again with it.`);
     const bad = tool.name === "Edit" || tool.name === "Write" ? this.#vault.restore(CHANGED.map((k) => (typeof args![k] === "string" ? args![k] as string : "")).join("\n")).unknown : [];
@@ -709,7 +712,10 @@ export class Engine implements AgentEngine {
     // What cannot be undone is asked about in every mode but Bypass, and a rule that allows "git" does not allow it: what is allowed is a kind of thing.
     const risk = tool.readOnly || this.#mode === "plan" || this.#mode === "bypass" ? undefined : riskOf(tool.name, args, this.#o.cwd);
     const riskAsked = risk !== undefined && !this.#allowed.has(risk.key);
-    const mustAsk = verdict.kind === "ask" ? this.#mode !== "plan" : riskAsked || (needsApproval(this.#mode, tool, args) && verdict.kind !== "allow");
+    // An address nobody gave (not the person, not a search, not a page that was read) is the way out for what an injected page asks for: asked about, or refused where nobody is asked.
+    const strange = tool.name === "WebFetch" && verdict.kind !== "allow" && this.#mode !== "auto" && this.#mode !== "bypass" && !this.#knownUrl(args.url);
+    if (strange && this.#mode === "edits") return fail(`Not fetched: ${String(args.url)} was not in the request, in a search result or in a page that was read. Search for it: WebSearch {"query": "…"}, or ask the person for the address.`, "blocked");
+    const mustAsk = verdict.kind === "ask" ? this.#mode !== "plan" : riskAsked || strange || (needsApproval(this.#mode, tool, args) && verdict.kind !== "allow");
     if (mustAsk) {
       const scope = riskAsked ? { key: risk!.key, phrase: risk!.phrase } : approvalScope(tool.name, args, this.#o.cwd);
       if (this.#o.noQuestions) return fail(`Blocked: this needs the person's say-so${risk ? ` (${risk.reason})` : ""}, and a helper cannot ask. Do not try again; say what you wanted to do.`, "blocked");
@@ -718,7 +724,7 @@ export class Engine implements AgentEngine {
         const change = approvalChange(tool.name, this.#shown(args));
         // A command can be changed by the person before it is allowed.
         const editable = tool.name === "Bash" && typeof args.command === "string" ? this.#vault.hide(args.command).text : undefined;
-        this.#emit({ ev: "approval", id, title: this.#vault.hide(attempt(() => tool.title(args!)) ?? `Run ${tool.name}`).text, options: approvalOptions(scope.phrase, editable), tool: call.id, ...(change ? { change } : {}), ...(riskAsked ? { risk: risk!.reason } : {}) });
+        this.#emit({ ev: "approval", id, title: this.#vault.hide(strange && !riskAsked ? `Open an address that was not in your request: ${String(args.url)}` : attempt(() => tool.title(args!)) ?? `Run ${tool.name}`).text, options: approvalOptions(scope.phrase, editable), tool: call.id, ...(change ? { change } : {}), ...(riskAsked ? { risk: risk!.reason } : {}) });
         const given = await answer;
         if (given.optionId === ALLOW_ALWAYS) for (const k of scope.keys ?? [scope.key]) this.#allowed.add(k);
         else if (given.optionId === EDIT && editable !== undefined && given.input?.trim()) {
@@ -796,6 +802,21 @@ export class Engine implements AgentEngine {
   /** The arguments of a call as a window or a log may show them: every secret in them is a mark. */
   #shown(args: Record<string, unknown>): Record<string, unknown> {
     return Object.fromEntries(Object.entries(args).map(([k, v]) => [k, typeof v === "string" ? this.#vault.hide(v).text : v]));
+  }
+
+  /** Whether an address came from the person, a search or a page that was read: only those may be fetched without asking. */
+  #knownUrl(url: unknown): boolean {
+    if (typeof url !== "string") return false;
+    const key = (u: string): string => PageCache.key(u).replace(/\/$/, "");
+    const urls = (t: string): string[] => (t.match(/https?:\/\/[^\s<>"')\]]+/g) ?? []).map((u) => u.replace(/[.,;:!?]+$/, ""));
+    const names = new Map<string, string>();
+    const known = new Set<string>();
+    for (const m of this.#messages) {
+      const text = typeof m.content === "string" ? m.content : (m.content ?? []).map((p) => (p.type === "text" ? p.text : "")).join(" ");
+      if (m.role === "assistant") for (const c of m.toolCalls ?? []) names.set(c.id, c.name);
+      else if (m.role === "user" || (m.role === "tool" && ["WebSearch", "WebFetch"].includes(names.get(m.toolCallId ?? "") ?? ""))) for (const u of urls(text)) known.add(key(u));
+    }
+    return known.has(key(url));
   }
 
   /** The arguments of an Edit or a Write with the marks put back as the values they stand for: only the file ever gets them. */

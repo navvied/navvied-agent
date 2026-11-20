@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { ChatCompletionsProvider, MessagesApiProvider, ResponsesApiProvider } from "../src/index.ts";
 import type { ModelRequest, Provider, StreamHandlers } from "../src/index.ts";
-import { cleanupAll, prompt, rig } from "./helpers.ts";
+import { HOOK_MS, cleanupAll, prompt, rig } from "./helpers.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 
 let server: ReturnType<typeof Bun.serve>;
 let seen: { path: string; body: any }[] = [];

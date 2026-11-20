@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Jobs, killTree, shellFor, usesProcessGroups } from "../src/index.ts";
 import { inTerminal, launch } from "../src/platform.ts";
 import { stopAllJobs } from "../src/index.ts";
-import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 /** No file exists: a Windows computer is described only by what a test gives it, never by the one the tests run on. */
 const none = (): boolean => false;
@@ -88,7 +88,7 @@ describe("a terminal for a program you type to", () => {
   // is run for real here.
   const real = process.platform === "linux" ? Bun.which("script") : null;
   const dir = mkdtempSync(join(tmpdir(), "navvied-terminal-"));
-  afterAll(hook("platform removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }));
+  afterAll(hook("platform removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }), HOOK_MS);
   writeFileSync(join(dir, "script"), [
     "#!/bin/sh",
     '[ -S /proc/self/fd/0 ] && { echo "script: tcgetattr: Operation not supported on socket" >&2; exit 1; }',

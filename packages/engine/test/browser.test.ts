@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { browser, closeBrowser, findChrome } from "../src/index.ts";
 import { devToolsEndpoint, openWithRetry } from "../src/tools/browser.ts";
 import { stopAllJobs } from "../src/index.ts";
-import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const chrome = findChrome();
 const site = Bun.serve({
@@ -93,7 +93,7 @@ describe.skipIf(!chrome)("using the browser", () => {
 
 describe.skipIf(!chrome || process.platform === "win32")("a browser that stops while starting", () => {
   const dir = mkdtempSync(join(tmpdir(), "navvied-fakechrome-"));
-  afterAll(hook("browser removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }));
+  afterAll(hook("browser removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }), HOOK_MS);
   const withBrowser = async <T,>(script: string, body: () => Promise<T>): Promise<T> => {
     const file = join(dir, `chrome-${Math.random().toString(36).slice(2)}`);
     writeFileSync(file, `#!/bin/sh\n${script}\n`);

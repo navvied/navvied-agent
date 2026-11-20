@@ -7,10 +7,10 @@ import { outputBudget, withinBudget } from "../src/tools/util.ts";
 import type { ToolContext } from "../src/types.ts";
 import { cleanupAll, prompt, rig } from "./helpers.ts";
 import { stopAllJobs } from "../src/index.ts";
-import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-budget-"));
-afterAll(hook("budget removes what it made", async () => { await stopAllJobs(); await removeTree(dir); await cleanupAll(); }));
+afterAll(hook("budget removes what it made", async () => { await stopAllJobs(); await removeTree(dir); await cleanupAll(); }), HOOK_MS);
 const tool = (name: string) => defaultTools().find((t) => t.name === name)!;
 const ctx = (): ToolContext => ({ cwd: dir, signal: new AbortController().signal, emit: () => undefined, allowPrivateNetwork: false, jobs: new Jobs(() => undefined) });
 const log = Array.from({ length: 3000 }, (_, i) => `2026-11-19T10:00:00Z INFO req-${(i * 7919).toString(16).padStart(12, "0")} /api/items 500 ${i}ms`).join("\n");

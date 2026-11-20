@@ -1,0 +1,25 @@
+{
+  "id": "web-deep-docs",
+  "title": "Read the answer from the end of a long documentation page",
+  "kind": "web",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "curl",
+    "python3",
+    "bun"
+  ],
+  "prompt": "The worker guide is the page /docs/long on the docs server (its address is in docs-url.txt). Find the access code of the sync worker and write only the code into ANSWER.txt.",
+  "check": "python3 \"$BENCH_FIXTURES/web-check.py\" deep-docs",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 600,
+  "setup": "bash \"$BENCH_FIXTURES/start-web.sh\" && echo \"http://127.0.0.1:$(cat .bench-port)\" > docs-url.txt",
+  "teardown": "bash \"$BENCH_FIXTURES/stop-web.sh\"",
+  "env": {
+    "NAVVIED_ALLOW_PRIVATE_NETWORK": "1"
+  }
+}

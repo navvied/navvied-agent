@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
-export const KINDS = ["fix", "feature", "refactor", "tests", "docs", "terminal"] as const;
+export const KINDS = ["fix", "feature", "refactor", "tests", "docs", "terminal", "web"] as const;
 export const LANGS = ["ts", "py", "sh", "c", "none"] as const;
 
 export interface Task {
@@ -16,6 +16,8 @@ export interface Task {
   /** Shell commands run in the workspace before the agent starts and after the check; both see BENCH_SECRET. */
   setup?: string;
   teardown?: string;
+  /** Added to the environment of the agent. `{port}` is the port the setup left in `.bench-port`, for the tasks that start a fixture web. */
+  env?: Record<string, string>;
   /** Takes minutes: run only when asked for. */
   slow: boolean;
   prompt: string;
@@ -43,6 +45,7 @@ export function loadTask(dir: string): Task {
     requires: Array.isArray(raw.requires) ? raw.requires.filter(isString) : [],
     ...(isString(raw.setup) ? { setup: raw.setup } : {}),
     ...(isString(raw.teardown) ? { teardown: raw.teardown } : {}),
+    ...(raw.env && typeof raw.env === "object" && !Array.isArray(raw.env) ? { env: Object.fromEntries(Object.entries(raw.env as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string")) } : {}),
     slow: raw.slow === true,
     maxSteps: typeof raw.maxSteps === "number" ? raw.maxSteps : 30,
     timeoutSeconds: typeof raw.timeoutSeconds === "number" ? raw.timeoutSeconds : 300,

@@ -43,6 +43,18 @@ export async function applySolution(dir: string, task: Task, env: Record<string,
   }
 }
 
+/** Where the fixtures of the tasks live (the fixture web and the scripts that start and stop it). Setup, the solution, the check and the teardown know it; the agent does not. */
+export const FIXTURES = join(import.meta.dir, "..", "fixtures");
+
+/** The environment of a task's own scripts: this run's secret and the fixtures. */
+export const scriptEnv = (secret: Record<string, string>): Record<string, string> => ({ ...secret, BENCH_FIXTURES: FIXTURES });
+
+/** What the agent is given besides the usual: the task's own variables, with the fixture port in them. */
+export function taskEnv(dir: string, task: Task): Record<string, string> {
+  const port = existsSync(join(dir, ".bench-port")) ? readFileSync(join(dir, ".bench-port"), "utf8").trim() : "";
+  return Object.fromEntries(Object.entries(task.env ?? {}).map(([k, v]) => [k, v.replaceAll("{port}", port)]));
+}
+
 /** A random value for one run, in the environment of the setup, the agent and the check: an answer that holds it was made in this run. */
 export const newSecret = (): string => crypto.randomUUID().replaceAll("-", "").slice(0, 16);
 

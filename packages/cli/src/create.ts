@@ -164,6 +164,7 @@ export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) =>
         }),
         ...(io.env.NAVVIED_SEARCH_URL ? { search: { url: io.env.NAVVIED_SEARCH_URL } } : {}),
         ...(file.value?.webProxy ? { webProxy: file.value.webProxy } : {}),
+        ...(io.env.NAVVIED_ALLOW_PRIVATE_NETWORK === "1" ? { allowPrivateNetwork: true } : {}),
         ...(kind === "chat" ? {} : { instructions: () => loadInstructions(cwd, dirname(path), memoryText(memory), INSTRUCTION_FILE_NAMES) }),
         memory,
         ...(kind === "chat" ? {} : { checkpoints: new Checkpoints({ dir: checkpointsDir(io.env), session: sessionId }) }),

@@ -2,9 +2,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { TextToolCalls, dollarCommand } from "../src/text-tool-calls.ts";
-import { cleanupAll, prompt, rig } from "./helpers.ts";
+import { HOOK_MS, cleanupAll, prompt, rig } from "./helpers.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 
 const SCHEMAS = { Read: { properties: { file_path: { type: "string" }, limit: { type: "integer" } } }, Todo: { properties: { todos: { type: "array" } } } };
 const QWEN = "<tool_call>\n<function=Read>\n<parameter=file_path>\n/tmp/a b.txt\n</parameter>\n<parameter=limit>\n20\n</parameter>\n</function>\n</tool_call>";

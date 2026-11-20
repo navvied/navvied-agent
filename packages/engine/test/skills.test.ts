@@ -7,12 +7,12 @@ import { toolsFor } from "../src/permissions.ts";
 import type { Tool, ToolContext } from "../src/types.ts";
 import { cleanupAll, prompt, rig } from "./helpers.ts";
 import { stopAllJobs } from "../src/index.ts";
-import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const dirs: string[] = [];
 const temp = (): string => { const d = mkdtempSync(join(tmpdir(), "navvied-skills-")); dirs.push(d); return d; };
 const jobs = new Jobs(() => {});
-afterAll(hook("skills removes what it made", async () => { await stopAllJobs(); await removeTrees(dirs); jobs.close(); await cleanupAll(); }));
+afterAll(hook("skills removes what it made", async () => { await stopAllJobs(); await removeTrees(dirs); jobs.close(); await cleanupAll(); }), HOOK_MS);
 
 function skill(root: string, folder: string, text: string, extra: Record<string, string> = {}): void {
   mkdirSync(join(root, folder), { recursive: true });

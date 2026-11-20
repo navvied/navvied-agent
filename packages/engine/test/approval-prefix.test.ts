@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { cleanupAll, prompt, rig, until } from "./helpers.ts";
+import { HOOK_MS, cleanupAll, prompt, rig, until } from "./helpers.ts";
 
-afterAll(cleanupAll);
+afterAll(cleanupAll, HOOK_MS);
 
 describe("a permission given for a command covers its prefix, part by part", () => {
 

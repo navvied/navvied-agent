@@ -7,10 +7,10 @@ import { zip } from "./make-files.ts";
 import { read } from "../src/tools/read.ts";
 import { readDocument } from "../src/tools/documents.ts";
 import { stopAllJobs } from "../src/index.ts";
-import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "navvied-docs-"));
-afterAll(hook("documents removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }));
+afterAll(hook("documents removes what it made", async () => { await stopAllJobs(); await removeTree(dir); }), HOOK_MS);
 
 const docx = zip({
   "[Content_Types].xml": "<Types/>",

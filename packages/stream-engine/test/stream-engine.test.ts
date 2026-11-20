@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Command, EngineEvent } from "@navvied/protocol";
 import { StreamEngine, type StreamEngineOptions } from "../src/index.ts";
-import { hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
 
 const FAKE = join(import.meta.dir, "fake-agent.ts");
 const dirs: string[] = [];
-afterAll(hook("stream-engine removes what it made", async () => { await removeTrees(dirs); }));
+afterAll(hook("stream-engine removes what it made", async () => { await removeTrees(dirs); }), HOOK_MS);
 
 function rig(opts: Partial<StreamEngineOptions> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "navvied-stream-")); dirs.push(dir);

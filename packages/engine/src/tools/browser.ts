@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { killTree, usesProcessGroups } from "../platform.ts";
 import type { Tool } from "../types.ts";
 import { isPrivateHost } from "./web-fetch.ts";
-import { clip, num, str } from "./util.ts";
+import { clip, num, outputBudget, str } from "./util.ts";
 
 /**
  * A browser the agent can use: open a page, read it, click, type, go back. It drives the Chrome (or Chromium, Edge, Brave) that is
@@ -201,9 +201,11 @@ const SNAPSHOT = `(() => {
 
 interface Shot { url: string; title: string; text: string; controls: { n: number; kind: string; label: string; href?: string; value?: string; options?: string[] }[] }
 
-const describe = (s: Shot): string => {
+export const describeShot = (s: Shot, window: number | undefined, offset = 0): string => {
+  // The page text takes most of what one result may be, as any tool result does; what is left is for the controls.
+  const most = Math.max(2_000, Math.round(outputBudget(window) * 0.7));
   const controls = s.controls.map((c) => `[${c.n}] ${c.kind}${c.label ? ` "${c.label}"` : ""}${c.href ? ` -> ${c.href.slice(0, 100)}` : ""}${c.value !== undefined && c.value !== "" ? ` (now: ${c.value.slice(0, 40)})` : ""}${c.options ? ` (options: ${c.options.join(" | ")})` : ""}`).join("\n");
-  return clip(`Page: ${s.title || "(no title)"}\nAddress: ${s.url}\n\n${s.text.slice(0, 12_000)}${s.text.length > 12_000 ? "\n… [the page goes on: use scroll]" : ""}\n\n${controls ? `What can be used on this page:\n${controls}` : "Nothing on this page can be clicked or filled in."}`);
+  return clip(`Page: ${s.title || "(no title)"}\nAddress: ${s.url}\n\n${s.text.slice(offset, offset + most)}${s.text.length > offset + most ? `\n[characters ${offset}–${offset + most} of ${s.text.length}; the rest: Browser {"action": "read", "offset": ${offset + most}}]` : ""}\n\n${controls ? `What can be used on this page:\n${controls}` : "Nothing on this page can be clicked or filled in."}`);
 };
 
 let session: Session | undefined;
@@ -227,7 +229,7 @@ export const browser: Tool = {
     properties: {
       action: { type: "string", enum: ["open", "read", "click", "type", "choose", "scroll", "back", "close"] },
       url: { type: "string" }, ref: { type: "number", description: "the number shown for a link or control" },
-      text: { type: "string" }, submit: { type: "boolean", description: "press Enter after typing" }, direction: { type: "string", enum: ["up", "down"] },
+      offset: { type: "number", description: "with read: characters of the page already read" }, text: { type: "string" }, submit: { type: "boolean", description: "press Enter after typing" }, direction: { type: "string", enum: ["up", "down"] },
     },
     required: ["action"],
   },
@@ -273,7 +275,7 @@ export const browser: Tool = {
       const shot = await s.eval<Shot>(SNAPSHOT);
       // A page that sent the browser to a private address is not read either.
       try { const landed = new URL(shot.url); const no = shot.url === "about:blank" ? undefined : refused(landed, ctx.allowPrivateNetwork); if (no) { await s.navigate("about:blank"); return no; } } catch { /* about: pages */ }
-      return describe(shot);
+      return describeShot(shot, ctx.window, action === "read" ? Math.max(0, Math.floor(num(a.offset, 0))) : 0);
     } catch (e) {
       const dead = session?.closed;
       if (dead) session = undefined;

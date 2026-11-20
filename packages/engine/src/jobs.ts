@@ -29,7 +29,7 @@ function guard(): void {
   for (const [name, code] of [["SIGTERM", 143], ["SIGHUP", 129]] as const) process.once(name, () => { for (const jobs of alive) jobs.stopAll(); process.exit(code); });
 }
 
-interface Job extends JobView { /** Settles when the program has really exited and let go of its folder (not when the job was only marked as ended). */ gone: Promise<void>; /** Someone may type to it (BashInput). */ interactive: boolean; child: ChildProcess; output: string; dropped: number; read: number; ended: boolean; /** The model has been told it ended (by reading it, or by the line that says so). */ told: boolean; endedAt?: number; /** Makes what it prints safe as it arrives: what is kept here has no secret in it. */ safe: Redactor }
+interface Job extends JobView { /** Settles when the program has really exited and let go of its folder (not when the job was only marked as ended). */ gone: Promise<void>; /** Settles when its end has been reported (the `job` event with its final status), which comes after the exit once its output has closed. */ reported: Promise<void>; report: () => void; /** Someone may type to it (BashInput). */ interactive: boolean; child: ChildProcess; output: string; dropped: number; read: number; ended: boolean; /** The model has been told it ended (by reading it, or by the line that says so). */ told: boolean; endedAt?: number; /** Makes what it prints safe as it arrives: what is kept here has no secret in it. */ safe: Redactor }
 
 /** Commands that keep running after the turn that started them, such as a development server. */
 export class Jobs {
@@ -58,7 +58,9 @@ export class Jobs {
     const safe = new Redactor();
     const first = printed ? safe.push(printed) + safe.end() : "";
     const gone = new Promise<void>((resolve) => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else { child.once("exit", () => resolve()); child.once("error", () => resolve()); } });
-    const job: Job = { gone, id, title, interactive, status: "running", code: null, startedAt: this.now(), child, output: first, dropped: 0, read: shown ? first.length : 0, ended: false, told: false, safe };
+    let report = (): void => {};
+    const reported = new Promise<void>((resolve) => { report = resolve; });
+    const job: Job = { gone, reported, report, id, title, interactive, status: "running", code: null, startedAt: this.now(), child, output: first, dropped: 0, read: shown ? first.length : 0, ended: false, told: false, safe };
     this.#jobs.set(id, job);
     const collect = (d: Buffer): void => {
       job.output += job.safe.push(d.toString("utf8"));
@@ -154,11 +156,11 @@ export class Jobs {
   }
 
   /**
-   * Resolves when every command has really exited, or after `most` ms. A folder cannot be removed on Windows while a program that was
+   * Resolves when every command has really exited and its end has been reported, or after `most` ms. A folder cannot be removed on Windows while a program that was
    * started in it still runs, so whoever removes a folder after `close()` waits for this first.
    */
   async stopped(most = 5_000): Promise<void> {
-    const all = Promise.all([...this.#jobs.values()].map((j) => j.gone));
+    const all = Promise.all([...this.#jobs.values()].map((j) => j.gone.then(() => j.reported)));
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([all, new Promise<void>((r) => { timer = setTimeout(r, most); })]);
     clearTimeout(timer);
@@ -182,6 +184,7 @@ export class Jobs {
     job.output += job.safe.end();
     const last = lastLine(job.output);
     this.emit({ ev: "job", id: job.id, title: job.title, status: job.status, startedAt: job.startedAt, ...(code !== null ? { code } : {}), ...(last ? { last } : {}) });
+    job.report();
   }
 }
 

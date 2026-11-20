@@ -7,12 +7,12 @@ import type { Tool, ToolContext } from "../src/types.ts";
 import { toolsFor } from "../src/permissions.ts";
 import { rig, prompt, cleanupAll, until } from "./helpers.ts";
 import { stopAllJobs } from "../src/index.ts";
-import { hook, removeTree } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const FAKE = join(import.meta.dir, "fake-mcp.js");
 const dir = mkdtempSync(join(tmpdir(), "navvied-mcp-"));
 const jobs = new Jobs(() => {});
-afterAll(hook("mcp removes what it made", async () => { await stopAllJobs(); await removeTree(dir); jobs.close(); await cleanupAll(); }));
+afterAll(hook("mcp removes what it made", async () => { await stopAllJobs(); await removeTree(dir); jobs.close(); await cleanupAll(); }), HOOK_MS);
 const server = (env: Record<string, string> = {}) => ({ command: process.execPath, args: [FAKE], env });
 const ctx = (signal = new AbortController().signal): ToolContext => ({ cwd: dir, signal, emit: () => {}, allowPrivateNetwork: false, jobs });
 const find = (tools: Tool[], name: string): Tool => tools.find((t) => t.name === name)!;
