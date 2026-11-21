@@ -717,7 +717,7 @@ export class Engine implements AgentEngine {
 
   async #runTool(call: ToolCall, offered: Tool[]): Promise<string> {
     let t0 = Date.now();
-    const fail = (message: string, outcome?: ToolOutcome): string => { this.#emit({ ev: "tool", id: call.id, name: call.name, status: "error", output: message, ms: Date.now() - t0, ...(outcome ? { outcome } : {}) }); return message; };
+    const fail = (message: string, outcome?: ToolOutcome): string => { this.#emit({ ev: "tool", id: call.id, name: call.name, status: "error", output: message, startedAt: t0, ms: Date.now() - t0, ...(outcome ? { outcome } : {}) }); return message; };
     const tool = this.#toolFor(call.name, offered);
     if (tool) this.#called.add(tool.name);
     if (!tool) return fail(`Error: there is no tool "${call.name}". Use one of: ${offered.map((t) => t.name).join(", ")}${this.#mode === "plan" ? " (plan mode only allows reading)" : ""}.${offered.some((t) => t.name === "Bash") ? ' To run a command: Bash {"command": "ls -la"}' : ""}`);
@@ -800,7 +800,7 @@ export class Engine implements AgentEngine {
     const stopped = this.#abort.signal.aborted || output.endsWith("[interrupted]");
     const outcome: ToolOutcome | undefined = meta.timedOut ? "timeout" : stopped ? "stopped" : meta.background ? "background" : undefined;
     const failed = output.startsWith("Error:") || outcome === "timeout" || outcome === "stopped";
-    this.#emit({ ev: "tool", id: call.id, name: tool.name, status: failed ? "error" : "done", output, ms: Date.now() - t0, ...(meta.code !== undefined ? { code: meta.code } : {}), ...(meta.truncated ? { truncated: true as const } : {}), ...(meta.cached ? { cached: true as const } : {}), ...(outcome ? { outcome } : {}) });
+    this.#emit({ ev: "tool", id: call.id, name: tool.name, status: failed ? "error" : "done", output, startedAt: t0, ms: Date.now() - t0, ...(meta.code !== undefined ? { code: meta.code } : {}), ...(meta.truncated ? { truncated: true as const } : {}), ...(meta.cached ? { cached: true as const } : {}), ...(outcome ? { outcome } : {}) });
     if (this.#o.hooks) for (const note of (await this.#o.hooks.post({ tool: tool.name, input: args, output }, this.#abort.signal).catch(() => ({ notes: [] as string[] }))).notes) this.#emit({ ev: "notice", msg: note });
     return output;
   }

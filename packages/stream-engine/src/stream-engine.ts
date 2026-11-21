@@ -3,6 +3,7 @@
  * agent the user has already signed in to with their subscription. The login belongs to that program; this adapter never
  * sees or stores a token. It speaks the navvied protocol to the front-end and the agent's JSON-line stream to the process.
  */
+import { StepClock } from "./step-clock.ts";
 import { LineSplitter, RecentIds, type Command, type Effort, type EngineEvent, type ModelInfo, type PermMode, type PromptCommand } from "@navvied/protocol";
 import { launch, type AgentEngine } from "@navvied/engine";
 import { buildArgv } from "./argv.ts";
@@ -19,6 +20,8 @@ export interface StreamEngineOptions {
   models?: ModelInfo[];
   /** The effort levels the program accepts; none when it has no such setting. */
   efforts?: Effort[];
+  /** The entry of the configuration this engine was made for: with no list of models, it is the one model every window is told is in use. */
+  entry?: { id: string; name: string };
   cwd: string;
   window: number;
   emit: (event: EngineEvent) => void;
@@ -57,6 +60,7 @@ export class StreamEngine implements AgentEngine {
   #killTimer: ReturnType<typeof setTimeout> | undefined;
   #heartbeat: ReturnType<typeof setInterval> | undefined;
   #closed = false;
+  readonly #clock = new StepClock();
 
   constructor(opts: StreamEngineOptions) {
     this.#o = opts;
@@ -79,7 +83,7 @@ export class StreamEngine implements AgentEngine {
     const { models, efforts } = this.#o;
     this.#emit({
       ev: "caps", steer: true, modes: ["auto", "plan"], defaultMode: "auto", compact: false,
-      ...(models?.length ? { models: models.map((m) => ({ ...m, current: m.id === (this.#model ?? DEFAULT_MODEL) })) } : {}),
+      ...(models?.length ? { models: models.map((m) => ({ ...m, current: m.id === (this.#model ?? DEFAULT_MODEL) })) } : this.#o.entry ? { models: [{ ...this.#o.entry, current: true }] } : {}),
       ...(efforts?.length ? { efforts } : {}),
       ...(this.#effort ? { effort: this.#effort } : {}),
     });
@@ -263,5 +267,5 @@ export class StreamEngine implements AgentEngine {
   }
 
   #settle(): void { for (const w of this.#waiters.splice(0)) w(); }
-  #emit(event: EngineEvent): void { this.#o.emit(event); }
+  #emit(event: EngineEvent): void { this.#o.emit(this.#clock.stamp(event)); }
 }

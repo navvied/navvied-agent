@@ -50,6 +50,34 @@ describe("starting", () => {
   });
 });
 
+describe("the model every window is told is in use", () => {
+  test("a program with no list of models announces exactly one, the entry it was made for, as the current one", () => {
+    const r = rig({ entry: { id: "helper", name: "The helper program" } });
+    expect(r.of("caps")[0]!.models).toEqual([{ id: "helper", name: "The helper program", current: true }]);
+    r.engine.close();
+  });
+  test("with a list, the list is what is announced", () => {
+    const r = rig({ entry: { id: "helper", name: "The helper program" }, models: [{ id: "default", name: "Let it choose" }, { id: "big", name: "Big" }] });
+    expect(r.of("caps")[0]!.models!.map((m) => [m.id, m.current])).toEqual([["default", true], ["big", false]]);
+    r.engine.close();
+  });
+});
+
+describe("a step is timed by the engine's own clock", () => {
+  test("the event that ends a tool step says when it began (the first time it was seen) and how long it took, and nothing else does", async () => {
+    const r = rig();
+    const before = Date.now();
+    const t = await r.turn(say("run a tool"));
+    const cards = t.filter((e): e is Extract<EngineEvent, { ev: "tool" }> => e.ev === "tool");
+    const end = cards.at(-1)!;
+    expect(cards.slice(0, -1).some((c) => c.startedAt !== undefined || c.ms !== undefined)).toBe(false);
+    expect(end.startedAt).toBeGreaterThanOrEqual(before);
+    expect(end.ms).toBeGreaterThanOrEqual(0);
+    expect(end.startedAt! + end.ms!).toBeLessThanOrEqual(Date.now());
+    r.engine.close();
+  });
+});
+
 describe("a plain turn", () => {
   test("announces its capabilities up front: auto and plan, no compact, steering", () => {
     const r = rig();

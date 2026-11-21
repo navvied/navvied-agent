@@ -152,23 +152,39 @@ jobs:
       # public half of whatever key signed this (see the doc) — otherwise the app's own verification at update
       # time rejects every release's signature, update-or-not. The check right below refuses to build a signed
       # release with that placeholder still in place, rather than ship one silently nobody can ever update from.
+      # macOS indexes a freshly mounted volume as soon as it appears (Spotlight's own mdworker, sometimes
+      # the file-events daemon), which can hold it open past the disk-image tool's own eject retries —
+      # the bundler then reports a plain "Resource busy" with no other cause in sight. Turning indexing
+      # off before every build removes the actual holder, system-wide; the runner is thrown away after
+      # the job either way, so there is nothing to turn back on.
+      - name: Turn off Spotlight indexing (macOS only)
+        if: runner.os == 'macOS'
+        run: sudo mdutil -a -i off
       - name: Build the installer
+        id: build
         working-directory: packages/desktop/src-tauri
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          cmd=(cargo tauri build --bundles ${{ matrix.bundles }})
+          label="installer build (unsigned)"
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             if grep -q 'REPLACE-ME' tauri.conf.json; then
               echo "::error::TAURI_SIGNING_PRIVATE_KEY is set, but tauri.conf.json's plugins.updater.pubkey is still the placeholder. Replace it with the real public key (see docs/DESKTOP.md) before signing a release — otherwise every copy of the app will refuse this release's update."
               exit 1
             fi
             echo '{"bundle":{"createUpdaterArtifacts":true}}' > /tmp/updater-build.conf.json
-            bash ../scripts/ci-run.sh "installer build (signed, updater artifacts on)" cargo tauri build --bundles ${{ matrix.bundles }} --features updater --config /tmp/updater-build.conf.json
-          else
-            bash ../scripts/ci-run.sh "installer build (unsigned)" cargo tauri build --bundles ${{ matrix.bundles }}
+            cmd=(cargo tauri build --bundles ${{ matrix.bundles }} --features updater --config /tmp/updater-build.conf.json)
+            label="installer build (signed, updater artifacts on)"
           fi
+          CI_RUN_LOG=/tmp/installer-build.log bash ../scripts/ci-run.sh "$label" "${cmd[@]}"
+      # Only runs if the build above actually failed, and only says anything if that failure was the one
+      # hdiutil eject flake above — so a real bug in the build is never masked by this.
+      - name: If the disk image could not be ejected, show what else was using it
+        if: failure() && steps.build.outcome == 'failure' && runner.os == 'macOS'
+        run: bash packages/desktop/scripts/dmg-diagnose.sh /tmp/installer-build.log
       - name: Name the installers, and their update signatures when this run signed them
         run: |
           ver=$(bun -p "require('./packages/desktop/package.json').version")

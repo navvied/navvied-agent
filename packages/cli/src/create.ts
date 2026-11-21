@@ -11,6 +11,7 @@ import { TerminalState, backendFor } from "./terminal.ts";
 import { attachmentsDir, chatFilesDir, chatSessionsDir, checkpointsDir, configPath, loadConfig, pluginStatePath, terminalStatePath, resolveModel, sessionsDir, type ConfigFile, type ModelEntry } from "./config.ts";
 import type { IO } from "./io.ts";
 import { memoryPathsFor } from "./memory-ui.ts";
+import { catalogOf } from "./account.ts";
 import { INSTRUCTION_FILE_NAMES, knownEffort } from "./presets.ts";
 import { credentialsFor } from "./logins.ts";
 import { PluginState, activeHooks, activeSkills, mcpId } from "./plugins.ts";
@@ -98,7 +99,7 @@ function switcherFor(file: ConfigFile | null, current: string, env: Record<strin
   const own = Object.entries(file?.models ?? {}).filter(([, e]) => !e.command);
   if (own.length < 2) return undefined;
   return {
-    models: own.map(([id, e]) => ({ id, name: e.display?.name ?? e.model ?? id, blurb: e.display?.blurb ?? describeEntry(e), ...(e.display?.brand ? { brand: e.display.brand } : {}), ...(e.display?.badge ? { badge: e.display.badge } : {}), ...(e.display?.locked ? { locked: true } : {}) })),
+    models: own.map(([id, e]) => ({ id, name: e.display?.name ?? e.model ?? id, blurb: e.display?.blurb ?? describeEntry(e), ...(e.display?.brand ? { brand: e.display.brand } : {}), ...(e.display?.badge ? { badge: e.display.badge } : {}), ...(e.display?.locked ? { locked: true } : {}), ...(catalogOf(id, e) ? { catalog: catalogOf(id, e)! } : {}) })),
     current,
     ...(efforts?.length ? { efforts } : {}),
     use(id) {
@@ -140,7 +141,7 @@ export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) =>
   const { cli, provider } = model.value;
   const shown = file.value?.models[model.value.name]?.display?.name;
   const brain: Brain = { label: cli ? (cli.adapter === "codex" ? "the model of the user's ChatGPT plan" : "the model of the program the user is signed in to") : `"${shown ?? provider?.model ?? model.value.name}"`, ...(cli ? { program: true, ownTools: TOOL_NAMES() } : { tools: TOOL_NAMES(), small: model.value.window <= SMALL_WINDOW }), ...(kind === "chat" ? { chat: true } : {}) };
-  const program = cli && { ...common, persona: soulFor(brain, loadInstructions(cwd, dirname(path), memoryText(memory), INSTRUCTION_FILE_NAMES)), ...(options.session ? { sessionId: options.session } : {}), guard: guardCommandFor(path, cwd), command: cli.command, args: cli.args, env: cli.env, ...(cli.model ? { model: cli.model } : {}), ...(cli.models?.length ? { models: cli.models.map((m) => ({ id: m.id, name: m.name, ...(m.badge ? { badge: m.badge } : {}), ...(m.blurb ? { blurb: m.blurb } : {}) })) } : {}), ...(model.value.efforts ? { efforts: model.value.efforts } : {}) };
+  const program = cli && { ...common, entry: { id: model.value.name, name: shown ?? model.value.name }, persona: soulFor(brain, loadInstructions(cwd, dirname(path), memoryText(memory), INSTRUCTION_FILE_NAMES)), ...(options.session ? { sessionId: options.session } : {}), guard: guardCommandFor(path, cwd), command: cli.command, args: cli.args, env: cli.env, ...(cli.model ? { model: cli.model } : {}), ...(cli.models?.length ? { models: cli.models.map((m) => ({ id: m.id, name: m.name, ...(m.badge ? { badge: m.badge } : {}), ...(m.blurb ? { blurb: m.blurb } : {}) })) } : {}), ...(model.value.efforts ? { efforts: model.value.efforts } : {}) };
   const switcher = cli ? undefined : switcherFor(file.value, model.value.name, io.env, path, model.value.window, model.value.efforts);
   const engine: AgentEngine = cli
     ? cli.adapter === "codex" ? new CodexEngine(program!) : new StreamEngine(program!)
@@ -161,7 +162,7 @@ export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) =>
         ...(referenceFor(brain) ? { reference: referenceFor(brain)! } : {}),
         ...(switcher ? { switcher } : {}),
         kind,
-        model: { id: model.value.name, name: shown ?? provider?.model ?? model.value.name, ...(file.value?.models[model.value.name] ? { blurb: describeEntry(file.value.models[model.value.name]!) } : {}), ...(file.value?.models[model.value.name]?.display?.brand ? { brand: file.value.models[model.value.name]!.display!.brand! } : {}) },
+        model: { id: model.value.name, name: shown ?? provider?.model ?? model.value.name, ...(file.value?.models[model.value.name] ? { blurb: describeEntry(file.value.models[model.value.name]!) } : {}), ...(file.value?.models[model.value.name]?.display?.brand ? { brand: file.value.models[model.value.name]!.display!.brand! } : {}), ...(file.value?.models[model.value.name] && catalogOf(model.value.name, file.value.models[model.value.name]!) ? { catalog: catalogOf(model.value.name, file.value.models[model.value.name]!)! } : {}) },
         ...(options.sandboxed ? { sandboxed: true } : {}),
         // A chat has no project: no helpers, no rules or hooks written for projects, no skills, no project instructions, no checkpoints, no outside tool servers.
         ...(kind === "chat" ? {} : {

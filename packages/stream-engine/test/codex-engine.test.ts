@@ -31,7 +31,7 @@ else if (prompt.startsWith("tools")) {
 } else { out({ type: "item.completed", item: { id: "m", type: "agent_message", text: "echo:" + prompt } }); out({ type: "turn.completed", usage: { input_tokens: 100, output_tokens: 5 } }); }
 `;
 
-function rig(extra: { sessionId?: string; persona?: string } = {}) {
+function rig(extra: { sessionId?: string; persona?: string; entry?: { id: string; name: string } } = {}) {
   const dir = temp();
   const script = join(dir, "fake-codex.js");
   writeFileSync(script, SCRIPT);
@@ -110,6 +110,23 @@ describe("working through the Codex program", () => {
     await r.engine.idle();
     expect(r.calls()[1]!.slice(0, 3)).toEqual(["exec", "resume", thread]);
     expect((r.events.filter((e) => e.ev === "text").at(-1) as { text: string }).text).toBe(`echo:${tricky}\n`);
+    r.engine.close();
+  });
+
+  test("a program with no list of models announces exactly one, the entry it was made for, as the current one", () => {
+    const r = rig({ entry: { id: "codex", name: "ChatGPT plan" } });
+    expect(r.events.find((e) => e.ev === "caps")).toMatchObject({ models: [{ id: "codex", name: "ChatGPT plan", current: true }] });
+    r.engine.close();
+  });
+
+  test("the event that ends a tool step says when it began and how long it took, by the engine's own clock", async () => {
+    const r = rig();
+    const before = Date.now();
+    r.engine.handle(prompt("tools please", { qid: "q1" }));
+    await r.engine.idle();
+    const ended = r.events.filter((e): e is Extract<EngineEvent, { ev: "tool" }> => e.ev === "tool" && (e.status === "done" || e.status === "error"));
+    expect(ended.length).toBeGreaterThan(0);
+    for (const e of ended) { expect(e.startedAt).toBeGreaterThanOrEqual(before); expect(e.ms).toBeGreaterThanOrEqual(0); }
     r.engine.close();
   });
 

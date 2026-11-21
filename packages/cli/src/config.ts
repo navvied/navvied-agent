@@ -37,6 +37,8 @@ export interface ModelEntry {
   models?: { id: string; name: string; badge?: string; blurb?: string }[];
   /** The reasoning effort levels the model accepts. A model entry that sets `reasoning: "effort"` without this accepts low, medium and high. */
   efforts?: Effort[];
+  /** The id this entry has in navvied.com's own catalogue, for the entries that run one of its models (written by sign-in and by the first-run choice of the free models). */
+  catalog?: string;
   /** How the model is shown in a list, when the person should not see the real model name (a hosted service with its own brands). */
   display?: { name?: string; brand?: string; badge?: string; blurb?: string; /** Shown but not usable now, such as a model that needs a plan. */ locked?: boolean };
 }
@@ -155,6 +157,7 @@ function entry(name: string, raw: unknown): Result<ModelEntry> {
   if (typeof raw.window === "number") out.window = raw.window;
   if (typeof raw.vision === "boolean") out.vision = raw.vision;
   if (typeof raw.pdf === "boolean") out.pdf = raw.pdf;
+  if (typeof raw.catalog === "string" && raw.catalog) out.catalog = raw.catalog;
   if (raw.reasoning === "effort" || raw.reasoning === "none") out.reasoning = raw.reasoning;
   if (isObj(raw.headers)) out.headers = Object.fromEntries(Object.entries(raw.headers).filter((e): e is [string, string] => typeof e[1] === "string"));
   if (raw.display !== undefined) {

@@ -185,6 +185,8 @@ export interface ModelInfo {
   locked?: boolean;
   /** The one in use. */
   current?: boolean;
+  /** For a model of navvied.com's own catalogue (the free ones a computer may use, or the ones of the account): the id that model has in the catalogue the site lists (`/api/hosted/status`), whatever name this engine gives the entry. Left out for every other model. A page matches by this and never by the shape of `id`. */
+  catalog?: string;
   /** Whether this model takes file attachments from whoever is asking. Left out means yes. */
   files?: boolean;
   /** An administrator has turned this model off. Shown to everyone, dimmed and not clickable, except to an administrator, who may still pick it. Left out means on. */
@@ -306,10 +308,10 @@ type EngineEventBody =
   | { ev: "thought_end"; ms: number }
   /**
    * A step of the work. Besides the status: `queued` (asked for in the same step as another, waits its turn), `live` (what a running command printed since the last event),
-   * and, when it ends, `ms` (how long), `code` (the exit code of a command), `truncated` (the output was cut), `cached` (the answer came from what was read lately, not from a new visit), and `outcome` when it is not a plain failure: `denied`
+   * and, when it ends, `startedAt` (when the engine began it, milliseconds since the epoch, by the engine's own clock) and `ms` (how long), `code` (the exit code of a command), `truncated` (the output was cut), `cached` (the answer came from what was read lately, not from a new visit), and `outcome` when it is not a plain failure: `denied`
    * (the person said no), `blocked` (a rule or hook said no), `timeout`, `stopped` (cancelled), `skipped` (never started because the turn was stopped), `background` (it keeps running as a job), `redirected` (never started: the person sent a new message first, and it takes the place of the rest of the step).
    */
-  | { ev: "tool"; id: string; name: string; status: ToolStatus; input?: unknown; output?: string; progress?: number; parent?: string; queued?: true; live?: string; ms?: number; code?: number | null; truncated?: true; cached?: true; outcome?: ToolOutcome }
+  | { ev: "tool"; id: string; name: string; status: ToolStatus; input?: unknown; output?: string; progress?: number; parent?: string; queued?: true; live?: string; ms?: number; startedAt?: number; code?: number | null; truncated?: true; cached?: true; outcome?: ToolOutcome }
   /** The task list. `qid` is the prompt that started the turn it belongs to, `tool` the step (the `tool` event) that wrote it, so a page can show it inside that group. */
   | { ev: "plan"; entries: PlanEntry[]; raw?: string; qid?: string; tool?: string }
   /** Context window use: `ctx` tokens of `win`; `out` = tokens produced by the last model call. */

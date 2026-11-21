@@ -3,6 +3,7 @@
  * `codex exec --json`; the conversation continues by resuming its thread. The login belongs to that program, and this
  * adapter never sees or stores a token.
  */
+import { StepClock } from "./step-clock.ts";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { LineSplitter, RecentIds, type Command, type Effort, type EngineEvent, type ModelInfo, type PermMode, type PromptCommand } from "@navvied/protocol";
@@ -26,6 +27,8 @@ export interface CodexEngineOptions {
   efforts?: Effort[];
   /** Who the agent is. Said once, at the start of a new thread, because the thread remembers it. */
   persona?: string;
+  /** The entry of the configuration this engine was made for: with no list of models, it is the one model every window is told is in use. */
+  entry?: { id: string; name: string };
 }
 
 const SANDBOX: Record<PermMode, string> = { auto: "workspace-write", plan: "read-only", ask: "workspace-write", edits: "workspace-write", bypass: "danger-full-access" };
@@ -51,6 +54,7 @@ export class CodexEngine implements AgentEngine {
   #busy = false;
   #cancelled = false;
   #closed = false;
+  readonly #clock = new StepClock();
 
   constructor(opts: CodexEngineOptions) {
     this.#o = opts;
@@ -65,7 +69,7 @@ export class CodexEngine implements AgentEngine {
     const { models, efforts } = this.#o;
     this.#emit({
       ev: "caps", steer: false, modes: ["auto", "plan"], defaultMode: "auto", compact: false,
-      ...(models?.length ? { models: models.map((m) => ({ ...m, current: m.id === (this.#model ?? DEFAULT_MODEL) })) } : {}),
+      ...(models?.length ? { models: models.map((m) => ({ ...m, current: m.id === (this.#model ?? DEFAULT_MODEL) })) } : this.#o.entry ? { models: [{ ...this.#o.entry, current: true }] } : {}),
       ...(efforts?.length ? { efforts } : {}),
       ...(this.#effort ? { effort: this.#effort } : {}),
     });
@@ -111,7 +115,7 @@ export class CodexEngine implements AgentEngine {
     this.#announce();
   }
 
-  #emit(e: EngineEvent): void { this.#o.emit(e); }
+  #emit(e: EngineEvent): void { this.#o.emit(this.#clock.stamp(e)); }
 
   #settle(): void { for (const w of this.#waiters.splice(0)) w(); }
 

@@ -64,6 +64,7 @@ export function hostedEntries(account: Account, listing: HostedModels): Record<s
       baseUrl: `${account.server.replace(/\/+$/, "")}/v1`,
       api: m.api,
       model: m.id,
+      catalog: m.id,
       apiKey: account.token,
       window: m.window,
       reasoning: m.reasoning,
@@ -83,6 +84,7 @@ export function guestEntries(server: string, listing: HostedModels & { tokensPer
       baseUrl: `${server.replace(/\/+$/, "")}/v1`,
       api: m.api,
       model: m.id,
+      catalog: m.id,
       window: m.window,
       reasoning: m.reasoning,
       ...(m.efforts?.length ? { efforts: m.efforts } : {}),
@@ -90,6 +92,16 @@ export function guestEntries(server: string, listing: HostedModels & { tokensPer
     };
   }
   return entries;
+}
+
+/**
+ * The id an entry has in navvied.com's catalogue, or nothing when it is not one of its models. Entries written by sign-in and by the
+ * first-run choice carry it; a free-model entry saved before that existed is told by its name and its address, here and nowhere else.
+ */
+export function catalogOf(name: string, entry: ModelEntry): string | undefined {
+  if (entry.catalog) return entry.catalog;
+  if (!name.startsWith(GUEST_PREFIX) || !entry.baseUrl) return undefined;
+  try { return new URL(entry.baseUrl).origin === new URL(DEFAULT_SERVER).origin ? name.slice(GUEST_PREFIX.length) || undefined : undefined; } catch { return undefined; }
 }
 
 export const hasAccountFile = (file: string): boolean => existsSync(file);
