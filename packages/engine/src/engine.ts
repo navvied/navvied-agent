@@ -2,6 +2,7 @@
  * The engine: one conversation, one agent loop. It receives protocol commands and emits protocol events; everything it needs
  * from the outside (model provider, session store, tools, clock) is passed in, so a whole run can be tested against a script.
  */
+import { RetryProvider, type RetryOptions } from "./providers/retry.ts";
 import { historyOf } from "./store.ts";
 import { join, resolve } from "node:path";
 import { REFUSED, RecentIds, type Command, type Effort, type EngineEvent, type FileNote, type ModelInfo, type PermMode, type PromptCommand, type SessionKind, type StopReason, type ToolOutcome, type TurnTokens } from "@navvied/protocol";
@@ -50,6 +51,8 @@ export interface ModelSwitch {
 
 export interface EngineOptions {
   provider: Provider;
+  /** How a call to the model that failed is made again (the number of tries, and for a test how the waiting is done). */
+  retry?: RetryOptions;
   /** Where the files a person attaches are saved: one folder per session below it (default: a folder of the system's temporary files). */
   attachments?: string;
   /** The effort levels the model supports, for an engine with one model (with a switcher, the switcher says). */
@@ -147,6 +150,9 @@ const refusesEffort = (e: unknown): boolean => (e as { status?: number } | undef
 const BLIND = "This model cannot see pictures, so they were not sent.";
 const REFUSES_PICTURES = /image|picture|vision|multimodal|multi-modal|modalit/i;
 
+/** A model is called again by itself when that is worth it: one that does not already do so is put inside the one loop that does. */
+const retrying = (p: Provider, o?: RetryOptions): Provider => (p.retries ? p : new RetryProvider(p, o));
+
 /** Run a collaborator's code that must never be able to stop a turn: a failure counts as "no result". */
 function attempt<T>(fn: () => T): T | undefined {
   try { return fn(); } catch { return undefined; }
@@ -201,7 +207,7 @@ export class Engine implements AgentEngine {
 
   constructor(opts: EngineOptions) {
     this.#o = { maxSteps: 60, allowPrivateNetwork: false, ...opts };
-    this.#provider = opts.provider;
+    this.#provider = retrying(opts.provider, opts.retry);
     this.#window = opts.window;
     this.#vision = opts.vision;
     registerSecrets(opts.secrets ?? []);
@@ -341,7 +347,31 @@ export class Engine implements AgentEngine {
     return found;
   }
 
-  /** Messages that were waiting and will not run: every window is told, so none stays on the screen as waiting for ever. */
+  /**
+   * The one way work that is not a turn (a model switch, a manual compact) holds the engine: busy for as long as `work` takes, then
+   * the end of busy, which is the only place that looks at the queue. A prompt sent while it ran was only ever queued, never taken into
+   * a turn (`#prompt` queues anything sent while `#busy`), so it runs now as its own turn instead of waiting for some later prompt to
+   * notice it. A failing `work` is told and ends the same way: busy never outlives it. Only when nothing arrived does `settled` run and
+   * `done` say the engine is idle again. `#running` ends up being the turn that was started, so `idle()` still means what it says.
+   *
+   * A turn ends differently on purpose (see `#turn`): there, stop is the person's answer to what was waiting, so a cancelled or failed
+   * turn drops its queue and tells every window; here nothing was stopped, so nothing waiting is dropped.
+   */
+  #exclusive(work: () => Promise<StopReason>, settled?: () => void): void {
+    this.#busy = true;
+    this.#abort = new AbortController();
+    this.#running = (async () => {
+      let stop: StopReason = "error";
+      try { stop = await work(); } catch (e) { this.#emit({ ev: "error", msg: e instanceof Error ? e.message : String(e) }); }
+      const next = this.#queue.shift();
+      if (next) { this.#running = this.#turn(next); await this.#running; return; }
+      this.#busy = false;
+      settled?.();
+      this.#emit({ ev: "done", stop });
+    })();
+  }
+
+  /** Messages that were waiting and will not run (the turn was cancelled or failed): every window is told, so none stays on the screen as waiting for ever. */
   #dropQueue(): void {
     const qids = this.#queue.flatMap((q) => (q.qid ? [q.qid] : []));
     this.#queue.length = 0;
@@ -382,16 +412,11 @@ export class Engine implements AgentEngine {
     if ("error" in check) { this.#emit({ ev: "error", msg: check.error }); return; }
     if (this.#busy) { this.#wantModel = id; this.#announce(); return; }
     this.#wantModel = id;
-    this.#busy = true;
-    this.#abort = new AbortController();
-    this.#running = (async () => {
+    this.#exclusive(async () => {
       const fits = await this.#applyWantedModel();
       this.#lastContext = estimateTokens(this.#messages);
-      this.#busy = false;
-      this.#announce();
-      this.#emit({ ev: "usage", ctx: this.#lastContext, win: this.#window, out: 0 });
-      this.#emit({ ev: "done", stop: fits ? "end_turn" : "error" });
-    })();
+      return fits ? "end_turn" : "error";
+    }, () => this.#emit({ ev: "usage", ctx: this.#lastContext, win: this.#window, out: 0 }));
   }
 
   /** Puts the model that was chosen in use (between two turns), summarising first when the conversation is too long for it. False when it cannot be done. */
@@ -410,7 +435,7 @@ export class Engine implements AgentEngine {
       fits = !shouldCompact(estimateTokens(this.#messages), next.window);
     }
     if (fits) {
-      this.#provider = next.provider;
+      this.#provider = retrying(next.provider, this.#o.retry);
       this.#window = next.window;
       if (next.persona !== undefined) this.#persona = next.persona;
       if (next.reference !== undefined) this.#reference = next.reference;
@@ -432,9 +457,7 @@ export class Engine implements AgentEngine {
 
   #compactCommand(): void {
     if (this.#busy) { this.#emit({ ev: "error", msg: "Wait for the current turn to finish, then compact." }); return; }
-    this.#busy = true;
-    this.#abort = new AbortController();
-    this.#running = this.#compact(true).then((ok) => { this.#busy = false; this.#emit({ ev: "done", stop: ok ? "compacted" : "error" }); });
+    this.#exclusive(async () => ((await this.#compact(true)) ? "compacted" : "error"));
   }
 
   #listCheckpoints(): void {
@@ -503,10 +526,13 @@ export class Engine implements AgentEngine {
     } finally {
       // A model chosen during this turn takes effect now, so the next message finds it in use.
       try { await this.#applyWantedModel(); } catch { /* the model stays as it was */ }
-      this.#busy = false;
-      this.#dropQueue();
+      // That may have taken a while (a long conversation is summarised first), and a prompt sent meanwhile was queued: after a turn that
+      // ended well it runs as the next turn. After a cancel or an error it is dropped, and every window is told: the person stopped it, or the turn failed.
+      const rest = stop === "end_turn" ? this.#queue.shift() : undefined;
+      if (!rest) { this.#busy = false; this.#dropQueue(); }
       this.#emit({ ev: "done", stop });
       if (this.#o.hooks) void this.#o.hooks.stop({ reason: stop }).then((r) => { for (const note of r.notes) this.#emit({ ev: "notice", msg: note }); }).catch(() => undefined);
+      if (rest) { this.#running = this.#turn(rest); await this.#running; }
     }
   }
 
@@ -565,6 +591,7 @@ export class Engine implements AgentEngine {
           text: (text) => said(written.push(text)),
           thought: (text) => { thinkingSince ??= Date.now(); this.#emit({ ev: "thought", text }); },
           toolStarted: (id, name) => { endThought(); if (name !== PLAN_TOOL_NAME) this.#emit({ ev: "tool", id, name, status: "running", progress: 0 }); },
+          retry: (info) => this.#emit({ ev: "retry", ...info }),
         },
       );
       // A server that does not know the effort field answers 400; the same request goes again without it, once, and the model is taken as one without an effort setting.
@@ -737,7 +764,11 @@ export class Engine implements AgentEngine {
           const rule = this.#o.rules?.check(tool.name, args);
           if (rule?.kind === "deny") return fail(`Blocked by the permission rule ${rule.rule}.`, "blocked");
           this.#emit({ ev: "tool", id: call.id, name: tool.name, status: "running", input: this.#shown(args) });
-        } else if (given.optionId !== ALLOW && given.optionId !== EDIT) return fail("The user denied this action.", "denied");
+        } else if (given.optionId !== ALLOW && given.optionId !== EDIT) {
+          // A no may carry what the person wants instead: the model is told in their words (a secret they typed stays hidden), not only that it was refused.
+          const said = given.input?.trim();
+          return fail(said ? `Not run. The person said: ${this.#vault.hide(said).text}` : "The user denied this action.", "denied");
+        }
       }
     }
     if (this.#o.hooks) {
@@ -756,7 +787,7 @@ export class Engine implements AgentEngine {
     // What a running command prints is made safe as it arrives, before it reaches an event.
     const safe = new Redactor();
     const live = (raw: string): void => { const chunk = safe.push(raw); if (!chunk || sent > LIVE_MOST) return; sent += chunk.length; pending += chunk; timer ??= setTimeout(flush, LIVE_EVERY_MS); };
-    let meta: { code?: number | null; truncated?: boolean; timedOut?: boolean; background?: boolean } = {};
+    let meta: { code?: number | null; truncated?: boolean; timedOut?: boolean; background?: boolean; cached?: boolean } = {};
     let output: string;
     try {
       output = await tool.run(this.#restored(tool.name, args), { cwd: this.#o.cwd, ...(isConfined(this.#kind) ? { root: this.#o.cwd } : {}), signal: this.#abort.signal, emit: (e) => this.#emit(e.ev === "plan" ? { ...e, ...(this.#turnQid ? { qid: this.#turnQid } : {}), tool: call.id } : e), live, report: (m) => { meta = { ...meta, ...m }; }, allowPrivateNetwork: this.#o.allowPrivateNetwork, window: this.#window, shell: this.#shell, jobs: this.#jobs, ...(this.#o.backend ? { backend: this.#o.backend } : {}), ...(this.#o.recall ? { recall: this.#o.recall } : {}), ...(this.#o.search ? { search: this.#o.search } : {}), ...(this.#o.webProxy ? { webProxy: this.#o.webProxy } : {}), ...(this.#o.skills ? { skills: this.#o.skills } : {}), ...(this.#o.memory ? { memory: this.#o.memory } : {}), helper: (task, signal) => this.#delegate(call.id, task, signal) });
@@ -769,7 +800,7 @@ export class Engine implements AgentEngine {
     const stopped = this.#abort.signal.aborted || output.endsWith("[interrupted]");
     const outcome: ToolOutcome | undefined = meta.timedOut ? "timeout" : stopped ? "stopped" : meta.background ? "background" : undefined;
     const failed = output.startsWith("Error:") || outcome === "timeout" || outcome === "stopped";
-    this.#emit({ ev: "tool", id: call.id, name: tool.name, status: failed ? "error" : "done", output, ms: Date.now() - t0, ...(meta.code !== undefined ? { code: meta.code } : {}), ...(meta.truncated ? { truncated: true as const } : {}), ...(outcome ? { outcome } : {}) });
+    this.#emit({ ev: "tool", id: call.id, name: tool.name, status: failed ? "error" : "done", output, ms: Date.now() - t0, ...(meta.code !== undefined ? { code: meta.code } : {}), ...(meta.truncated ? { truncated: true as const } : {}), ...(meta.cached ? { cached: true as const } : {}), ...(outcome ? { outcome } : {}) });
     if (this.#o.hooks) for (const note of (await this.#o.hooks.post({ tool: tool.name, input: args, output }, this.#abort.signal).catch(() => ({ notes: [] as string[] }))).notes) this.#emit({ ev: "notice", msg: note });
     return output;
   }
@@ -778,7 +809,7 @@ export class Engine implements AgentEngine {
     this.#emit({ ev: "phase", name: "compacting" });
     if (this.#o.hooks?.compact) for (const note of (await this.#o.hooks.compact({ manual }, this.#abort.signal).catch(() => ({ notes: [] as string[] }))).notes) this.#emit({ ev: "notice", msg: note });
     try {
-      const next = await compactMessages(this.#messages, this.#provider, this.#abort.signal, keep);
+      const next = await compactMessages(this.#messages, this.#provider, this.#abort.signal, keep, { retry: (info) => this.#emit({ ev: "retry", ...info }) });
       if (!next) { if (manual) this.#emit({ ev: "error", msg: "Nothing to compact yet — the conversation is still short." }); return false; }
       this.#messages = next;
       this.#lastContext = estimateTokens(next);

@@ -4,7 +4,7 @@
  */
 import type { Message, ModelReply, ModelRequest, Part, Provider, StreamHandlers, ToolCall } from "../types.ts";
 import { sseData } from "./sse.ts";
-import { fetchModel } from "./net.ts";
+import { fetchModel, retryAfterMs } from "./net.ts";
 
 
 export interface ChatCompletionsConfig {
@@ -20,7 +20,7 @@ export interface ChatCompletionsConfig {
 }
 
 export class ProviderError extends Error {
-  constructor(message: string, readonly status?: number) { super(message); this.name = "ProviderError"; }
+  constructor(message: string, readonly status?: number, /** How long the service asked to wait before another try, in milliseconds. */ readonly retryAfterMs?: number) { super(message); this.name = "ProviderError"; }
 }
 
 const part = (p: Part) => (p.type === "text" ? { type: "text", text: p.text } : { type: "image_url", image_url: { url: `data:${p.mime};base64,${p.data}` } });
@@ -54,7 +54,7 @@ export class ChatCompletionsProvider implements Provider {
     const res = await fetchModel(this.url(), { method: "POST", headers: this.headers(), body: JSON.stringify(body), signal });
     if (!res.ok || !res.body) {
       const detail = (await res.text().catch(() => "")).slice(0, 400);
-      throw new ProviderError(`the model endpoint answered ${res.status}${detail ? `: ${detail}` : ""}`, res.status);
+      throw new ProviderError(`the model endpoint answered ${res.status}${detail ? `: ${detail}` : ""}`, res.status, retryAfterMs(res));
     }
 
     const reply: ModelReply = { content: "", calls: [], finish: "" };
@@ -90,7 +90,7 @@ export class ChatCompletionsProvider implements Provider {
       method: "POST", headers: this.headers(), signal,
       body: JSON.stringify({ model: this.cfg.model, stream: false, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
     });
-    if (!res.ok) throw new ProviderError(`the model endpoint answered ${res.status}`, res.status);
+    if (!res.ok) throw new ProviderError(`the model endpoint answered ${res.status}`, res.status, retryAfterMs(res));
     const json: any = await res.json();
     const text = json?.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) throw new ProviderError("the model returned an empty answer");

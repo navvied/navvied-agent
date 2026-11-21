@@ -137,6 +137,13 @@ describe("a turn", () => {
     expect(r.shown()).not.toContain("Waiting for your answer");
     expect(r.shown()).toContain("✗ npm run dev  stopped working, exit 1");
   });
+  test("a call to the model that is made again is one quiet line, not a failure, and an event this program does not know shows nothing and breaks nothing", () => {
+    const r = rig();
+    r.send({ ev: "user", qid: "q", text: "x" }, { ev: "retry", reason: "the model asked to slow down", attempt: 3, of: 8, inSeconds: 2 }, { ev: "from_a_newer_engine" } as never);
+    expect(r.shown()).toContain("The model asked to slow down. Trying again in 2 s (try 3 of 8).");
+    expect(r.shown()).not.toContain("✗");
+    expect(r.shown()).not.toContain("from_a_newer_engine");
+  });
   test("a notice is a plain line that does not look like a failure", () => {
     const r = rig();
     r.send({ ev: "user", qid: "q", text: "x" }, { ev: "notice", msg: 'The connected program "notes" could not be used: could not start' });

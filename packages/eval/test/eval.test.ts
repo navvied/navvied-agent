@@ -194,7 +194,7 @@ describe("running a task end to end", () => {
   });
   afterAll(() => server.stop(true));
 
-  const env = () => ({ HOME: state, XDG_STATE_HOME: state, XDG_CONFIG_HOME: state, NAVVIED_BASE_URL: `http://127.0.0.1:${server.port}/v1`, NAVVIED_MODEL: "scripted", NAVVIED_WINDOW: "100000" });
+  const env = () => ({ HOME: state, XDG_STATE_HOME: state, XDG_CONFIG_HOME: state, NAVVIED_BASE_URL: `http://127.0.0.1:${server.port}/v1`, NAVVIED_MODEL: "scripted", NAVVIED_WINDOW: "100000", NAVVIED_RETRIES: "0" });
   const run = (task: Task) => runTask(task, { command: ["bun", CLI], env: env() });
   const pickMade = (task: Task) => { solution = {}; return task; };
   const pick = (id: string) => { const t = loadTasks(TASKS, [id])[0]!; solution = solutionFiles(t); return t; };

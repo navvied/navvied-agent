@@ -14,6 +14,13 @@ export async function fetchModel(url: string, init: RequestInit & { signal: Abor
   try {
     return await fetch(url, { ...init, signal: AbortSignal.any([init.signal, ours.signal]) });
   } catch (e) {
+    // Nobody is listening there, or the name is not known: that is not a hiccup that passes, so it is said plainly, with the address, and not tried again.
+    const code = (e as { code?: string }).code ?? (e as { cause?: { code?: string } }).cause?.code;
+    if (code === "ECONNREFUSED" || code === "ENOTFOUND") {
+      let origin = url;
+      try { origin = new URL(url).origin; } catch { /* keep the whole address */ }
+      throw new ProviderError(code === "ECONNREFUSED" ? `Nothing answers at ${origin}. Start the model server, then send again.` : `The address ${origin} was not found. Check it in the settings, then send again.`);
+    }
     if (late && !init.signal.aborted) {
       let host = url;
       try { host = new URL(url).host; } catch { /* keep the whole address */ }
@@ -21,4 +28,23 @@ export async function fetchModel(url: string, init: RequestInit & { signal: Abor
     }
     throw e;
   } finally { clearTimeout(timer); }
+}
+
+/** How long the service asked to wait before another try (`Retry-After`: seconds, or a date), in milliseconds; nothing when it did not say. */
+export function retryAfterMs(res: Response, now: number = Date.now()): number | undefined {
+  const raw = res.headers.get("retry-after")?.trim();
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds)) return Math.max(0, Math.round(seconds * 1000));
+  const at = Date.parse(raw);
+  return Number.isNaN(at) ? undefined : Math.max(0, at - now);
+}
+
+/** The status an error that came inside an answer stands for, from the kind the service named: it was busy, it asked to slow down, or it broke. */
+export function statusOfKind(kind: string | undefined): number | undefined {
+  if (!kind) return undefined;
+  if (/overload/i.test(kind)) return 529;
+  if (/rate.?limit/i.test(kind)) return 429;
+  if (/server_error|api_error|internal/i.test(kind)) return 500;
+  return undefined;
 }

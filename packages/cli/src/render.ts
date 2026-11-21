@@ -43,6 +43,10 @@ export interface RenderOptions {
   now?: () => number;
 }
 
+/** The one quiet line that says a call to the model is being made again. */
+export const retryLine = (e: { reason: string; attempt: number; of: number; inSeconds: number }): string =>
+  `${e.reason.charAt(0).toUpperCase()}${e.reason.slice(1)}. Trying again in ${e.inSeconds} s (try ${e.attempt} of ${e.of}).`;
+
 export class Renderer {
   #atLineStart = true;
   #tools = new Map<string, { name: string; described: boolean }>();
@@ -68,6 +72,7 @@ export class Renderer {
       case "plan_proposal": io.stderr.write(`\n${paint(c, "cyan", "Plan ready.")}\n`); return;
       case "phase": if (e.name === "compacting") io.stderr.write(paint(c, "dim", "compacting the conversation…\n")); return;
       case "usage": this.#lastUsage = { ctx: e.ctx, win: e.win }; return;
+      case "retry": io.stderr.write(`${paint(c, "dim", retryLine(e))}\n`); return;
       case "notice": io.stderr.write(`${paint(c, "yellow", "note:")} ${e.msg}\n`); return;
       case "error": io.stderr.write(`${paint(c, "red", "error:")} ${e.msg}\n`); return;
       case "checkpoints":

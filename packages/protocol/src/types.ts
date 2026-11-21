@@ -306,10 +306,10 @@ type EngineEventBody =
   | { ev: "thought_end"; ms: number }
   /**
    * A step of the work. Besides the status: `queued` (asked for in the same step as another, waits its turn), `live` (what a running command printed since the last event),
-   * and, when it ends, `ms` (how long), `code` (the exit code of a command), `truncated` (the output was cut), and `outcome` when it is not a plain failure: `denied`
+   * and, when it ends, `ms` (how long), `code` (the exit code of a command), `truncated` (the output was cut), `cached` (the answer came from what was read lately, not from a new visit), and `outcome` when it is not a plain failure: `denied`
    * (the person said no), `blocked` (a rule or hook said no), `timeout`, `stopped` (cancelled), `skipped` (never started because the turn was stopped), `background` (it keeps running as a job), `redirected` (never started: the person sent a new message first, and it takes the place of the rest of the step).
    */
-  | { ev: "tool"; id: string; name: string; status: ToolStatus; input?: unknown; output?: string; progress?: number; parent?: string; queued?: true; live?: string; ms?: number; code?: number | null; truncated?: true; outcome?: ToolOutcome }
+  | { ev: "tool"; id: string; name: string; status: ToolStatus; input?: unknown; output?: string; progress?: number; parent?: string; queued?: true; live?: string; ms?: number; code?: number | null; truncated?: true; cached?: true; outcome?: ToolOutcome }
   /** The task list. `qid` is the prompt that started the turn it belongs to, `tool` the step (the `tool` event) that wrote it, so a page can show it inside that group. */
   | { ev: "plan"; entries: PlanEntry[]; raw?: string; qid?: string; tool?: string }
   /** Context window use: `ctx` tokens of `win`; `out` = tokens produced by the last model call. */
@@ -326,6 +326,8 @@ type EngineEventBody =
   | { ev: "queue"; position: number }
   | { ev: "done"; stop: StopReason }
   /** Something worth telling the person that does not stop the work, such as a connected program that could not start. */
+  /** A call to the model failed in a way that is worth trying again (it was busy, asked to slow down, broke, or the connection dropped) and will be tried again after `inSeconds`: `attempt` is the try that comes next, out of `of`. Said before each wait; the turn goes on by itself, so a page may show it as a quiet line or ignore it. */
+  | { ev: "retry"; reason: string; attempt: number; of: number; inSeconds: number }
   | { ev: "notice"; msg: string }
   | { ev: "error"; msg: string };
 

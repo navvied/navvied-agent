@@ -40,18 +40,25 @@ export interface ModelReply {
   usage?: { prompt: number; completion: number };
 }
 
+/** A call to the model is about to be made again: why, which try comes next out of how many, and how long it waits first. */
+export interface RetryInfo { reason: string; attempt: number; of: number; inSeconds: number }
+
 export interface StreamHandlers {
   text(delta: string): void;
   thought(delta: string): void;
   /** The model named a tool — its arguments may still be streaming. */
   toolStarted(id: string, name: string): void;
+  /** Said before each wait that comes before another try. */
+  retry?(info: RetryInfo): void;
 }
 
 export interface Provider {
   /** The service reads a PDF given as a file part, so the original goes along with its text. */
   readonly readsPdf?: boolean;
+  /** Calls to it are made again by itself when that is worth doing (see `RetryProvider`), so nobody puts it inside another loop. */
+  readonly retries?: true;
   stream(req: ModelRequest, signal: AbortSignal, on: StreamHandlers): Promise<ModelReply>;
-  complete(system: string, user: string, signal: AbortSignal): Promise<string>;
+  complete(system: string, user: string, signal: AbortSignal, on?: { retry?: (info: RetryInfo) => void }): Promise<string>;
 }
 
 /** The address (up to and including `/v1/web`) and the token of the service that fetches and searches the web for a session. */
@@ -87,7 +94,7 @@ export interface ToolContext {
   /** What a command printed, as it prints (the engine passes it on, a little at a time). */
   live?: (chunk: string) => void;
   /** Facts about how the work ended, for the step's card: the exit code, that the output was cut, that it timed out, or that it went on as a job. */
-  report?: (meta: { code?: number | null; truncated?: boolean; timedOut?: boolean; background?: boolean }) => void;
+  report?: (meta: { code?: number | null; truncated?: boolean; timedOut?: boolean; background?: boolean; cached?: boolean }) => void;
   /** Runs a research task in a helper of its own and returns what it found. */
   helper?: (task: { description: string; prompt: string; agent?: string }, signal: AbortSignal) => Promise<string>;
 }

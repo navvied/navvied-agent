@@ -9,7 +9,7 @@ Peers **ignore unknown fields and unknown events**. The reference implementation
 |---|---|---|
 | `prompt` | `text`, `qid?`, `images?`, `files?`, `effort?, `mode?`, `paths?` | `qid` is a client-chosen id; re-sending a known `qid` is a no-op, so a client may safely re-send anything not yet confirmed by `taken`. A prompt sent while a turn runs is folded into it. |
 | `cancel` | — | Stops the turn, kills running commands, denies pending approvals. |
-| `approve` | `id`, `optionId` | Answers an `approval` event. |
+| `approve` | `id`, `optionId`, `input?` | Answers an `approval` event. `input` is the changed command for the Edit option, or, with the Deny option, what the person wants instead: the model is then told `Not run. The person said: <text>` as the result of the step (a secret in it is hidden); a Deny without text says `The user denied this action.` as before. |
 | `compact` | — | Summarise older turns now. |
 | `model` | `id` | Use another of the models in `caps.models` from the next message on. The conversation carries over. |
 | `effort` | `level` (`auto` or an effort) | Set the reasoning effort from the next message on. `auto` sends none. |
@@ -46,6 +46,7 @@ Every event carries `seq` (strictly increasing) and `eid` (unique).
 | `plan_proposal` | `id` | Plan mode finished; the plan was streamed as `text`. |
 | `phase` | `name` | `""`, `starting` or `compacting`. |
 | `job` | `id`, `title`, `status` (`running`, `done`, `failed`, `stopped`), `code?`, `startedAt?`, `last?` | A command running in the background: sent when it starts and again when it ends. `startedAt` is in ms since the epoch; `last` is the last line it printed, sent when it ends. |
+| `retry` | `reason`, `attempt`, `of`, `inSeconds` | A call to the model failed in a way that is worth another try (it was busy or asked to slow down, its server broke or was too slow, or the connection dropped before anything was said; a server that nobody listens on, or an unknown name, is not tried again: it is an `error` with the address) and will be made again after `inSeconds`: `attempt` is the try that comes next, out of `of` (8). Sent before each wait; the turn goes on by itself. The service's `Retry-After` is obeyed, otherwise the wait doubles each time (1 s, 2 s, 4 s … at most 30 s) with a little spread, and all the waiting is at most two minutes. A stream that had already begun to answer is not tried again. Stopping the turn ends the wait at once. When every try is used up the next model of a chain is asked, or the failure is shown as an `error`. A page may show it as a quiet line or ignore it. |
 | `notice` | `msg` | Something worth telling the person that does not stop the work, such as a connected program that could not start. |
 | `alive` | — | Heartbeat during long silent work. |
 | `queue` | `position` | Sent by a hosting server (never by an engine) while a session waits for a free place; `1` is next. It carries no `seq`. The engine's own events follow once the session starts. |
@@ -203,9 +204,10 @@ A step is the series of `tool` events with one `id`. Everything below is optiona
 |---|---|
 | Queued ("waiting its turn") | `queued: true` on a step that was asked for in the same go as an earlier one; a normal running event follows when it starts |
 | Running, with a clock | `status: "running"` (the page times it); `live` carries what a command printed since the last event (at most every 150 ms, 200 KB in all) |
-| Waiting for the person | an `approval` event whose `tool` is the step's id; its `options` are Allow, Allow-and-do-not-ask-again, and (for a command) **Edit** with `editable.value` = the command. Answer with `approve { id, optionId, input? }`: `input` is the changed command, which is checked again against the hard limits and the rules (a refusal shows as `outcome: "blocked"`). The step then gets a new `running` event with the changed `input` (an "edited" chip) |
+| Waiting for the person | an `approval` event whose `tool` is the step's id; its `options` are Allow, Allow-and-do-not-ask-again, and (for a command) **Edit** with `editable.value` = the command. Answer with `approve { id, optionId, input? }`: with Edit, `input` is the changed command, which is checked again against the hard limits and the rules (a refusal shows as `outcome: "blocked"`). The step then gets a new `running` event with the changed `input` (an "edited" chip) |
 | Done / failed | `status: "done"` or `"error"`, with `ms` (how long), `code` (exit code of a command; `null` when it did not exit) and `output` |
 | Output was cut | `truncated: true` |
+| Came from the cache ("Cached") | `cached: true` on a step that ended: the answer was served from what was read lately, with no new visit (`WebFetch` reading a page again, or reading on with `offset`, within 15 minutes). A step that fetched the page itself has none; `Read` has no cache, so it never carries it |
 | Denied, blocked, timed out, stopped, skipped, background | `outcome` on a step that ended: `denied` (the person said no), `blocked` (a hard limit, a rule or a hook), `timeout`, `stopped` (cancelled while running), `skipped` (never started because the turn was stopped), `background` (it keeps running; follow it with the `job` events), `redirected` (never started: the person sent a new message while it waited its turn, so it did not run and the new message takes its place) |
 | Starting, Thinking, Compacting | `phase` (`starting`, `compacting`), and `thought` … `thought_end` for thinking |
 | The group's line ("Ran 3 commands, read 1 file") | counted by the page from the steps' `name`s |

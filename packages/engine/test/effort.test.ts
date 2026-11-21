@@ -89,7 +89,7 @@ describe("a server that does not know the effort field", () => {
   });
 
   test("only a 400 about the field counts: another 400, another status and a request that sent no effort are errors as before", async () => {
-    for (const [status, message, withEffort] of [[400, "messages: first message must be from the user", true], [500, "reasoning engine crashed", true], [400, "Unknown parameter: 'reasoning_effort'.", false]] as const) {
+    for (const [status, message, withEffort] of [[400, "messages: first message must be from the user", true], [401, "the key is not accepted", true], [400, "Unknown parameter: 'reasoning_effort'.", false]] as const) {
       answer = () => new Response(JSON.stringify({ error: { message } }), { status });
       seen = [];
       const r = rig(() => ({ text: "x" }), { provider: new ChatCompletionsProvider({ baseUrl: base(), model: "m" }), efforts: ["low", "high"] });

@@ -2,6 +2,7 @@ export { Engine, type EngineOptions, type ModelSwitch } from "./engine.ts";
 export type { AgentEngine } from "./contract.ts";
 export { ChatCompletionsProvider, ProviderError, toWire, type ChatCompletionsConfig } from "./providers/chat-completions.ts";
 export { FallbackProvider, worthAnother, type Link as FallbackLink } from "./providers/fallback.ts";
+export { RetryProvider, retryable, MAX_ATTEMPTS, MOST_WAIT_MS, type RetryOptions } from "./providers/retry.ts";
 export { ResponsesApiProvider, toInput as toResponsesInput, type ResponsesApiConfig } from "./providers/responses-api.ts";
 export { MESSAGES_HEADERS, MessagesApiProvider, toWire as toMessagesWire, type MessagesApiConfig } from "./providers/messages-api.ts";
 export { OllamaProvider, toWire as toOllamaWire, type OllamaConfig } from "./providers/ollama.ts";

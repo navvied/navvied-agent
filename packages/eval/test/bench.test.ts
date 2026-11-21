@@ -18,7 +18,7 @@ let mock: Mock, meter: Meter;
 beforeAll(() => { mock = startMock(tasks, () => behaviour); meter = startMeter(mock.url); });
 afterAll(hook("bench removes what it made", async () => { meter.stop(); mock.stop(); await removeTree(home); }), HOOK_MS);
 
-const world = { HOME: home, XDG_STATE_HOME: home, XDG_CONFIG_HOME: home, NAVVIED_MODEL: "scripted", NAVVIED_WINDOW: "100000" };
+const world = { HOME: home, XDG_STATE_HOME: home, XDG_CONFIG_HOME: home, NAVVIED_MODEL: "scripted", NAVVIED_WINDOW: "100000", NAVVIED_RETRIES: "0" };
 const run = (task: Task, how: Behaviour) => { behaviour = how; mock.requests.length = 0; return runTask(task, { command: ["bun", CLI], label: `mock:${how}`, env: world, meter, agentEnv: (base) => ({ NAVVIED_BASE_URL: base }) }); };
 /** What still runs by this name once the system has had a moment to remove what was killed (it is waited for, not guessed at). */
 async function gone(name: string): Promise<string> {

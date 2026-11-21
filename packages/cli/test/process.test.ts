@@ -12,7 +12,7 @@ afterAll(() => { mock.stop(); dirs.forEach(remove); });
 
 function env() {
   const state = tempDir(); dirs.push(state);
-  return { PATH: process.env.PATH ?? "", HOME: state, XDG_STATE_HOME: state, NAVVIED_BASE_URL: mock.url, NAVVIED_MODEL: "m", NAVVIED_WINDOW: "100000" };
+  return { PATH: process.env.PATH ?? "", HOME: state, XDG_STATE_HOME: state, NAVVIED_BASE_URL: mock.url, NAVVIED_MODEL: "m", NAVVIED_WINDOW: "100000", NAVVIED_RETRIES: "0" };
 }
 const spawn = (args: string[], e = env(), stdin: "pipe" | "ignore" = "ignore") =>
   Bun.spawn(["bun", MAIN, ...args], { env: e, stdin, stdout: "pipe", stderr: "pipe" });

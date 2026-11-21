@@ -89,6 +89,58 @@ describe("switching models in the middle of a conversation", () => {
     expect(caps().models!.find((m) => m.current)!.id).toBe("small");
     first.cleanup();
   });
+  test("a prompt sent in the same instant as a model switch is not stranded in the queue: it runs as soon as the switch is applied", async () => {
+    const { first, caps } = pair();
+    first.send({ cmd: "model", id: "small" });
+    first.send(prompt("halo", { qid: "q1" }));
+    await first.engine.idle();
+    expect(first.of("queued")).toHaveLength(1);
+    expect(first.of("user")).toHaveLength(1);
+    expect(first.of("taken")).toHaveLength(1);
+    expect(first.text()).toContain("from the small one");
+    expect(first.of("done").at(-1)).toMatchObject({ stop: "end_turn" });
+    expect(caps().models!.find((m) => m.current)!.id).toBe("small");
+    first.cleanup();
+  });
+  test("a prompt sent in the same instant as a manual compact is not stranded either", async () => {
+    const { first } = pair();
+    first.send(prompt("remember the word kiwi"));
+    await first.engine.idle();
+    first.send({ cmd: "compact" });
+    first.send(prompt("what was the word?", { qid: "q1" }));
+    await first.engine.idle();
+    expect(first.of("queued")).toHaveLength(1);
+    expect(first.of("taken").map((e) => e.qid)).toEqual(["q1"]);
+    expect(first.of("done").at(-1)).toMatchObject({ stop: "end_turn" });
+    first.cleanup();
+  });
+  test("a switch that fails leaves the engine free: it says so, and the next prompt runs instead of waiting for ever", async () => {
+    let calls = 0;
+    const switcher: ModelSwitch = { models: MODELS, current: "big", use: (id) => { if (++calls > 1) throw new Error("the model list could not be read"); return { provider: first.provider, window: 100_000 }; } };
+    const first = rig(() => ({ text: "from the big one" }), { switcher });
+    first.send({ cmd: "model", id: "small" });
+    await first.engine.idle();
+    expect(first.of("error").at(-1)!.msg).toBe("the model list could not be read");
+    expect(first.of("done").at(-1)).toMatchObject({ stop: "error" });
+    first.send(prompt("are you there?", { qid: "q1" }));
+    await first.engine.idle();
+    expect(first.of("taken").map((e) => e.qid)).toEqual(["q1"]);
+    expect(first.of("done").at(-1)).toMatchObject({ stop: "end_turn" });
+    first.cleanup();
+  });
+  test("a prompt sent while the end of a turn is applying a chosen model (summarising first) runs next, and is not dropped", async () => {
+    const { first } = pair({ smallWindow: 400 });
+    for (let i = 0; i < 3; i++) await first.turn(prompt(`note ${i}: ${"word ".repeat(1200)}`));
+    const summarise = first.provider.complete.bind(first.provider);
+    first.provider.complete = async (...args) => { first.send(prompt("late one", { qid: "late" })); return summarise(...args); };
+    first.send(prompt("one more", { qid: "last" }));
+    first.send({ cmd: "model", id: "small" });
+    await first.engine.idle();
+    expect(first.of("dropped")).toEqual([]);
+    expect(first.of("taken").map((e) => e.qid)).toEqual(expect.arrayContaining(["last", "late"]));
+    expect(first.of("done").at(-1)).toMatchObject({ stop: "end_turn" });
+    first.cleanup();
+  });
   test("when even the last messages are too long for the new model, nothing changes and it says so", async () => {
     const { first, second, caps } = pair({ smallWindow: 400 });
     for (let i = 0; i < 3; i++) await first.turn(prompt(`note ${i}: ${"word ".repeat(1200)}`));

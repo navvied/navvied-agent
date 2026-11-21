@@ -69,6 +69,12 @@ export async function askApproval(io: IO, e: Approval, asked: Asked, cwd: string
     const picked = typeof answer === "number" ? rows[answer] : undefined;
     if (!picked) return deny;
     if ("pattern" in picked) return { optionId: once!.optionId, pattern: picked.pattern };
+    if (picked.option.kind === "reject_once" || picked.option.kind === "reject_always") {
+      if (!io.text) return { optionId: picked.option.optionId };
+      const said = await io.text("Tell it what to do instead, or leave this empty to just say no", "", { heading });
+      if (said === "back") continue; // back to the list
+      return { optionId: picked.option.optionId, ...(typeof said === "string" && said.trim() ? { input: said.trim() } : {}) };
+    }
     if (!picked.option.editable) return { optionId: picked.option.optionId };
     const typed = await io.text!("Change the command", picked.option.editable.value, { heading });
     if (typeof typed === "string" && typed.trim()) return { optionId: picked.option.optionId, input: typed.trim() };

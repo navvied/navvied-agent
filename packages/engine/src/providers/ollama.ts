@@ -1,4 +1,4 @@
-import { fetchModel } from "./net.ts";
+import { fetchModel, retryAfterMs } from "./net.ts";
 /**
  * Provider for the native HTTP API of Ollama. The chat-completions endpoint of Ollama cannot raise the model's memory
  * (it stays at 4096 tokens, and older messages are dropped without a word); this API can, so the engine's window is real.
@@ -51,7 +51,7 @@ export class OllamaProvider implements Provider {
     const text = await res.text().catch(() => "");
     let detail = text.slice(0, 400);
     try { detail = (JSON.parse(text) as { error?: string }).error ?? detail; } catch { /* not JSON: keep the text */ }
-    throw new ProviderError(`the model server answered ${res.status}${detail ? `: ${detail}` : ""}`, res.status);
+    throw new ProviderError(`the model server answered ${res.status}${detail ? `: ${detail}` : ""}`, res.status, retryAfterMs(res));
   }
 
   async stream(req: ModelRequest, signal: AbortSignal, on: StreamHandlers): Promise<ModelReply> {

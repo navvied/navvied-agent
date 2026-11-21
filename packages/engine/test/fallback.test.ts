@@ -17,10 +17,13 @@ describe("which failures are worth another model", () => {
   });
 });
 
+/** The tries before the next model are made at once here: how they are spaced is tested with the retry itself. */
+const instant = { sleep: async () => undefined };
+
 describe("a chain of models", () => {
   test("the next one answers when the first cannot be reached, and the person is told once", async () => {
     const told: string[] = [];
-    const chain = new FallbackProvider([{ name: "Main", provider: down(503) }, { name: "Backup", provider: ok("from backup") }], (m) => told.push(m));
+    const chain = new FallbackProvider([{ name: "Main", provider: down(503) }, { name: "Backup", provider: ok("from backup") }], (m) => told.push(m), instant);
     expect((await chain.stream(req, new AbortController().signal, on)).content).toBe("from backup");
     expect(told).toHaveLength(1);
     expect(told[0]).toContain("Main");
@@ -37,10 +40,10 @@ describe("a chain of models", () => {
     await expect(chain.stream(req, new AbortController().signal, on)).rejects.toThrow("cut");
   });
   test("when every model fails the last failure is shown, and a cancel stops the chain", async () => {
-    const all = new FallbackProvider([{ name: "A", provider: down(500) }, { name: "B", provider: down(502) }]);
+    const all = new FallbackProvider([{ name: "A", provider: down(500) }, { name: "B", provider: down(502) }], undefined, instant);
     await expect(all.stream(req, new AbortController().signal, on)).rejects.toThrow("nope");
     const stop = new AbortController(); stop.abort();
-    const cancelled = new FallbackProvider([{ name: "A", provider: down(500) }, { name: "B", provider: ok("x") }]);
+    const cancelled = new FallbackProvider([{ name: "A", provider: down(500) }, { name: "B", provider: ok("x") }], undefined, instant);
     await expect(cancelled.stream(req, stop.signal, on)).rejects.toThrow("nope");
   });
 });

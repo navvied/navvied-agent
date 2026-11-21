@@ -7,7 +7,7 @@ import type { Message, ModelReply, ModelRequest, Part, Provider, StreamHandlers,
 import type { Credentials } from "../signin.ts";
 import { ProviderError } from "./chat-completions.ts";
 import { sseData } from "./sse.ts";
-import { fetchModel } from "./net.ts";
+import { fetchModel, retryAfterMs, statusOfKind } from "./net.ts";
 
 
 export interface MessagesApiConfig {
@@ -68,7 +68,7 @@ export class MessagesApiProvider implements Provider {
     const text = await res.text().catch(() => "");
     let detail = text.slice(0, 400);
     try { detail = (JSON.parse(text) as { error?: { message?: string } }).error?.message ?? detail; } catch { /* not JSON: keep the text */ }
-    throw new ProviderError(`the model endpoint answered ${res.status}${detail ? `: ${detail}` : ""}`, res.status);
+    throw new ProviderError(`the model endpoint answered ${res.status}${detail ? `: ${detail}` : ""}`, res.status, retryAfterMs(res));
   }
 
   async stream(req: ModelRequest, signal: AbortSignal, on: StreamHandlers): Promise<ModelReply> {
@@ -113,7 +113,7 @@ export class MessagesApiProvider implements Provider {
           if (event.usage?.output_tokens !== undefined) completion = event.usage.output_tokens;
           break;
         case "error":
-          throw new ProviderError(`the model endpoint reported an error: ${event.error?.message ?? "unknown"}`);
+          throw new ProviderError(`the model endpoint reported an error: ${event.error?.message ?? "unknown"}`, statusOfKind(event.error?.type));
         default: break;
       }
     }

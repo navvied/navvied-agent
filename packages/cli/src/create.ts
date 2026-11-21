@@ -1,7 +1,7 @@
 import { leanSoul, referenceFor, soulFor, type Brain } from "./soul.ts";
 import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { ChatCompletionsProvider, type Recall, loadAgents, Rules, hasRules, parseRules, type RuleSet, commandHooks, memoryText, connectMcp, loadSkills, projectDirs, type ModelSwitch, Checkpoints, Engine, FileSessionStore, MessagesApiProvider, OllamaProvider, ResponsesApiProvider, SMALL_WINDOW, defaultTools, instructionFiles, loadInstructions, type AgentEngine, type ChatCompletionsConfig, type Credentials, type Provider, FallbackProvider, type FallbackLink } from "@navvied/engine";
+import { ChatCompletionsProvider, type Recall, loadAgents, Rules, hasRules, parseRules, type RuleSet, commandHooks, memoryText, connectMcp, loadSkills, projectDirs, type ModelSwitch, Checkpoints, Engine, FileSessionStore, MessagesApiProvider, OllamaProvider, ResponsesApiProvider, SMALL_WINDOW, defaultTools, instructionFiles, loadInstructions, type AgentEngine, type ChatCompletionsConfig, type Credentials, type Provider, FallbackProvider, type FallbackLink, type RetryOptions } from "@navvied/engine";
 import { randomUUID } from "node:crypto";
 import { CodexEngine, StreamEngine } from "@navvied/stream-engine";
 import type { Effort, EngineEvent, Result } from "@navvied/protocol";
@@ -48,8 +48,15 @@ export function guardCommandFor(configFile: string, cwd: string, platform: NodeJ
   return [q(exec), ...(compiled ? [] : [q(script!)]), "guard", "--config", q(configFile), "--cwd", q(cwd)].join(" ");
 }
 
+/** `NAVVIED_RETRIES`: how many more times a call to the model that failed is made again (default 7; 0 never). */
+const retryFrom = (env: Record<string, string | undefined>): RetryOptions => {
+  const more = Number(env.NAVVIED_RETRIES);
+  return env.NAVVIED_RETRIES !== undefined && Number.isInteger(more) && more >= 0 && more <= 20 ? { attempts: more + 1 } : {};
+};
+
 /** The chosen model, then the ones the person named as a second choice, tried in that order when it cannot be reached. */
 function withFallback(first: Provider, name: string, file: ConfigFile | null, env: Record<string, string | undefined>, path: string, emit: (e: EngineEvent) => void): Provider {
+  const retry = retryFrom(env);
   const chain: FallbackLink[] = [{ name, provider: first }];
   for (const other of file?.fallback ?? []) {
     if (other === name || chain.some((l) => l.name === other)) continue;
@@ -57,7 +64,7 @@ function withFallback(first: Provider, name: string, file: ConfigFile | null, en
     if (!next.ok || next.value.cli || !next.value.provider) continue;
     chain.push({ name: file?.models[other]?.display?.name ?? other, provider: providerFor(next.value.api, next.value.provider, next.value.window, next.value.signIn ? credentialsFor(next.value.signIn, env) : undefined, next.value.pdf) });
   }
-  return chain.length > 1 ? new FallbackProvider(chain, (msg) => emit({ ev: "notice", msg })) : first;
+  return chain.length > 1 ? new FallbackProvider(chain, (msg) => emit({ ev: "notice", msg }), retry) : first;
 }
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0"]);
@@ -140,6 +147,7 @@ export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) =>
     : new Engine({
         ...common,
         sessionId,
+        retry: retryFrom(io.env),
         attachments: attachmentsDir(io.env),
         ...(model.value.vision !== undefined ? { vision: model.value.vision } : {}),
         ...(!switcher && model.value.efforts?.length ? { efforts: model.value.efforts } : {}),

@@ -20,6 +20,14 @@ describe("describeTool", () => {
 });
 
 describe("Renderer", () => {
+  test("a call to the model that is made again is one quiet line on stderr, and an event this program does not know is ignored without a word", () => {
+    const f = fakeIO();
+    const r = new Renderer(f.io, { thinking: false });
+    r.handle({ ev: "retry", reason: "the model is busy", attempt: 2, of: 8, inSeconds: 3 });
+    r.handle({ ev: "from_a_newer_engine", anything: 1 } as never);
+    expect(f.out()).toBe("");
+    expect(f.err()).toBe("The model is busy. Trying again in 3 s (try 2 of 8).\n");
+  });
   test("the answer goes to stdout, the work to stderr", () => {
     const f = fakeIO();
     const r = new Renderer(f.io, { thinking: false });

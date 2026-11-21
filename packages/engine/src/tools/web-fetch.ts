@@ -127,7 +127,7 @@ export const webFetch: Tool = {
     const budget = Math.max(1_500, outputBudget(ctx.window) - 400);
     const also = Array.isArray(a.also) && a.also.length ? `\n[more addresses were given and not fetched: ${(a.also as unknown[]).slice(0, 5).map(String).join(", ")}; fetch each in its own call]` : "";
     const cached = pages.get(url.href);
-    if (cached) return slice(cached, offset, budget) + also;
+    if (cached) { ctx.report?.({ cached: true }); return slice(cached, offset, budget) + also; }
 
     let got: Got | string;
     let rawText: string | undefined;

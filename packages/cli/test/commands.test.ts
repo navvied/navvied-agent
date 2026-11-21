@@ -14,7 +14,7 @@ afterAll(() => { mock.stop(); dirs.forEach(remove); });
 function setup(extra: Record<string, string> = {}) {
   const state = tempDir(), work = tempDir();
   dirs.push(state, work);
-  const env = { HOME: state, XDG_STATE_HOME: state, XDG_CONFIG_HOME: state, NAVVIED_BASE_URL: mock.url, NAVVIED_MODEL: "mock-model", NAVVIED_API_KEY: "test-key", NAVVIED_WINDOW: "100000", ...extra };
+  const env = { HOME: state, XDG_STATE_HOME: state, XDG_CONFIG_HOME: state, NAVVIED_BASE_URL: mock.url, NAVVIED_MODEL: "mock-model", NAVVIED_API_KEY: "test-key", NAVVIED_WINDOW: "100000", NAVVIED_RETRIES: "0", ...extra };
   return { env, work, state };
 }
 

@@ -7,7 +7,7 @@ import type { EngineEvent, FileNote } from "@navvied/protocol";
 import { mark } from "./banner.ts";
 import type { IO } from "./io.ts";
 import { Markdown } from "./markdown.ts";
-import { paint, type Renderer } from "./render.ts";
+import { paint, retryLine, type Renderer } from "./render.ts";
 import { describeFailure, describeStep, diffRows, failed, parseBashOutput, shortPath, startLine, stepTail, type Step } from "./steps.ts";
 import { currentTheme, fgRgb, surfaces } from "./theme.ts";
 import { diffLines } from "./diff-view.ts";
@@ -148,6 +148,7 @@ export class Presenter {
       case "job": return this.#job(e);
       case "plan": this.#plan = e.entries.map((p) => ({ title: p.title, status: p.status })); this.#renderLive(); return;
       case "usage": this.#usage = { ctx: e.ctx, win: e.win }; this.fallback.handle(e); return;
+      case "retry": this.#settle(); this.#closeWork(); this.#line(`  ${paint(this.io.color, "dim", retryLine(e))}`); return;
       case "notice": this.#settle(); this.#closeWork(); this.#line(`  ${this.#warn("!")} ${e.msg}`); return;
       case "error": this.#settle(); this.#closeWork(); this.#line(`  ${this.#bad("✗")} ${paint(this.io.color, "bold", plainModelError(e.msg))}`); return;
       case "done": return this.#done(e.stop);

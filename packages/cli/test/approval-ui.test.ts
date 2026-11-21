@@ -26,6 +26,20 @@ function fakeChoose(pick?: number) {
   return { io, asked };
 }
 
+/** A fake `io` that picks the row whose label matches, however many rows (patterns included) come before it. */
+function fakeChooseByLabel(label: string) {
+  const asked: { title: string; items: Choice[]; frame?: Frame }[] = [];
+  const io = {
+    color: false,
+    choose: async (title: string, items: Choice[], _initial?: number, frame?: Frame): Promise<number | undefined> => {
+      asked.push({ title, items, frame });
+      return items.findIndex((i) => i.label === label);
+    },
+    text: async (): Promise<string | undefined> => undefined,
+  } as unknown as IO;
+  return { io, asked };
+}
+
 describe("remembering a command as a pattern", () => {
   test("a plain command offers a pattern taken from its own start, between Allow and the broad 'do not ask again'", async () => {
     const { io, asked } = fakeChoose(1);
@@ -81,6 +95,45 @@ describe("remembering a command as a pattern", () => {
     const e: Approval = { ev: "approval", id: "a5", title: "Run", options: bashOptions("npm commands", "npm test") };
     const answer = await askApproval(io, e, { name: "Bash", input: { command: "npm test" } }, "/work", 80);
     expect(answer).toEqual({ optionId: "allow" });
+  });
+});
+
+describe("saying no, in your own words", () => {
+  const denyOptions = bashOptions("npm commands", "npm test");
+  const DENY_ROW = "No, I will tell it what to do instead";
+
+  test("picking Deny asks what to do instead; typed words become the approval's input", async () => {
+    const { io } = fakeChooseByLabel(DENY_ROW);
+    io.text = async () => "leave build alone, delete only build/tmp";
+    const e: Approval = { ev: "approval", id: "a6", title: "Run", options: denyOptions };
+    const answer = await askApproval(io, e, { name: "Bash", input: { command: "npm test" } }, "/work", 80);
+    expect(answer).toEqual({ optionId: "deny", input: "leave build alone, delete only build/tmp" });
+  });
+
+  test("leaving the reason empty still says no, with no input", async () => {
+    const { io } = fakeChooseByLabel(DENY_ROW);
+    io.text = async () => "";
+    const e: Approval = { ev: "approval", id: "a7", title: "Run", options: denyOptions };
+    const answer = await askApproval(io, e, { name: "Bash", input: { command: "npm test" } }, "/work", 80);
+    expect(answer).toEqual({ optionId: "deny" });
+  });
+
+  test("backing out of the reason returns to the list of choices, not a denial", async () => {
+    const { io, asked } = fakeChooseByLabel(DENY_ROW);
+    let asks = 0;
+    io.text = async () => (asks++ === 0 ? "back" : "changed my mind");
+    const e: Approval = { ev: "approval", id: "a8", title: "Run", options: denyOptions };
+    const answer = await askApproval(io, e, { name: "Bash", input: { command: "npm test" } }, "/work", 80);
+    expect(asked.length).toBe(2); // asked the list again after backing out
+    expect(answer).toEqual({ optionId: "deny", input: "changed my mind" });
+  });
+
+  test("with no way to type (the plain renderer), Deny needs no reason", async () => {
+    const { io } = fakeChooseByLabel(DENY_ROW);
+    delete (io as { text?: unknown }).text;
+    const e: Approval = { ev: "approval", id: "a9", title: "Run", options: denyOptions };
+    const answer = await askApproval(io, e, { name: "Bash", input: { command: "npm test" } }, "/work", 80);
+    expect(answer).toEqual({ optionId: "deny" });
   });
 });
 

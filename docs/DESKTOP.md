@@ -1,6 +1,6 @@
 # The desktop app (plan)
 
-Status: the previews are approved. `packages/desktop/core` (the supervisor and everything testable without a window) is built and tested; `packages/desktop/src-tauri` (the window, tray, notices, links, updates) is written and compiled, and its first real run is in CI.
+Status: the design is settled. `packages/desktop/core` (the supervisor and everything testable without a window) is built and tested; `packages/desktop/src-tauri` (the window, tray, notices, links, updates) is written and compiled, and its first real run is in CI.
 
 A small native window around the web UI in `packages/web`, with the `navvied` program inside the app as a helper process (a sidecar). The person installs it, opens it and chats. No terminal, no pairing, no address to paste.
 
@@ -21,17 +21,17 @@ A small native window around the web UI in `packages/web`, with the `navvied` pr
 
 ### Start-up
 
-1. Single-instance lock. A second launch focuses the first window (preview 25).
+1. Single-instance lock. A second launch focuses the first window and shows a banner saying so, instead of opening a second one.
 2. Make a random token (24 random bytes, base64url). It stays in memory. The port is the one used last time, so the page keeps the same address and the settings it saved there (the page stores them per address); if it is taken, any free port.
 3. Start `navvied serve --http --host 127.0.0.1 --port <port> --ready-line --exit-when-stdin-closes --cwd <project folder>` with `NAVVIED_SERVE_TOKEN=<token>` and `NAVVIED_NO_UPDATE=1` (the app updates the whole bundle; the program inside must never replace itself, that would break the signature).
-4. Wait for `GET /api/info` (with the token) to answer, with a 10 second limit, then load the page. Until then the window shows the bundled "Starting" page (27).
+4. Wait for `GET /api/info` (with the token) to answer, with a 10 second limit, then load the page. Until then the window shows the bundled "Starting" page.
 5. Hand the token to the page **without a URL**: an initialisation script, injected only for the exact loopback origin, writes `navvied.target` into `sessionStorage` before any page script runs. The web UI already reads that key (`loadTarget` in `packages/web/src/target.ts`). The token is never in the address, in a log, in the window title or in an error report.
 
 ### Supervision
 
 * The shell keeps the sidecar's standard input open. **Needs a small CLI flag (below)**: the sidecar exits when that pipe closes, which works the same on all three systems and covers the shell being killed. Windows also gets a job object and Linux `PR_SET_PDEATHSIG` as a second line.
 * Quit: close the pipe, wait 3 seconds, then kill. A running task is cancelled first (`cancel` command).
-* Crash: restart after 0.5 s, 1 s, 2 s. The third crash inside 60 seconds stops the restarts and shows preview 22. While restarting the web UI shows the banner of preview 20/21.
+* Crash: restart after 0.5 s, 1 s, 2 s. The third crash inside 60 seconds stops the restarts and shows a "navvied stopped" card instead of trying again. While restarting, the web UI shows a "navvied stopped unexpectedly, starting it again" banner.
 * After a restart the page sends `load <session id>` and continues from the engine's stable event cursor (engine work in progress; a web test must cover it).
 * The event listener (a small WebSocket client in the Rust shell) watches `approval`, `done` and `error` events. Notices must work with the window closed, and a hidden web view is throttled by the system, so the page is not used for this. The listener reads event names only; a notice for an approval shows the approval title, a notice for a finished task shows no file content. A setting hides the details.
 
@@ -41,8 +41,8 @@ A small native window around the web UI in `packages/web`, with the `navvied` pr
 * The page gets almost no native power. Tauri's capability file lists exactly seven commands for that origin: choose a folder, read the desktop settings, open the settings page, and four for pairing with navvied.com over the relay (make a link, read the status, forget a device, answer a pending question — see "Pairing with navvied.com" below). Everything else (notices, updates, tray, files) is called by Rust, never by page code.
 * The sidecar listens on loopback only and refuses other `Host` headers (`serve-http.ts` already does). The page's content security policy comes from the sidecar's response headers, unchanged and strict; the bundled shell pages carry their own (`default-src 'self'; connect-src 'none'`).
 * The token passes through the sidecar's environment, which the same user's other programs can read. That is the same trust level as the config file; it is not stronger. A stricter hand-over (token over the pipe) needs a CLI change and is listed as optional.
-* Deep links never run anything: `navvied://chat?text=…` only fills the message box after a question (16), `navvied://open?folder=…` asks before switching folders. Unknown paths are ignored. All values are length limited and shown as plain text.
-* The updater verifies a signature with a public key built into the app, over the download, before anything is replaced (19 shows a refusal).
+* Deep links never run anything: `navvied://chat?text=…` only fills the message box after a question, `navvied://open?folder=…` asks before switching folders. Unknown paths are ignored. All values are length limited and shown as plain text.
+* The updater verifies a signature with a public key built into the app, over the download, before anything is replaced; a bad signature shows a refusal card instead of installing.
 
 ### The bundle identifier
 
@@ -60,10 +60,10 @@ These are not in `main` today. The app cannot be finished without them.
 |---|---|---|
 | `packages/cli` `serve --http` | `--ready-line`: once listening, one token-free line on standard error, `navvied-ready {"port":N}` (and `--port 0` is already honoured); with the flag the token-bearing start-up text is not printed | The shell needs the real port. The normal start-up text contains the token and must never be parsed or kept. |
 | `packages/cli` `serve --http` | `--exit-when-stdin-closes`, and `NAVVIED_NO_UPDATE=1` switching the self-updater off | Kills the sidecar when the shell dies, on every system; keeps the signed bundle intact. |
-| `packages/cli` + `packages/web` | **A real "connect a model" flow over HTTP.** Today the web page only shows `navvied init` for a terminal. Previews 02 and 03 need endpoints such as `GET /api/setup/discover` (model servers found on this computer), `POST /api/setup/test`, `POST /api/setup/save`, reusing the code behind `navvied init` and `presets.ts`. | A person who never opens a terminal must be able to connect a model. Keys are written to the configuration file (mode 0600) and are never sent back to the page. This is the largest missing piece and it also helps the browser version. |
+| `packages/cli` + `packages/web` | **A real "connect a model" flow over HTTP.** Today the web page only shows `navvied init` for a terminal. The desktop app's own "connect a model" screens need endpoints such as `GET /api/setup/discover` (model servers found on this computer), `POST /api/setup/test`, `POST /api/setup/save`, reusing the code behind `navvied init` and `presets.ts`. | A person who never opens a terminal must be able to connect a model. Keys are written to the configuration file (mode 0600) and are never sent back to the page. This is the largest missing piece and it also helps the browser version. |
 | engine | A session that can be resumed with a stable event cursor | After a sidecar restart the page does `load` and carries on, with no reset of its cursor. |
 | `packages/cli` | Changing the project folder: restart the sidecar with a new `--cwd` (the shell does it) | A running engine has a fixed folder. |
-| `packages/web` | A small "desktop bridge" (`window.navviedDesktop`, present only inside the app): chooseFolder, the "This computer" settings page (14), the drop and deep-link questions (9, 16), the update card (17 to 19), the crash banner (20 to 22), the footer text "This computer" instead of the address | These screens are drawn by the web UI so they follow its theme. Bear owns that code; the contract is listed here for him. |
+| `packages/web` | A small "desktop bridge" (`window.navviedDesktop`, present only inside the app): chooseFolder, the "This computer" settings page, the drop and deep-link questions, the update card, the crash banner, the footer text "This computer" instead of the address | These screens are drawn by the web UI so they follow its theme; the contract for that bridge is listed here. |
 | `packages/web` | Test in WebKit | The UI was tested in Chrome only. WKWebView and WebKitGTK are not Chrome. |
 
 **Stopping.** The protocol has `cancel` and no pause, so the app does not pretend to have one. The menu item is "Stop the current task" (greyed out while nothing runs) and sends `cancel`.
@@ -169,9 +169,9 @@ and a plain drag both work fine on `starting.html`, which loads normally under t
 *navigation* to the real page, which needs that same cross-thread call, never completes), present before this
 branch touched anything and unrelated to the position fix. Flagging it rather than chasing it further here.
 
-**Not yet done:** the one-line `composer.ts` call described above — this crosses into the web lane, so it is
-written up here rather than changed directly; everything Rust owns is built, tested, and proven with real bytes
-reaching a real request.
+**Not yet done:** the one-line `composer.ts` call described above — this is a change to the shared web UI, not to
+this app's own Rust code, so it is written up here rather than changed directly; everything Rust owns is built,
+tested, and proven with real bytes reaching a real request.
 
 ## Packaging
 
@@ -179,7 +179,7 @@ reaching a real request.
 |---|---|---|
 | macOS | `.dmg` for arm64 and for x64 (two builds, not a universal binary, so each download is about 45 MB) | Signed with a Developer ID, hardened runtime, notarised and stapled. The compiled `navvied` needs the JIT entitlements `com.apple.security.cs.allow-jit` and `allow-unsigned-executable-memory`; **to be proven on a real Mac**. |
 | Windows | NSIS installer, x64, per user (no administrator rights) | Embeds the WebView2 bootstrapper so it also works offline on Windows 10. ARM PCs run it through emulation, as the CLI already does. |
-| Linux | AppImage and `.deb`, x64 (arm64 later) | The `.deb` depends on `libwebkit2gtk-4.1-0` and `libayatana-appindicator3-1`; the AppImage carries them. Stock GNOME needs the AppIndicator extension for a tray icon (preview 12 says so). |
+| Linux | AppImage and `.deb`, x64 (arm64 later) | The `.deb` depends on `libwebkit2gtk-4.1-0` and `libayatana-appindicator3-1`; the AppImage carries them. Stock GNOME needs the AppIndicator extension for a tray icon to show at all. |
 
 The program inside each installer is compiled on the same runner as the app (`bun build --compile`) and named the way Tauri expects (`navvied-<rust target triple>`). The workflow is `.github/workflows/desktop.yml`: tests on the three systems, the real window on a virtual screen (Linux), one installer job per system, and on a tag `v*` a `publish` job that attaches the installers and `SHA256SUMS-desktop` to the release that carries the command-line binaries. Installers are named `navvied-desktop-<version>-<system>.<ext>`.
 
@@ -256,9 +256,9 @@ What a person sees without signing, and how to open the app anyway, is written f
 
 ## The browser app (PWA) from the desktop
 
-The web UI already has a manifest and a service worker. Installing it from Chrome, Edge or Safari gives a window and a dock icon with no download (previews 36 to 38). It has **no engine inside**: it connects to a navvied on another computer, to the relay or to the hosted service. So it is the lighter choice for a person who already runs navvied somewhere, and the desktop app is the choice for a person who has nothing yet. The download page (30) offers the app first and the browser version second. Install is always the person's own click; the page never nags.
+The web UI already has a manifest and a service worker. Installing it from Chrome, Edge or Safari gives a window and a dock icon with no download. It has **no engine inside**: it connects to a navvied on another computer, to the relay or to the hosted service. So it is the lighter choice for a person who already runs navvied somewhere, and the desktop app is the choice for a person who has nothing yet. The download page offers the app first and the browser version second. Install is always the person's own click; the page never nags.
 
-## What is built, and where it differs from the previews
+## What is built, and where it differs from the design
 
 Built and tested (`cargo test -p navvied-desktop-core`, 60 tests, with the real compiled `navvied` when `NAVVIED_BIN` is set): the key, the log filter, the ready line, the loopback HTTP and WebSocket clients, the supervisor (start, crash restart with 0.5, 1 and 2 second pauses, the third crash in a minute gives up, folder change, try again, usual port with fallback, stop ends the whole tree, the app being killed ends the program), the notice and tray logic, the link and drop parser, and the settings file. A test that was made to fail on purpose (log filter off, tree kill off) did fail.
 
@@ -266,18 +266,18 @@ Also built and tested, against a keypair generated inside the test itself, never
 
 Run for real on Linux under a virtual screen (`packages/desktop/scripts/window-check.sh`, 16 checks, in CI as the `window` job): the app starts the program, the key it runs with is a known test key, `401` without it and `200` with it, `403` for a foreign host, loopback only, the page is connected with the key, the key is in no log, setting, storage file, output, command line or window title (and the search is proven by planting a key), the program is started again after a crash on the same port with the same key, and the program goes when the app is killed. The app for this check is built with `--features test-hooks`, which is never part of a published build.
 
-Written and compiled but not yet run on a person's screen or in CI: the Tauri window, tray, notices, dialogs, deep links, updates. These differ from the approved previews in these ways, each deliberate:
+Written and compiled but not yet run on a person's screen or in CI: the Tauri window, tray, notices, dialogs, deep links, updates. These differ from the design in these ways, each deliberate:
 
-| Preview | What the app does instead | Why |
+| Screen or behaviour | What the app does instead | Why |
 |---|---|---|
-| 02, 03 connect a model | The page's own screen, until the model setup endpoints exist | Not in the engine yet (see above). |
-| 09, 13 to 19, 20 to 22, 14 | Drawn by the app on top of the page (`shell-pages/overlay.js`) in the page's colours, not inside the page's own settings dialog | The page's bridge does not exist yet. The overlay is the same cards; when the page gets its own bridge the overlay can go. |
-| 14 | The "keep the computer awake" switch is not there | Needs a different mechanism on each system; not built. A new switch "Show what the task is in notices and the menu" is there instead. |
-| 15 | A finished task says "Your task is done. Open navvied to read the answer." with no count of changed files | The event stream carries no file contents or counts that are safe to show. |
-| 15 | Clicking a notice does not open the conversation | The desktop notification plugin has no click callback (it exists on phones only), and a per-system one cannot be tested here. A click only brings the app forward where the system does that by itself: the window then shows the one conversation there is. |
-| 25 | The second copy ends at once; the first window comes to the front and shows "navvied was already open" | A second copy cannot draw a dialog of its own. |
-| 26 | Not possible as a window: without the WebKit library the app cannot draw anything | The `.deb` depends on it and the AppImage carries it. |
-| 08 | Dropping a folder on the icon works on macOS and Windows (a folder given on the command line); on Linux only where the desktop passes the folder | A Linux launcher needs a folder association in its `.desktop` file; not set. |
+| Connect a model | The page's own screen, until the model setup endpoints exist | Not in the engine yet (see above). |
+| The settings page, folder and deep-link questions, the update card, the crash banner | Drawn by the app on top of the page (`shell-pages/overlay.js`) in the page's colours, not inside the page's own settings dialog | The page's bridge does not exist yet. The overlay is the same cards; when the page gets its own bridge the overlay can go. |
+| Settings | The "keep the computer awake" switch is not there | Needs a different mechanism on each system; not built. A new switch "Show what the task is in notices and the menu" is there instead. |
+| Notices | A finished task says "Your task is done. Open navvied to read the answer." with no count of changed files | The event stream carries no file contents or counts that are safe to show. |
+| Notices | Clicking a notice does not open the conversation | The desktop notification plugin has no click callback (it exists on phones only), and a per-system one cannot be tested here. A click only brings the app forward where the system does that by itself: the window then shows the one conversation there is. |
+| A second launch | The second copy ends at once; the first window comes to the front and shows "navvied was already open" | A second copy cannot draw a dialog of its own. |
+| A system with no WebKit library at all | Not possible as a window: without it the app cannot draw anything | The `.deb` depends on it and the AppImage carries it. |
+| Project folder | Dropping a folder on the icon works on macOS and Windows (a folder given on the command line); on Linux only where the desktop passes the folder | A Linux launcher needs a folder association in its `.desktop` file; not set. |
 
 ### What CI has shown so far (GitHub, not a person's computer)
 
@@ -299,22 +299,18 @@ The supervisor (port, token, start, restart, stop, log filter) lives in a Rust l
 | 3 | **Port.** The port used last time is reused when free; a taken one falls back to any free port; the port reported on the ready line is the one the page is sent to. | `cargo test`, a listener holds the port | all 3 |
 | 4 | **Token.** 24 random bytes, base64url, never reused across launches, absent from the sidecar's command line (read from `/proc/<pid>/cmdline`, `ps -o args=` or `Get-CimInstance Win32_Process`). | `cargo test` with the fake sidecar | all 3 |
 | 5 | **The token never appears in logs.** Run the whole suite with the canary. Then search every artifact: the app's log files, the captured sidecar output, crash reports, the window title, the loaded address, the WebDriver console log, the process list. The only allowed places are the sidecar's environment and the live socket. The fake sidecar prints the canary to its standard error on purpose, which proves the filter works. | `cargo test` plus a final grep step in the workflow | all 3 |
-| 6 | **Start sequence.** Ready within the limit leads to "page loads"; a sidecar that never answers within 10 seconds leads to the "cannot start" state; a sidecar that exits at once leads to "blocked" (preview 24). | `cargo test`, fake clock | all 3 |
-| 7 | **Crash restart.** Kill the sidecar with the strongest signal (`TerminateProcess` on Windows): a new one starts after 0.5 s, then 1 s, then 2 s; token unchanged; the new address reaches the window; the third crash within 60 seconds stops the restarts and raises "keeps stopping" (preview 22); a crash after 60 quiet seconds starts the count again. | `cargo test`, fake clock and fake sidecar | all 3 |
+| 6 | **Start sequence.** Ready within the limit leads to "page loads"; a sidecar that never answers within 10 seconds leads to the "cannot start" state; a sidecar that exits at once leads to "blocked". | `cargo test`, fake clock | all 3 |
+| 7 | **Crash restart.** Kill the sidecar with the strongest signal (`TerminateProcess` on Windows): a new one starts after 0.5 s, then 1 s, then 2 s; token unchanged; the new address reaches the window; the third crash within 60 seconds stops the restarts and raises "keeps stopping"; a crash after 60 quiet seconds starts the count again. | `cargo test`, fake clock and fake sidecar | all 3 |
 | 8 | **Quit kills it.** Quitting leaves no sidecar and no child of the sidecar (the fake one starts a grandchild, like a shell command would). Order: cancel, close the pipe, wait 3 seconds, kill the tree. Windows uses a job object, Linux a process group, macOS a process group. | `cargo test` | all 3 |
 | 9 | **The shell dies, the sidecar goes too.** A harness program runs the supervisor, the test kills the harness with the strongest signal, and the sidecar must be gone within 3 seconds. | `cargo test` | all 3 |
 | 10 | **A real task end to end.** The compiled `navvied` plus a scripted local model server (a few lines, speaks the chat API): connect over `/ws`, send a prompt, receive `text` and `done`; an `approval` event is answered; `cancel` stops a long reply. This is the same path the window uses. | `bun test` | all 3 |
-| 11 | **Notices.** A scripted event stream (`approval`, then a `done` after a long turn) must produce exactly the two notices of preview 15 through a fake notifier, and none for a short turn; with the details setting off, the text carries no path or file name. | `cargo test` | all 3 |
+| 11 | **Notices.** A scripted event stream (`approval`, then a `done` after a long turn) must produce exactly those two notices through a fake notifier, and none for a short turn; with the details setting off, the text carries no path or file name. | `cargo test` | all 3 |
 | 12 | **The window.** Start the real app under a virtual display with `tauri-driver` (WebDriver): the page loads from the loopback address; the address has no token; `sessionStorage` holds `navvied.target`; navigating to another site is refused; an external link goes to the (fake) system opener; the response carries the content security policy; the page cannot call any native command except the three allowed. | `tauri-driver` + xvfb | Linux and Windows |
 | 13 | **The same on macOS.** WebDriver does not exist for the macOS web view, so a build with the `test-hooks` feature (never in a release build, checked by a test on the shipped binary's feature list) prints a status line the test reads: address, storage key present, navigation refused. Fewer checks than 12, said openly. | `cargo test --features test-hooks` | macOS |
 | 14 | **Permissions as data.** The capability files are parsed: the only remote origin is the loopback pattern and the command list equals the allowed three. Adding a command fails the test until it is reviewed. The shell pages' content security policy is compared with the expected text. | `cargo test` | any one runner |
-| 15 | **Updater.** A local static server offers `latest.json`: a correct signature is accepted; a changed file, a wrong key and a replayed older version are refused with preview 19, and nothing is replaced. | `cargo test` with a throw-away key | all 3 |
+| 15 | **Updater.** A local static server offers `latest.json`: a correct signature is accepted; a changed file, a wrong key and a replayed older version are refused with the same refusal card, and nothing is replaced. | `cargo test` with a throw-away key | all 3 |
 | 16 | **The built artifacts.** After the real build: the `.deb` installs in a clean container and starts; the AppImage runs with `--appimage-extract-and-run`; the NSIS installer runs silently (`/S`) as an ordinary user and starts; the `.dmg` mounts, `codesign --verify --deep --strict` and `spctl --assess` pass, and the notarisation ticket is stapled (`xcrun stapler validate`). Each one then runs steps 5 and 8 from the installed location. | workflow, after the build | all 3 (signature checks only when the secrets exist) |
 
 Not covered by any automatic test, so it stays on a short manual list before each release: how the notices and the tray icon look on each system, dropping a folder on the Dock or the taskbar, what Gatekeeper and SmartScreen say to a first-time downloader, a tray icon on stock GNOME, and a dark/light theme switch while the app is open.
 
 Order of work when building is approved: the CLI flags with test 1, 2 and 10 first (they need no Rust at all and can be merged on their own), then `desktop-core` with tests 3 to 9 and 11, then the window with 12 to 14, then the updater and packaging with 15 and 16.
-
-## Preview index
-
-`preview/index.html` lists every state in order, dark and light, per system where the system matters (01 first launch, 02 and 03 connect a model, 04 and 05 chat, 06 to 09 project folder, 10 to 12 menu bar and tray, 13 close behaviour, 14 settings, 15 notices, 16 deep link, 17 to 19 updates, 20 to 22 engine crash, 23 to 27 cannot start and starting, 30 to 35 download and installers, 36 to 38 browser install).
