@@ -18,6 +18,84 @@ function run(text: string, size: number) {
   return { shown, calls: f.calls, kept: f.shown };
 }
 
+describe("a call written as JSON in a fenced block", () => {
+  const WRITE = '```json\n{\n  "name": "Read",\n  "arguments": {\n    "file_path": "/tmp/x.py"\n  }\n}\n```';
+  const UNKNOWN = '```bash\n{\n  "name": "Python",\n  "arguments": { "command": "python3 x.py" }\n}\n```';
+
+  test("is a call when it names a tool of this reply and holds nothing else, however the stream is cut; a block that names no tool stays text", () => {
+    for (const size of [1, 2, 3, 7, 1000]) {
+      const r = run(`I will do it.\n\n${WRITE}\n\nThen:\n\n${UNKNOWN}\n\n${WRITE.replace("/tmp/x.py", "/tmp/y.py")}`, size);
+      expect(r.calls.map((c) => [c.name, c.arguments])).toEqual([["Read", '{"file_path":"/tmp/x.py"}'], ["Read", '{"file_path":"/tmp/y.py"}']]);
+      expect(r.shown).toBe(`I will do it.\n\n\n\nThen:\n\n${UNKNOWN}\n\n`);
+    }
+  });
+
+  test("the block must hold only the name and the arguments, and the arguments must be an object", () => {
+    for (const body of ['{"name": "Read", "arguments": {"file_path": "x"}, "note": "hi"}', '{"name": "Read", "arguments": ["x"]}', '{"name": "Read"}', '{"a": 1}']) {
+      const text = `before\n\`\`\`json\n${body}\n\`\`\`\nafter`;
+      const r = run(text, 3);
+      expect(r.calls).toEqual([]);
+      expect(r.shown).toBe(text);
+    }
+  });
+
+  test("a fence that is code is text from the first character, not held back until it closes", () => {
+    const f = new TextToolCalls(SCHEMAS, "t_");
+    let shown = f.push("Run this:\n```python\nprint(1)\n");
+    expect(shown).toBe("Run this:\n```python\nprint(1)\n");
+    shown += f.push("```\nand then ```json\n{\"name\": \"Read\", \"arguments\": {}}\n```");
+    expect(f.calls.map((c) => c.name)).toEqual(["Read"]);
+    expect(shown).toBe("Run this:\n```python\nprint(1)\n```\nand then ");
+  });
+
+  test("the closing fence of a block of code is not the opening of the next, and a block left open at the end is text", () => {
+    const text = "```sh\nls\n```\ntext\n```json\n{\"name\": \"Read\", \"arguments\": {\"file_path\": \"a\"}}";
+    const r = run(text, 2);
+    expect(r.calls).toEqual([]);
+    expect(r.shown).toBe(text);
+  });
+
+  test("a model that writes the call without a language, or with it in capitals, is understood the same", () => {
+    expect(run('```\n{"name": "Read", "arguments": {"file_path": "a"}}\n```', 5).calls).toHaveLength(1);
+    expect(run('```JSON\n{"name": "Read", "arguments": {"file_path": "a"}}\n```', 5).calls).toHaveLength(1);
+  });
+});
+
+describe("a call written bare, as the whole reply", () => {
+  const BARE = '{"name": "Read", "arguments": {"file_path": "/tmp/x.py"}}';
+
+  test("a reply that is one JSON object naming a tool is a call, however the stream is cut", () => {
+    for (const size of [1, 4, 1000]) {
+      const r = run(`\n  ${BARE}\n`, size);
+      expect(r.calls.map((c) => [c.name, c.arguments])).toEqual([["Read", '{"file_path":"/tmp/x.py"}']]);
+      expect(r.shown).toBe("");
+    }
+  });
+
+  test("anything that is not exactly that is text, and is given back whole at the end of the reply", () => {
+    for (const text of ['{"name": "Nope", "arguments": {}}', '{"name": "Read", "arguments": {}} and then I will explain', '{"result": 1}', '{ "name": "Read", "arguments": ["x"] }', '{"unfinished": ']) {
+      const r = run(text, 3);
+      expect(r.calls).toEqual([]);
+      expect(r.shown).toBe(text);
+    }
+  });
+
+  test("text that comes before the object is not a bare call (a call inside a sentence is not made)", () => {
+    const text = `Here is the call: ${BARE}`;
+    const r = run(text, 5);
+    expect(r.calls).toEqual([]);
+    expect(r.shown).toBe(text);
+  });
+
+  test("doubled braces from a chat template and several objects in a row are calls; a word between them makes it text", () => {
+    const two = `{{"name": "Read", "arguments": {"file_path": "a"}}}\n{"name": "Read", "parameters": {"file_path": "b"}}`;
+    for (const size of [1, 7, 1000]) expect(run(two, size).calls.map((c) => c.arguments)).toEqual(['{"file_path":"a"}', '{"file_path":"b"}']);
+    const text = `${BARE}\nthen ${BARE}`;
+    expect(run(text, 4).calls).toEqual([]);
+    expect(run(text, 4).shown).toBe(text);
+  });
+});
+
 describe("a call written out as text", () => {
   test("becomes a call with typed arguments, however the stream is cut", () => {
     for (const size of [1, 2, 3, 5, 7, 1000]) {

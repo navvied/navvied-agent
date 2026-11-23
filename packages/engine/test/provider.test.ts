@@ -55,6 +55,18 @@ describe("ChatCompletionsProvider", () => {
     expect(seen[0]!.body.tools).toBeUndefined();
   });
 
+  test("a sign-in object supplies the headers of every request, fresh each time, and wins over a saved key", async () => {
+    seen = []; mode = "text";
+    let n = 0;
+    const credentials = { headers: async () => ({ authorization: `Bearer token-${++n}` }), body: (b: Record<string, unknown>) => b };
+    const p = new ChatCompletionsProvider({ baseUrl: base(), model: "m", apiKey: "sk-ignored" }, credentials);
+    const ask = () => p.stream({ system: "s", messages: [{ role: "user", content: "hi" }], tools: [] }, new AbortController().signal, handlers().h);
+    await ask();
+    await ask();
+    await p.complete("s", "u", new AbortController().signal);
+    expect(seen.map((x) => x.auth)).toEqual(["Bearer token-1", "Bearer token-2", "Bearer token-3"]);
+  });
+
   test("reassembles tool calls whose arguments arrive in pieces, in order, and announces them early", async () => {
     seen = []; mode = "tools";
     const { log, h } = handlers();

@@ -3,9 +3,19 @@
 #[cfg(unix)]
 mod imp {
     use std::os::unix::process::CommandExt;
-    use std::process::{Child, Command};
+    use std::process::{Child, Command, Stdio};
 
-    pub struct Tree;
+    /// Kept in the program's own group, outliving the app. The app holds the write end of its input and never writes: when the app
+    /// dies by any means, that input ends, and the program's group is asked to stop and, after the same grace the app itself gives,
+    /// ended. Nothing else can do this: the kernel's own "parent died" signal reaches only the program, not what the program started
+    /// (a local model server, a shell command), and macOS has no such signal at all. It never fires while the app lives, because
+    /// ending the group (`kill`) ends it too; being inside the group also keeps the group's number from being handed to anything else
+    /// while it waits.
+    const REAPER: &str = r#"trap '' TERM; read -r _; kill -s TERM -- "-$1"; sleep 3; kill -s KILL -- "-$1""#;
+
+    pub struct Tree {
+        reaper: Option<Child>,
+    }
 
     impl Tree {
         /// The child leads its own process group, so one signal reaches all of its descendants.
@@ -21,14 +31,29 @@ mod imp {
             }
         }
 
-        pub fn adopt(_child: &Child) -> Tree {
-            Tree
+        pub fn adopt(child: &Child) -> Tree {
+            let pid = child.id();
+            // A reaper that cannot start leaves things exactly as they were before it existed: the group is still ended on every
+            // way out the app itself controls.
+            let reaper = Command::new("/bin/sh")
+                .args(["-c", REAPER, "reaper", &pid.to_string()])
+                .process_group(pid as i32)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .ok();
+            Tree { reaper }
         }
 
-        pub fn kill(&self, pid: u32) {
+        pub fn kill(&mut self, pid: u32) {
             // SAFETY: a negative pid addresses the process group that `prepare` created.
             unsafe {
                 libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+            if let Some(mut reaper) = self.reaper.take() {
+                let _ = reaper.kill();
+                let _ = reaper.wait();
             }
         }
     }

@@ -32,6 +32,15 @@ type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
 const fail = <T>(error: string): Result<T> => ({ ok: false, error });
 const ok = <T>(value: T): Result<T> => ({ ok: true, value });
+const isKey = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= 4096 && !/\s/.test(v);
+/** The address and the way of speaking that an endpoint form carries (shared by saving and by trying one). */
+function endpointAddress(raw: Obj): { value: { baseUrl: string; api: "auto" | "chat" | "responses" | "messages" | "ollama" } } | { error: string } {
+  if (typeof raw.baseUrl !== "string" || raw.baseUrl.length > 2000 || !/^https?:\/\/[^\s]+$/.test(raw.baseUrl)) return { error: "baseUrl must be a web address that starts with http:// or https://" };
+  if (raw.api === undefined) return { value: { baseUrl: raw.baseUrl, api: "auto" } };
+  if (raw.api !== "auto" && raw.api !== "chat" && raw.api !== "responses" && raw.api !== "messages" && raw.api !== "ollama") return { error: "api must be auto, chat, responses, messages or ollama" };
+  return { value: { baseUrl: raw.baseUrl, api: raw.api } };
+}
+const isName = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,40}$/.test(v);
 const isId = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= LIMITS.id;
 
 function images(v: unknown): Result<ImageInput[]> {
@@ -122,6 +131,83 @@ function validateOne(raw: unknown): Result<Command> {
     }
     case "schedules": return ok({ cmd: "schedules" });
     case "plugins": return ok({ cmd: "plugins" });
+    case "providers": return ok({ cmd: "providers" });
+    case "machine": return ok({ cmd: "machine" });
+    case "local.models": return ok({ cmd: "local.models" });
+    case "local.stop": return ok({ cmd: "local.stop" });
+    case "local.ollama": return ok({ cmd: "local.ollama" });
+    case "local.ollama.pull": case "local.ollama.cancel":
+      if (typeof raw.model !== "string" || !/^[A-Za-z0-9][\w.\-/:]{0,119}$/.test(raw.model) || raw.model.includes("..")) return fail(`${raw.cmd}.model must be the name Ollama knows the model by, such as name:size`);
+      return ok({ cmd: raw.cmd, model: raw.model });
+    case "local.run": {
+      if (typeof raw.repo !== "string" || !/^[\w.-]{1,96}\/[\w.-]{1,96}$/.test(raw.repo)) return fail("local.run.repo must be the name of a repository, such as owner/name");
+      if (typeof raw.file !== "string" || !raw.file || raw.file.length > 300 || !/\.gguf$/i.test(raw.file) || raw.file.split("/").some((b: string) => !b || b === "." || b === "..") || /[\\\0]/.test(raw.file)) return fail("local.run.file must be the path of a .gguf file in the repository");
+      if (raw.window !== undefined && !(typeof raw.window === "number" && Number.isInteger(raw.window) && raw.window >= 1024 && raw.window <= 1_048_576)) return fail("local.run.window must be a whole number from 1024 to 1048576");
+      return ok({ cmd: "local.run", repo: raw.repo, file: raw.file, ...(raw.window !== undefined ? { window: raw.window as number } : {}) });
+    }
+    case "local.pull": case "local.pause": case "local.cancel": case "local.remove": {
+      if (typeof raw.repo !== "string" || !/^[\w.-]{1,96}\/[\w.-]{1,96}$/.test(raw.repo)) return fail(`${raw.cmd}.repo must be the name of a repository, such as owner/name`);
+      if (typeof raw.file !== "string" || !raw.file || raw.file.length > 300 || !/\.gguf$/i.test(raw.file) || raw.file.split("/").some((b: string) => !b || b === "." || b === "..") || /[\\\0]/.test(raw.file)) return fail(`${raw.cmd}.file must be the path of a .gguf file in the repository`);
+      return ok({ cmd: raw.cmd, repo: raw.repo, file: raw.file });
+    }
+    case "local.runtime": case "local.runtime.install": case "local.runtime.cancel": return ok({ cmd: raw.cmd });
+    case "local.search":
+      if (typeof raw.query !== "string" || !raw.query.trim() || raw.query.length > 200) return fail("local.search.query must be words of at most 200 characters");
+      if (raw.window !== undefined && !(typeof raw.window === "number" && Number.isInteger(raw.window) && raw.window >= 1024 && raw.window <= 1_048_576)) return fail("local.search.window must be a whole number from 1024 to 1048576");
+      return ok({ cmd: "local.search", query: raw.query.trim(), ...(raw.window !== undefined ? { window: raw.window as number } : {}) });
+    case "endpoints": return ok({ cmd: "endpoints" });
+    case "endpoint.remove":
+      if (!isName(raw.id)) return fail("endpoint.remove needs the id of an endpoint");
+      return ok({ cmd: "endpoint.remove", id: raw.id });
+    case "endpoint.models": {
+      if (raw.id !== undefined) { if (!isName(raw.id)) return fail("endpoint.models.id must be the id of an endpoint"); return ok({ cmd: "endpoint.models", id: raw.id }); }
+      const where = endpointAddress(raw);
+      if ("error" in where) return fail(`endpoint.models ${where.error}`);
+      if (raw.key !== undefined && !isKey(raw.key)) return fail("endpoint.models.key must be a key of at most 4096 characters, without spaces");
+      return ok({ cmd: "endpoint.models", ...where.value, ...(raw.key !== undefined ? { key: raw.key as string } : {}) });
+    }
+    case "endpoint.save": {
+      if (raw.id !== undefined && !isName(raw.id)) return fail("endpoint.save.id must be the id of an endpoint");
+      if (typeof raw.name !== "string" || !raw.name.trim() || raw.name.length > 80) return fail("endpoint.save.name must be a name of at most 80 characters");
+      const where = endpointAddress(raw);
+      if ("error" in where) return fail(`endpoint.save ${where.error}`);
+      if (raw.key !== undefined && raw.key !== "" && !isKey(raw.key)) return fail("endpoint.save.key must be a key of at most 4096 characters, without spaces, or empty to remove it");
+      if (!Array.isArray(raw.models) || raw.models.length > 500) return fail("endpoint.save.models must be a list of at most 500 models");
+      const models: { id: string; window?: number; vision?: boolean; pdf?: boolean }[] = [];
+      for (const m of raw.models) {
+        if (!isObj(m) || typeof m.id !== "string" || !m.id || m.id.length > 200 || /[\s\u0000-\u001f]/.test(m.id)) return fail("endpoint.save.models: a model needs an id of at most 200 characters, without spaces");
+        if (m.window !== undefined && !(typeof m.window === "number" && Number.isInteger(m.window) && m.window > 0 && m.window <= 100_000_000)) return fail("endpoint.save.models: window must be a whole number above zero");
+        if ((m.vision !== undefined && typeof m.vision !== "boolean") || (m.pdf !== undefined && typeof m.pdf !== "boolean")) return fail("endpoint.save.models: vision and pdf must be true or false");
+        if (models.some((o) => o.id === m.id)) return fail(`endpoint.save.models: ${m.id} is there twice`);
+        models.push({ id: m.id, ...(m.window !== undefined ? { window: m.window } : {}), ...(m.vision !== undefined ? { vision: m.vision } : {}), ...(m.pdf !== undefined ? { pdf: m.pdf } : {}) });
+      }
+      return ok({ cmd: "endpoint.save", ...(raw.id !== undefined ? { id: raw.id as string } : {}), name: raw.name.trim(), ...where.value, ...(raw.key !== undefined ? { key: raw.key as string } : {}), models });
+    }
+    case "provider.models":
+      if (!isName(raw.id)) return fail("provider.models needs the id of a provider");
+      return ok({ cmd: "provider.models", id: raw.id });
+    case "provider.use":
+      if (!isName(raw.id)) return fail("provider.use needs the id of a provider");
+      if (typeof raw.model !== "string" || !raw.model || raw.model.length > 200 || /[\s\u0000-\u001f]/.test(raw.model)) return fail("provider.use.model must be the name of a model, without spaces");
+      return ok({ cmd: "provider.use", id: raw.id, model: raw.model });
+    case "provider.remove":
+      if (!isName(raw.id)) return fail("provider.remove needs the id of a provider");
+      return ok({ cmd: "provider.remove", id: raw.id });
+    case "provider.save": {
+      if (!isName(raw.id)) return fail("provider.save needs the id of a provider");
+      if (raw.key !== undefined && (typeof raw.key !== "string" || !raw.key || raw.key.length > 4096 || /\s/.test(raw.key))) return fail("provider.save.key must be a key of at most 4096 characters, without spaces");
+      if (raw.region !== undefined && !isName(raw.region)) return fail("provider.save.region must be the id of a region");
+      let fields: Record<string, string> | undefined;
+      if (raw.fields !== undefined) {
+        if (!isObj(raw.fields) || Object.keys(raw.fields).length > 12) return fail("provider.save.fields must be an object of at most 12 fields");
+        fields = {};
+        for (const [k, v] of Object.entries(raw.fields)) {
+          if (!isName(k) || typeof v !== "string" || v.length > 2048) return fail("provider.save.fields: a field is named by an id and holds text of at most 2048 characters");
+          fields[k] = v;
+        }
+      }
+      return ok({ cmd: "provider.save", id: raw.id, ...(raw.key !== undefined ? { key: raw.key } : {}), ...(raw.region !== undefined ? { region: raw.region } : {}), ...(fields ? { fields } : {}) });
+    }
     case "tools": return ok({ cmd: "tools" });
     case "drafts": return ok({ cmd: "drafts" });
     case "draft":

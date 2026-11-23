@@ -3,11 +3,12 @@
  * and a program on standard input all attach here: each gets what the engine says, and each can send it commands.
  * The session lives in this process, so a client that comes back with the last number it saw receives what it missed.
  */
-import { EventEncoder, parseCommand, type Command, type EngineEvent, type ScheduleInfo, type SessionInfo, type SessionKind } from "@navvied/protocol";
+import { EventEncoder, parseCommand, type Command, type EngineEvent, type HistoryItem, type ScheduleInfo, type SessionInfo, type SessionKind } from "@navvied/protocol";
 import { historyOf } from "@navvied/engine";
 import type { Options } from "../args.ts";
 import { FileSessionStore, forgetCheckpoints, type Recall } from "@navvied/engine";
-import { createEngine, type Created } from "../create.ts";
+import { createEngine, modelInfoOf, resolved, type Created } from "../create.ts";
+import { checkTarget, handedOver, otherKind, transcriptOf } from "../handover.ts";
 import { FolderBook, folderId } from "../folders.ts";
 import { ScheduleStore, dueJobs, type Job } from "../schedules.ts";
 import { runJob } from "../schedule-run.ts";
@@ -17,7 +18,13 @@ import { nextRun, parseCron } from "../cron.ts";
 import { ToolUsage, listSets, listTools, toolId } from "../tools-info.ts";
 import { TerminalState, listBackends } from "../terminal.ts";
 import { DraftStore } from "../drafts.ts";
-import { accountPath, chatFilesDir, chatJournalDir, chatSearchIndexPath, chatSessionsDir, configPath, foldersPath, journalDir, loadConfig, pluginStatePath, terminalStatePath, toolUsagePath, draftsPath, checkpointsDir, scheduledDir, schedulesPath, searchIndexPath, sessionsDir } from "../config.ts";
+import { checkCredentialFile, findCredentialFile } from "../adc.ts";
+import { localModels } from "../local-models.ts";
+import { readMachine, realProbe } from "../machine.ts";
+import { askModels, detectApi, newEndpointId, reportEndpoints, type EndpointRecord } from "../endpoints.ts";
+import { API_STYLES, MODEL_HUB, PROVIDERS, authHeaders } from "../presets.ts";
+import { baseOf, entryName, headersOf, listModels, mergeSaved, modelEntryOf, reportOf, type ListedRoute } from "../providers.ts";
+import { accountPath, chatFilesDir, chatJournalDir, chatSearchIndexPath, chatSessionsDir, configPath, foldersPath, localDir, journalDir, loadConfig, saveEndpoint, saveModel, saveProvider, pluginStatePath, terminalStatePath, toolUsagePath, draftsPath, checkpointsDir, scheduledDir, schedulesPath, searchIndexPath, sessionsDir } from "../config.ts";
 import { SearchIndex } from "../search-index.ts";
 import { readAccount, type Account } from "../account.ts";
 import { deleteConversation, getConversation, listComputers, listConversations, type AccountComputer } from "../account-client.ts";
@@ -118,6 +125,14 @@ interface Lane {
   created?: Created;
   error: string;
   running: boolean;
+  /** The ids the engine itself can switch to, as it last said (what is left of the list is reached by handing the conversation over). */
+  engineModels?: Set<string>;
+  /** What the engine itself last said of its abilities, before the hub added to it: said again, merged with the configuration as it is now, when the models change. */
+  engineCaps?: Extract<EngineEvent, { ev: "caps" }>;
+  /** A model of the other kind asked for while a reply was being written: the hand-over waits for its end. */
+  switchTo?: string;
+  /** What a conversation held before it went to a program, to be written down under the id the program gives it. */
+  carry?: HistoryItem[];
 }
 
 export function createHub(options: Options, io: IO, hubOptions: HubOptions = {}): Hub {
@@ -147,6 +162,8 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   const folderBook = new FolderBook(foldersPath(io.env));
   const namedFolders = (): string[] => { const f = loadConfig(configPath(io.env, options.config), io.env); return f.ok ? (f.value?.folders ?? []) : []; };
 
+  /** The model of this computer's own server while it runs (set once the server is made: the first lane is made before it). */
+  let runningLocal = (): string | undefined => undefined;
   const lanes = new Map<SessionKind, Lane>();
   const projectName = (): string | undefined => { try { return basename(lanes.get("agent")?.created?.cwd ?? resolve(options.cwd ?? process.cwd())) || undefined; } catch { return undefined; } };
   const newJournal = (lane: Lane): Journal => new Journal(lane.kind === "chat" ? chatJournalDir(io.env) : journalDir(io.env), (id, items) => {
@@ -207,8 +224,30 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     } catch { /* a list of files is a convenience: it never stops a conversation */ }
   };
 
+  /** The models that only a hand-over reaches, from the configuration as it is now. */
+  const otherKinds = (lane: Lane): ReturnType<typeof otherKind> => {
+    const path = configPath(io.env, lane.options.config);
+    const file = loadConfig(path, io.env);
+    if (!file.ok) return [];
+    const now = resolved(lane.options.model, file.value, io.env, path);
+    const programNow = now.ok && !!now.value.cli;
+    // A model of the engine's own kind that was added since it started (a provider's, an endpoint's) is reached by a hand-over too.
+    const added = programNow ? [] : Object.entries(file.value?.models ?? {}).filter(([id, e]) => !e.command && !lane.engineModels?.has(id) && (!e.local || id === runningLocal())).map(([id, e]) => ({ ...modelInfoOf(id, e), handover: true as const }));
+    return [...added, ...otherKind(file.value, programNow, lane.kind === "chat")];
+  };
+  /** The models the engine lists that the configuration no longer has (a provider or an endpoint was removed since it started). */
+  const removedModels = (lane: Lane): Set<string> => {
+    const file = loadConfig(configPath(io.env, lane.options.config), io.env);
+    if (!file.ok || !file.value) return new Set();
+    const have = file.value.models;
+    return new Set([...(lane.engineModels ?? [])].filter((id) => !(id in have) || (have[id]!.local !== undefined && id !== runningLocal())));
+  };
+  /** Every window is told at once which models there are now: a saved endpoint's models are in the list, a removed one's are gone, with no restart. */
+  const pushModels = (): void => { for (const lane of lanes.values()) if (lane.engineCaps) say(lane, lane.engineCaps); };
   /** What a lane says, to every window: stamped with the kind when it is not an agent, and kept for a window that comes later. */
   const say = (lane: Lane, e: EngineEvent): void => {
+    // A conversation that came to a program from another model goes on under the id the program gives it, with what was said before.
+    if (e.ev === "session" && lane.carry) { lane.journal.write(e.id, lane.carry); lane.carry = undefined; }
     lane.journal.record(e);
     if (e.ev === "taken") { lane.running = true; lane.turn = []; } else if (e.ev === "done") lane.running = false;
     if (lane.running) { lane.turn.push(e); if (lane.turn.length > 3000) lane.turn.splice(0, lane.turn.length - 3000); }
@@ -216,10 +255,16 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     if (e.ev === "tool" && e.status === "running") toolUsage.add(e.name);
     // Whatever the engine, this hub can manage the list of conversations of its kind: say so with the abilities.
     const folders = e.ev === "caps" && lane.kind === "agent" ? folderBook.offered(resolve(lane.options.cwd ?? process.cwd()), namedFolders()).map((f) => ({ id: f.id, name: f.name, path: f.path, ...(f.last ? { last: f.last } : {}), ...(f.current ? { current: true as const } : {}) })) : undefined;
-    const said: EngineEvent = e.ev === "caps" ? { ...e, manage: true, rowActions: true, schedule: true, plugins: true, toolList: true, drafts: true, artifacts: true, scheduleNote: "Tasks run only while this computer is on and navvied is running.", ...(folders ? { folders } : {}) } : e;
+    // Every model there is is offered in one list: the engine's own, and the ones only a hand-over reaches.
+    if (e.ev === "caps") { lane.engineModels = new Set((e.models ?? []).map((m) => m.id)); lane.engineCaps = e; }
+    const more = e.ev === "caps" ? otherKinds(lane) : [];
+    const gone = e.ev === "caps" ? removedModels(lane) : new Set<string>();
+    const said: EngineEvent = e.ev === "caps" ? { ...e, ...(more.length || gone.size ? { models: [...(e.models ?? []).filter((m) => m.current || !gone.has(m.id)), ...more] } : {}), manage: true, rowActions: true, schedule: true, plugins: true, toolList: true, drafts: true, artifacts: true, scheduleNote: "Tasks run only while this computer is on and navvied is running.", ...(folders ? { folders } : {}) } : e;
     noteFiles(lane, e);
     // Each answer moves its conversation up the list: told just before the end of the turn, so that the end is still the last word of it.
     if (e.ev === "done" && lane.created) say(lane, { ev: "sessions", items: listSessions(lane) });
+    // A model of the other kind that was asked for during the reply is taken up once the reply is over (and nothing else is queued behind it).
+    if (e.ev === "done" && lane.switchTo) { const id = lane.switchTo; lane.switchTo = undefined; queueMicrotask(() => { if (lane.running) lane.switchTo = id; else switchModel(lane, id); }); }
     // A turn that ended while nobody was looking is marked unread, until someone opens it.
     if (e.ev === "done" && clients.size === 0) { const id = lane.created?.engine.sessionId; if (id) lane.meta.update((m) => { if (!m.unread.includes(id)) m.unread.push(id); }); }
     const stamped = encoder.stamp(lane.kind === "agent" ? said : { ...said, kind: lane.kind });
@@ -301,10 +346,10 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     return true;
   };
   /** An engine for a lane, with its own slot: what it says goes through `say` while it is the open one, and through `sayAside` once it is put aside. */
-  const engineFor = (lane: Lane): ReturnType<typeof createEngine> => {
+  const engineFor = (lane: Lane, earlier?: string): ReturnType<typeof createEngine> => {
     const slot: Slot = { lane, bg: false, id: undefined, created: undefined, journal: lane.journal, running: false, asking: false, turn: [], writing: lane.writing };
     lane.slot = slot;
-    return createEngine(lane.options, io, (e) => { if (slot.bg) sayAside(slot, e); else say(lane, e); }, { recall: recallFor(lane) });
+    return createEngine(lane.options, io, (e) => { if (slot.bg) sayAside(slot, e); else say(lane, e); }, { recall: recallFor(lane), ...(earlier ? { earlier } : {}) });
   };
 
   const connect = (lane: Lane): Created | undefined => {
@@ -346,6 +391,41 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     if (!items?.length) { const account = signedIn(); if (account) items = (await getConversation(io.fetch, account, id).catch(() => undefined))?.items; }
     if (items?.length) { try { store.save(id, messagesOf(items)); } catch { /* the engine will say it was not found */ } }
   };
+  /**
+   * A model that the engine of this conversation cannot run itself (a program, from an engine of navvied's; or navvied's own, from a
+   * program): the conversation goes on with it, with what was said so far. It is asked of the configuration and refused before anything
+   * is closed; a reply being written finishes first.
+   */
+  const switchModel = (lane: Lane, id: string): void => {
+    const path = configPath(io.env, lane.options.config);
+    const file = loadConfig(path, io.env);
+    const target = checkTarget(file.ok ? file.value : null, io.env, path, id, lane.kind === "chat");
+    if (!target.ok) { say(lane, { ev: "error", msg: target.error }); return; }
+    if (lane.running) { lane.switchTo = id; return; }
+    void handOver(lane, id, target.program, file.ok ? file.value?.models[id]?.display?.name ?? id : id);
+  };
+  const handOver = async (lane: Lane, id: string, toProgram: boolean, name: string): Promise<void> => {
+    const before = { model: lane.options.model, session: lane.options.session };
+    // A conversation that has no message yet has an id but nothing saved: there is nothing to carry, and loading it would be told it was not found.
+    // (A program keeps its own sessions: what is said so far is the journal's.)
+    const named = lane.created?.engine.sessionId;
+    const kept = named && (lane.created?.program ? lane.journal.items(named)?.length : new FileSessionStore(lane.storeDir).load(named));
+    const conversation = kept ? named : undefined;
+    const items = conversation ? lane.journal.items(conversation) ?? [] : [];
+    lane.options.model = id;
+    if (toProgram) {
+      delete (lane.options as { session?: string }).session;
+      lane.carry = items.length ? items : undefined;
+      const again = restartLane(lane, items.length ? transcriptOf(items) : undefined);
+      if (!again.ok) { lane.options.model = before.model; if (before.session !== undefined) lane.options.session = before.session; lane.carry = undefined; say(lane, { ev: "error", msg: again.error }); return; }
+    } else {
+      if (conversation) { await adoptWatched(lane, conversation); lane.options.session = conversation; }
+      const again = restartLane(lane);
+      if (!again.ok) { lane.options.model = before.model; if (before.session !== undefined) lane.options.session = before.session; say(lane, { ev: "error", msg: again.error }); return; }
+      if (conversation) lane.created?.engine.handle({ cmd: "load", id: conversation });
+    }
+    say(lane, { ev: "notice", msg: handedOver(name) });
+  };
   /** A model reached through a program keeps its sessions itself: it is started again on the one asked for, and every window is shown what was said. */
   const openProgramSession = (lane: Lane, id: string): void => {
     if (lane.running) { say(lane, { ev: "error", msg: "Wait for the current reply to finish before opening another conversation." }); return; }
@@ -375,10 +455,10 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     say(lane, { ev: "found", query, items: hits.slice(0, limit) });
   };
   const noModel = (lane: Lane): string => (/no model is configured|no model is connected yet|several models/.test(lane.error) ? "No model is connected. Run `navvied init`." : `No model is connected: ${lane.error}`);
-  const restartLane = (lane: Lane): { ok: true } | { ok: false; error: string } => {
+  const restartLane = (lane: Lane, earlier?: string): { ok: true } | { ok: false; error: string } => {
     lane.created?.engine.close();
     lane.created = undefined;
-    const made = engineFor(lane);
+    const made = engineFor(lane, earlier);
     if (!made.ok) { lane.error = made.error; return { ok: false, error: made.error }; }
     lane.created = made.value;
     if (lane.kind === "agent") folderBook.used(made.value.cwd);
@@ -664,6 +744,32 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   const terminalConfig = () => { const f = loadConfig(configPath(io.env, options.config), io.env); return f.ok ? f.value?.terminal : undefined; };
   const tellTools = (lane: Lane): void => { const items = listTools(pluginState, toolUsage); say(lane, { ev: "tools", items, sets: listSets(items), backends: listBackends(terminalState, terminalConfig()) }); };
   const pluginItems = () => { const f = loadConfig(configPath(io.env, options.config), io.env); return listPlugins(pluginState, f.ok ? f.value : null, join(dirname(configPath(io.env, options.config)), "skills"), resolve(main.options.cwd ?? process.cwd())); };
+  const tellProviders = (): void => {
+    const file = loadConfig(configPath(io.env, main.options.config));
+    const items = reportOf(PROVIDERS, file.ok ? (file.value?.providers ?? {}) : {});
+    for (const e of PROVIDERS) {
+      if (!e.adc) continue;
+      const credential = "file" in findCredentialFile(e.adc, io.env);
+      const at = items.findIndex((i) => i.id === e.id);
+      if (at >= 0) items[at] = { ...items[at]!, credential }; else items.push({ id: e.id, key: false, credential });
+    }
+    say(main, { ev: "providers", items });
+  };
+  const local = localModels({
+    io,
+    inCloud: () => { const f = loadConfig(configPath(io.env, main.options.config)); return !!main.options.sandboxed || (f.ok && !!f.value?.webProxy); },
+    hubToken: () => { const f = loadConfig(configPath(io.env, main.options.config)); return f.ok ? f.value?.providers?.[MODEL_HUB.tokenProvider]?.key : undefined; },
+    tell: (e) => say(main, e),
+    models: {
+      add: (name, entry) => { saveModel(configPath(io.env, main.options.config), name, entry); pushModels(); },
+      refresh: () => { pushModels(); },
+    },
+  });
+  runningLocal = local.running;
+  const tellEndpoints = (): void => {
+    const file = loadConfig(configPath(io.env, main.options.config));
+    say(main, { ev: "endpoints", items: reportEndpoints(file.ok ? file.value?.endpoints : undefined) });
+  };
   const tellPlugins = (): void => { say(main, { ev: "plugins", items: pluginItems() }); };
 
   const hub: Hub = {
@@ -717,6 +823,124 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
         return;
       }
       if (parsed.value.cmd === "plugins") { tellPlugins(); return; }
+      if (parsed.value.cmd === "providers") { tellProviders(); return; }
+      if (local.command(parsed.value)) return;
+      if (parsed.value.cmd === "endpoints" || parsed.value.cmd === "endpoint.save" || parsed.value.cmd === "endpoint.remove" || parsed.value.cmd === "endpoint.models") {
+        const cmd = parsed.value;
+        const path = configPath(io.env, main.options.config);
+        const file = loadConfig(path);
+        const fail = (msg: string): void => { say(lane, { ev: "error", msg }); };
+        if (!file.ok) { fail(file.error); return; }
+        if (cmd.cmd === "endpoints") { tellEndpoints(); return; }
+        if (main.options.sandboxed || file.value?.webProxy) { fail("A key is kept only on a computer, never in Navvied Cloud."); return; }
+        const known = file.value?.endpoints ?? {};
+        const headersFor = (key: string | undefined) => (api: EndpointRecord["api"]): Record<string, string> => authHeaders(api, key);
+        /** What the server speaks: the one asked for, or, for `auto`, the one it answers in. */
+        const lookup = async (baseUrl: string, api: "auto" | EndpointRecord["api"], key: string | undefined): Promise<{ api: EndpointRecord["api"]; items: { id: string; window?: number }[] } | { error: string }> => {
+          if (api === "auto") {
+            const found = await detectApi(io.fetch, baseUrl, headersFor(key), API_STYLES);
+            // The style is known now: asked once more in it, which also fills in the sizes the list itself does not say.
+            return "error" in found ? found : lookup(baseUrl, found.api, key);
+          }
+          const got = await askModels(io.fetch, { baseUrl, api, headers: authHeaders(api, key), machine: () => readMachine(realProbe(io.system), localDir(io.env)) });
+          return "error" in got ? got : { api, items: got.items };
+        };
+        if (cmd.cmd === "endpoint.models") {
+          const saved = "id" in cmd ? known[cmd.id] : undefined;
+          if ("id" in cmd && !saved) { fail("That endpoint is not there."); return; }
+          const asked = saved ? { baseUrl: saved.baseUrl, api: saved.api, key: saved.key } : { baseUrl: (cmd as { baseUrl: string }).baseUrl, api: (cmd as { api: "auto" | EndpointRecord["api"] }).api, key: (cmd as { key?: string }).key };
+          void lookup(asked.baseUrl, asked.api, asked.key).then((got) => say(lane, "error" in got ? { ev: "error", msg: got.error } : { ev: "endpoint.models", api: got.api, items: got.items }));
+          return;
+        }
+        if (cmd.cmd === "endpoint.remove") {
+          if (!known[cmd.id]) { fail("That endpoint is not there."); return; }
+          const written = saveEndpoint(path, cmd.id, undefined);
+          if (!written.ok) { fail(written.error); return; }
+          tellEndpoints();
+          pushModels();
+          return;
+        }
+        const id = cmd.id ?? newEndpointId(cmd.name, Object.keys(known));
+        const key = cmd.key === undefined ? known[id]?.key : cmd.key === "" ? undefined : cmd.key;
+        const keep = (api: EndpointRecord["api"]): void => {
+          const written = saveEndpoint(path, id, { name: cmd.name, baseUrl: cmd.baseUrl, api, ...(key ? { key } : {}), models: cmd.models });
+          if (!written.ok) { fail(written.error); return; }
+          tellEndpoints();
+          pushModels();
+        };
+        // The style is saved as the concrete one it was found to be, never as `auto`.
+        if (cmd.api !== "auto") { keep(cmd.api); return; }
+        void detectApi(io.fetch, cmd.baseUrl, headersFor(key), API_STYLES).then((got) => { if ("error" in got) fail(got.error); else keep(got.api); });
+        return;
+      }
+      if (parsed.value.cmd === "provider.save" || parsed.value.cmd === "provider.remove" || parsed.value.cmd === "provider.models" || parsed.value.cmd === "provider.use") {
+        const cmd = parsed.value;
+        const path = configPath(io.env, main.options.config);
+        const file = loadConfig(path);
+        const fail = (msg: string): void => { say(lane, { ev: "error", msg }); };
+        const entry = PROVIDERS.find((p) => p.id === cmd.id);
+        if (!file.ok) { fail(file.error); return; }
+        if (main.options.sandboxed || file.value?.webProxy) { fail("A key is kept only on a computer, never in Navvied Cloud."); return; }
+        if (!entry) { fail("That provider is not known."); return; }
+        const before = file.value?.providers?.[entry.id];
+        if (cmd.cmd === "provider.save" || cmd.cmd === "provider.remove") {
+          const next = cmd.cmd === "provider.remove" ? { saved: undefined } : mergeSaved(entry, before, cmd);
+          if ("error" in next) { fail(next.error); return; }
+          const commit = (): boolean => {
+            const written = saveProvider(path, entry.id, next.saved);
+            if (!written.ok) { fail(written.error); return false; }
+            tellProviders();
+            return true;
+          };
+          // A new key is tried on the provider's own list of models first: a key it refuses is never kept.
+          const where = next.saved && cmd.cmd === "provider.save" && cmd.key !== undefined && !entry.adc ? baseOf(entry, next.saved) : undefined;
+          if (!where || !("base" in where) || !next.saved) { commit(); return; }
+          const tried = next.saved;
+          const headers = { ...(entry.keyHeader ? {} : authHeaders(entry.api, tried.key)), ...headersOf(entry, tried) };
+          void listModels(entry, where.base, headers, io.fetch).then((got) => {
+            if ("error" in got && got.kind === "refused") { fail(got.error); return; }
+            if (commit() && "error" in got && got.kind === "failed") say(lane, { ev: "notice", msg: `${got.error} The key is saved, but it was not checked.` });
+          });
+          return;
+        }
+        const saved = before ?? {};
+        const where = baseOf(entry, saved);
+        if ("missing" in where) { fail(`Add ${where.missing} for ${entry.name} first.`); return; }
+        if (!saved.key && !entry.keyOptional && !entry.adc) { fail(`Add a key for ${entry.name} first.`); return; }
+        const headers = { ...(entry.keyHeader ? {} : authHeaders(entry.api, saved.key)), ...headersOf(entry, saved) };
+        if (cmd.cmd === "provider.models") {
+          if (entry.adc) { fail(`${entry.name} has no list of models here: give the name of the model.`); return; }
+          void listModels(entry, where.base, headers, io.fetch).then((got) => say(lane, "error" in got ? { ev: "error", msg: got.error } : { ev: "provider.models", id: entry.id, models: got.models.map((m) => m.id), ...(got.skipped.length ? { skipped: got.skipped } : {}) }));
+          return;
+        }
+        const use = (route?: ListedRoute): void => {
+          let credential: string | undefined;
+          if (entry.adc) {
+            const found = findCredentialFile(entry.adc, io.env);
+            if ("error" in found) { fail(found.error); return; }
+            const usable = checkCredentialFile(found.file);
+            if ("error" in usable) { fail(usable.error); return; }
+            credential = found.file;
+          }
+          const session = entry.sessionHeader ? randomUUID() : undefined;
+          const made = modelEntryOf(entry, saved, cmd.model, route, session, credential);
+          if ("missing" in made) { fail(`Add ${made.missing} for ${entry.name} first.`); return; }
+          const name = entryName(entry, cmd.model);
+          const written = saveModel(path, name, { provider: entry.id, model: cmd.model, ...(route ? { route } : {}), ...(session ? { session } : {}), ...(credential ? { credential } : {}), window: 128_000, display: { name: cmd.model, brand: entry.name } });
+          if (!written.ok) { fail(written.error); return; }
+          pushModels();
+          switchModel(lane, name);
+        };
+        if (!entry.routes) { use(); return; }
+        void listModels(entry, where.base, headers, io.fetch).then((got) => {
+          if ("error" in got) { fail(got.error); return; }
+          const listed = got.models.find((m) => m.id === cmd.model);
+          if (listed) { use(listed.route); return; }
+          const left = got.skipped.find((m) => m.id === cmd.model);
+          fail(left ? `${cmd.model}: ${left.reason}.` : `${entry.name} does not list ${cmd.model}.`);
+        });
+        return;
+      }
       if (parsed.value.cmd === "drafts") { reply(JSON.stringify(encoder.stamp({ ev: "drafts", items: drafts.list() }))); return; }
       if (parsed.value.cmd === "draft") {
         drafts.set(parsed.value.key, parsed.value.text);
@@ -757,6 +981,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
       if (parsed.value.cmd === "load") { const id = parsed.value.id; if (lane.meta.read().unread.includes(id)) lane.meta.update((m) => { m.unread = m.unread.filter((x) => x !== id); }); }
       if (parsed.value.cmd === "load" && now?.program) { openProgramSession(lane, parsed.value.id); return; }
       if (parsed.value.cmd === "load" && now) { const id = parsed.value.id; void adoptWatched(lane, id).then(() => { lane.created?.engine.handle({ cmd: "load", id }); }); return; }
+      if (parsed.value.cmd === "model" && now && lane.engineModels && !lane.engineModels.has(parsed.value.id)) { switchModel(lane, parsed.value.id); return; }
       if (now) now.engine.handle(parsed.value);
       else if (parsed.value.cmd === "prompt") { say(lane, { ev: "error", msg: noModel(lane) }); say(lane, { ev: "done", stop: "error" }); }
     },
@@ -775,6 +1000,8 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
       return { model: now?.modelName ?? null, cwd: now?.cwd ?? resolve(options.cwd ?? process.cwd()), session: now?.engine.sessionId ?? null };
     },
     async stop() {
+      // The model server of this computer belongs to this hub: it ends with it.
+      await local.stop();
       clearInterval(watching);
       clearInterval(jobTimer);
       for (const slot of asideSlots) { await slot.created?.engine.idle(); slot.created?.engine.close(); }

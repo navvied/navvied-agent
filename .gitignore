@@ -4,5 +4,5 @@ dist
 .env
 .env.*
 !.env.example
-providers.json
+/providers.json
 .navvied-native

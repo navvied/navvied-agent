@@ -17,7 +17,7 @@ describe("the list of models", () => {
     const rows = modelRows(caps({ models: [{ id: "raphael", name: "raphael", current: true }, { id: "local", name: "qwen2.5:3b", blurb: "On this computer." }] }), "raphael", file);
     expect(rows.map((r) => [r.label, r.hint, r.action])).toEqual([
       ["raphael", "In use now.", { kind: "current" }],
-      ["qwen2.5:3b", "On this computer.", { kind: "switch", id: "local" }],
+      ["qwen2.5:3b", "On this computer.", { kind: "switch", id: "local", handover: false }],
       ["prog1", "Through a program you are signed in to. Starts a new conversation.", { kind: "restart", name: "prog1" }],
       ["prog2", "Through a program you are signed in to. Starts a new conversation.", { kind: "restart", name: "prog2" }],
       ["Connect another model", "Sign in to a service, or add one on this computer.", { kind: "connect" }],
@@ -28,6 +28,10 @@ describe("the list of models", () => {
     expect(rows.map((r) => r.label)).toEqual(["raphael", "qwen2.5:3b", "Connect another model"]);
     expect(rows[0]!.action).toEqual({ kind: "current" });
     expect(rows[1]!.action).toEqual({ kind: "restart", name: "local" });
+  });
+  test("a model only a hand-over reaches carries that in its action, so the caller can tell it apart from a plain switch", () => {
+    const rows = modelRows(caps({ models: [{ id: "a", name: "A", current: true }, { id: "prog", name: "A program", handover: true }] }), "a", null);
+    expect(rows[1]!.action).toEqual({ kind: "switch", id: "prog", handover: true });
   });
   test("a model that is locked says so and can still be seen", () => {
     const rows = modelRows(caps({ models: [{ id: "a", name: "A", current: true }, { id: "b", name: "B", locked: true }] }), "a", null);

@@ -134,12 +134,16 @@ describe("waiting for a sign that it is ready", () => {
 
 describe("the list of jobs", () => {
   test("BashOutput without an id lists them with their state, and says so when there are none", async () => {
-    const { jobs, ctx } = rig();
+    let clock = 1_000_000;
+    const jobs = new Jobs(() => undefined, () => clock);
+    const { ctx } = rig({ jobs });
     expect(await tool("BashOutput").run({}, ctx)).toBe("No command is running in the background.");
     await tool("Bash").run({ command: node("setTimeout(() => {}, 4000)"), run_in_background: true, description: "dev server" }, ctx);
     await tool("Bash").run({ command: node("console.log('x')"), run_in_background: true, description: "quick one" }, ctx);
     await Bun.sleep(600);
-    expect((await tool("BashOutput").run({}, ctx)).split("\n")).toEqual(["job1 running 1 s: dev server", "job2 done, exit 0: quick one"]);
+    // The age comes from the clock the jobs were started on: a slow machine cannot change it.
+    clock += 125_000;
+    expect((await tool("BashOutput").run({}, ctx)).split("\n")).toEqual(["job1 running 2 min: dev server", "job2 done, exit 0: quick one"]);
     jobs.close();
   });
 });

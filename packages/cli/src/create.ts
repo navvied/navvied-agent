@@ -4,26 +4,43 @@ import { dirname, join, resolve } from "node:path";
 import { ChatCompletionsProvider, type Recall, loadAgents, Rules, hasRules, parseRules, type RuleSet, commandHooks, memoryText, connectMcp, loadSkills, projectDirs, type ModelSwitch, Checkpoints, Engine, FileSessionStore, MessagesApiProvider, OllamaProvider, ResponsesApiProvider, SMALL_WINDOW, defaultTools, instructionFiles, loadInstructions, type AgentEngine, type ChatCompletionsConfig, type Credentials, type Provider, FallbackProvider, type FallbackLink, type RetryOptions } from "@navvied/engine";
 import { randomUUID } from "node:crypto";
 import { CodexEngine, StreamEngine } from "@navvied/stream-engine";
-import type { Effort, EngineEvent, Result } from "@navvied/protocol";
+import type { Effort, EngineEvent, ModelInfo, Result } from "@navvied/protocol";
 import type { Options } from "./args.ts";
 import { activeTools } from "./tools-info.ts";
 import { TerminalState, backendFor } from "./terminal.ts";
-import { attachmentsDir, chatFilesDir, chatSessionsDir, checkpointsDir, configPath, loadConfig, pluginStatePath, terminalStatePath, resolveModel, sessionsDir, type ConfigFile, type ModelEntry } from "./config.ts";
+import { attachmentsDir, chatFilesDir, chatSessionsDir, checkpointsDir, configPath, loadConfig, pluginStatePath, terminalStatePath, resolveModel, sessionsDir, type ConfigFile, type ModelEntry, type ResolvedModel } from "./config.ts";
 import type { IO } from "./io.ts";
 import { memoryPathsFor } from "./memory-ui.ts";
 import { catalogOf } from "./account.ts";
-import { INSTRUCTION_FILE_NAMES, knownEffort } from "./presets.ts";
+import { INSTRUCTION_FILE_NAMES, PROVIDERS, knownEffort } from "./presets.ts";
+import { adcCredentials } from "./adc.ts";
+import { LiveProvider } from "./live-provider.ts";
+import { savedSecrets } from "./providers.ts";
 import { credentialsFor } from "./logins.ts";
 import { PluginState, activeHooks, activeSkills, mcpId } from "./plugins.ts";
 
 /** `where` says in plain words how the model is reached, for the welcome screen. */
 export interface Created { engine: AgentEngine; /** The name of the model in the configuration. */ entry: string; modelName: string; where: string; cwd: string; tools?: string[]; notes: string[]; /** The model is reached through a program the person is signed in to, which keeps its own sessions. */ program?: true }
 
+/** What signs the requests of a model that has no key: the saved sign-in of a program account, or a credential file's access token. */
+const credentialsOf = (m: { signIn?: { provider: string; file?: string }; adc?: { file: string; tokenUri: string; scope: string } }, env: Record<string, string | undefined>): Credentials | undefined =>
+  m.signIn ? credentialsFor(m.signIn, env) : m.adc ? adcCredentials(m.adc) : undefined;
+
+/**
+ * The service of a resolved model. A model made from a provider is resolved again at each request (see live-provider.ts); any other is fixed.
+ */
+function serviceOf(name: string, now: ResolvedModel, file: ConfigFile | null, env: Record<string, string | undefined>, path: string): Provider {
+  const build = (m: ResolvedModel): Provider => providerFor(m.api, m.provider!, m.window, credentialsOf(m, env), m.pdf);
+  const made = file?.models[name];
+  if (!made?.provider && !made?.endpoint && !made?.local) return build(now);
+  return new LiveProvider(() => { const f = loadConfig(path, env); return f.ok ? resolveModel(name, f.value, env, path) : { ok: false, error: f.error }; }, build, now);
+}
+
 const providerFor = (api: "chat" | "messages" | "responses" | "ollama" | undefined, cfg: ChatCompletionsConfig, window: number, credentials?: Credentials, pdf?: boolean): Provider =>
   api === "messages" ? new MessagesApiProvider({ ...(pdf ? { readsPdf: true } : {}), baseUrl: cfg.baseUrl, model: cfg.model, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}), ...(cfg.headers ? { headers: cfg.headers } : {}), ...(credentials ? { credentials } : {}) })
   : api === "responses" ? new ResponsesApiProvider({ ...(pdf ? { readsPdf: true } : {}), baseUrl: cfg.baseUrl, model: cfg.model, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}), ...(cfg.headers ? { headers: cfg.headers } : {}), ...(credentials ? { credentials } : {}) })
   : api === "ollama" ? new OllamaProvider({ baseUrl: cfg.baseUrl, model: cfg.model, contextTokens: window, ...(cfg.headers ? { headers: cfg.headers } : {}) })
-  : new ChatCompletionsProvider(cfg);
+  : new ChatCompletionsProvider(cfg, credentials);
 
 /**
  * The permission rules for a project: the person's own (allow, ask, deny) plus, when the project has a `.navvied/permissions.json`,
@@ -66,7 +83,7 @@ function withFallback(first: Provider, name: string, file: ConfigFile | null, en
     if (other === name || chain.some((l) => l.name === other)) continue;
     const next = resolved(other, file, env, path);
     if (!next.ok || next.value.cli || !next.value.provider) continue;
-    chain.push({ name: file?.models[other]?.display?.name ?? other, provider: providerFor(next.value.api, next.value.provider, next.value.window, next.value.signIn ? credentialsFor(next.value.signIn, env) : undefined, next.value.pdf) });
+    chain.push({ name: file?.models[other]?.display?.name ?? other, provider: serviceOf(other, next.value, file, env, path) });
   }
   return chain.length > 1 ? new FallbackProvider(chain, (msg) => emit({ ev: "notice", msg }), retry) : first;
 }
@@ -74,6 +91,10 @@ function withFallback(first: Provider, name: string, file: ConfigFile | null, en
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0"]);
 
 /** In words, how a configured model is reached. */
+/** What must never be shown in any output: the keys of the models and of the endpoints, the keys and secret fields saved for providers, and the web proxy's token. */
+export const secretsOf = (file: ConfigFile | null): string[] =>
+  [...Object.values(file?.models ?? {}).map((m) => m.apiKey), ...Object.values(file?.endpoints ?? {}).map((e) => e.key), ...savedSecrets(PROVIDERS, file?.providers), file?.webProxy?.token].filter((k): k is string => !!k);
+
 export function describeEntry(e: ModelEntry): string {
   if (e.signIn) return e.signIn.provider === "claude" ? "Through your Claude subscription, with navvied's own tools." : "Through your ChatGPT plan, with navvied's own tools.";
   if (e.command) return e.adapter === "codex" ? "Through your ChatGPT plan." : "Through a program you are signed in to.";
@@ -98,11 +119,14 @@ export function resolved(choice: string | undefined, file: ConfigFile | null, en
   return { ok: true, value: { ...r.value, efforts: known.efforts, provider: { ...r.value.provider, ...(known.field ? { effortField: known.field } : {}) } } };
 }
 
+/** One entry of the model list as a page is told of it. */
+export const modelInfoOf = (id: string, e: ModelEntry): ModelInfo => ({ id, name: e.display?.name ?? e.model ?? id, blurb: e.display?.blurb ?? describeEntry(e), ...(e.display?.brand ? { brand: e.display.brand } : {}), ...(e.display?.badge ? { badge: e.display.badge } : {}), ...(e.display?.locked ? { locked: true } : {}), ...(catalogOf(id, e) ? { catalog: catalogOf(id, e)! } : {}) });
+
 function switcherFor(file: ConfigFile | null, current: string, env: Record<string, string | undefined>, path: string, window: number, efforts: Effort[] | undefined): ModelSwitch | undefined {
   const own = Object.entries(file?.models ?? {}).filter(([, e]) => !e.command);
   if (own.length < 2) return undefined;
   return {
-    models: own.map(([id, e]) => ({ id, name: e.display?.name ?? e.model ?? id, blurb: e.display?.blurb ?? describeEntry(e), ...(e.display?.brand ? { brand: e.display.brand } : {}), ...(e.display?.badge ? { badge: e.display.badge } : {}), ...(e.display?.locked ? { locked: true } : {}), ...(catalogOf(id, e) ? { catalog: catalogOf(id, e)! } : {}) })),
+    models: own.map(([id, e]) => modelInfoOf(id, e)),
     current,
     ...(efforts?.length ? { efforts } : {}),
     use(id) {
@@ -111,7 +135,7 @@ function switcherFor(file: ConfigFile | null, current: string, env: Record<strin
       if (!next.ok) return { error: next.error };
       if (next.value.cli || !next.value.provider) return { error: "That model runs in a different program, so it needs a new conversation." };
       return {
-        provider: providerFor(next.value.api, next.value.provider, next.value.window, next.value.signIn ? credentialsFor(next.value.signIn, env) : undefined, next.value.pdf), window: next.value.window,
+        provider: serviceOf(id, next.value, file, env, path), window: next.value.window,
         ...(next.value.efforts ? { efforts: next.value.efforts } : {}),
         ...(next.value.vision !== undefined ? { vision: next.value.vision } : {}),
         persona: leanSoul(brainFor(id, next.value.provider.model, next.value.window, file?.models[id]?.display?.name)),
@@ -122,7 +146,7 @@ function switcherFor(file: ConfigFile | null, current: string, env: Record<strin
 }
 
 /** What the hub gives an engine that it cannot make for itself: the person's earlier conversations. */
-export interface EngineExtras { recall?: Recall }
+export interface EngineExtras { recall?: Recall; /** What was said in this conversation before it came to a program from another model: the program is told it with its instructions, and answers as one that was there. */ earlier?: string }
 
 export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) => void, extras: EngineExtras = {}): Result<Created> {
   const path = configPath(io.env, options.config);
@@ -144,7 +168,7 @@ export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) =>
   const { cli, provider } = model.value;
   const shown = file.value?.models[model.value.name]?.display?.name;
   const brain: Brain = { label: cli ? (cli.adapter === "codex" ? "the model of the user's ChatGPT plan" : "the model of the program the user is signed in to") : `"${shown ?? provider?.model ?? model.value.name}"`, ...(cli ? { program: true, ownTools: TOOL_NAMES() } : { tools: TOOL_NAMES(), small: model.value.window <= SMALL_WINDOW }), ...(kind === "chat" ? { chat: true } : {}) };
-  const program = cli && { ...common, ...(rulesFor(file.value?.permissions, cwd) ? { rules: rulesFor(file.value?.permissions, cwd)! } : {}), entry: { id: model.value.name, name: shown ?? model.value.name }, persona: soulFor(brain, loadInstructions(cwd, dirname(path), memoryText(memory), INSTRUCTION_FILE_NAMES)), ...(options.session ? { sessionId: options.session } : {}), guard: guardCommandFor(path, cwd), command: cli.command, args: cli.args, env: cli.env, ...(cli.model ? { model: cli.model } : {}), ...(cli.models?.length ? { models: cli.models.map((m) => ({ id: m.id, name: m.name, ...(m.badge ? { badge: m.badge } : {}), ...(m.blurb ? { blurb: m.blurb } : {}) })) } : {}), ...(model.value.efforts ? { efforts: model.value.efforts } : {}) };
+  const program = cli && { ...common, ...(rulesFor(file.value?.permissions, cwd) ? { rules: rulesFor(file.value?.permissions, cwd)! } : {}), entry: { id: model.value.name, name: shown ?? model.value.name }, persona: `${soulFor(brain, loadInstructions(cwd, dirname(path), memoryText(memory), INSTRUCTION_FILE_NAMES))}${extras.earlier ? `\n\n${extras.earlier}` : ""}`, ...(options.session ? { sessionId: options.session } : {}), guard: guardCommandFor(path, cwd), command: cli.command, args: cli.args, env: cli.env, ...(cli.model ? { model: cli.model } : {}), ...(cli.models?.length ? { models: cli.models.map((m) => ({ id: m.id, name: m.name, ...(m.badge ? { badge: m.badge } : {}), ...(m.blurb ? { blurb: m.blurb } : {}) })) } : {}), ...(model.value.efforts ? { efforts: model.value.efforts } : {}) };
   const switcher = cli ? undefined : switcherFor(file.value, model.value.name, io.env, path, model.value.window, model.value.efforts);
   const engine: AgentEngine = cli
     ? cli.adapter === "codex" ? new CodexEngine(program!) : new StreamEngine(program!)
@@ -158,9 +182,9 @@ export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) =>
         tools: activeTools(new PluginState(pluginStatePath(io.env))),
         backend: backendFor(new TerminalState(terminalStatePath(io.env)), file.value?.terminal),
         ...(extras.recall && kind !== "chat" ? { recall: extras.recall } : {}),
-        provider: withFallback(providerFor(model.value.api, provider!, model.value.window, model.value.signIn ? credentialsFor(model.value.signIn, io.env) : undefined, model.value.pdf), model.value.name, file.value, io.env, path, emit),
+        provider: withFallback(serviceOf(model.value.name, model.value, file.value, io.env, path), model.value.name, file.value, io.env, path, emit),
         store: new FileSessionStore(kind === "chat" ? chatSessionsDir(io.env) : sessionsDir(io.env)),
-        secrets: [...Object.values(file.value?.models ?? {}).map((m) => m.apiKey), file.value?.webProxy?.token].filter((k): k is string => !!k),
+        secrets: secretsOf(file.value),
         persona: leanSoul(brain),
         ...(referenceFor(brain) ? { reference: referenceFor(brain)! } : {}),
         ...(switcher ? { switcher } : {}),

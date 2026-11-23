@@ -9,8 +9,8 @@ import { stopAllJobs } from "../src/index.ts";
 import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const chrome = findChrome();
-/** A port that nothing listens on (a port that was just let go), so a connection to it is refused at once. */
-const deadPort = ((): number => { const probe = Bun.serve({ port: 0, fetch: () => new Response("") }); const port = probe.port!; probe.stop(true); return port; })();
+/** A port that nothing listens on (one that was let go a moment ago, asked for when it is needed: a port freed at the start of the file is given to the next server this file starts), so a connection to it is refused at once. */
+const deadPort = (): number => { const probe = Bun.serve({ port: 0, fetch: () => new Response("") }); const port = probe.port!; probe.stop(true); return port; };
 const site = Bun.serve({
   port: 0,
   fetch(req) {
@@ -19,7 +19,7 @@ const site = Bun.serve({
     if (u.pathname === "/about") return page("<h1>About us</h1><p>We sell lamps.</p><a href='/'>Home</a>", "About");
     if (u.pathname === "/search") return page(`<h1>Results for ${u.searchParams.get("q")} in ${u.searchParams.get("color")}</h1>`, "Results");
     if (u.pathname === "/private") return page("<a href='http://10.1.2.3/secret'>Intranet</a><a href='/about'>About</a>");
-    if (u.pathname === "/redirect") return new Response(null, { status: 302, headers: { location: `http://127.0.0.1:${deadPort}/inside` } });
+    if (u.pathname === "/redirect") return new Response(null, { status: 302, headers: { location: `http://127.0.0.1:${deadPort()}/inside` } });
     return page(`<h1>Welcome to the shop</h1><p>${"Lamps and more. ".repeat(10)}</p><a href="/about">About</a><a href="/private">Links</a>
       <form action="/search"><input name="q" placeholder="Search lamps"><select name="color"><option value="red">Red</option><option value="blue">Blue</option></select><button type="submit">Go</button></form>
       <div style="height:3000px"></div><p id="bottom">The very end</p>`);

@@ -6,7 +6,7 @@ import { describeEntry } from "./create.ts";
 type Caps = Extract<EngineEvent, { ev: "caps" }>;
 
 /** What choosing a row does: change model inside this conversation, start a conversation with another program, or set one up. */
-export type ModelAction = { kind: "current" } | { kind: "switch"; id: string } | { kind: "restart"; name: string } | { kind: "connect" };
+export type ModelAction = { kind: "current" } | { kind: "switch"; id: string; handover: boolean } | { kind: "restart"; name: string } | { kind: "connect" };
 
 export interface ModelRow extends Choice { action: ModelAction }
 
@@ -17,7 +17,7 @@ export function modelRows(caps: Caps | undefined, currentName: string, file: Con
   for (const m of caps?.models ?? []) {
     listed.add(m.id);
     const hint = m.current ? "In use now." : m.locked ? "Not available yet." : m.blurb;
-    rows.push({ label: m.name, ...(hint ? { hint } : {}), action: m.current ? { kind: "current" } : { kind: "switch", id: m.id } });
+    rows.push({ label: m.name, ...(hint ? { hint } : {}), action: m.current ? { kind: "current" } : { kind: "switch", id: m.id, handover: m.handover === true } });
   }
   const entries = Object.entries(file?.models ?? {});
   if (!rows.length) {

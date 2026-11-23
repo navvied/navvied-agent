@@ -110,10 +110,11 @@ const unknownJob = (id: string, jobs: { list(): { id: string }[] }): string => {
 
 const age = (ms: number): string => (ms < 60_000 ? `${Math.max(1, Math.round(ms / 1000))} s` : ms < 3_600_000 ? `${Math.round(ms / 60_000)} min` : `${Math.round(ms / 3_600_000)} h`);
 
-function listJobs(jobs: Jobs, now: Date): string {
+/** How long a job has run is read on the clock its start was written with, never on another one. */
+function listJobs(jobs: Jobs): string {
   const all = jobs.list();
   if (!all.length) return "No command is running in the background.";
-  return all.map((j) => `${j.id} ${j.status === "running" ? `running ${age(now.getTime() - j.startedAt)}` : `${j.status}${j.code !== null ? `, exit ${j.code}` : ""}`}: ${j.title}`).join("\n");
+  return all.map((j) => `${j.id} ${j.status === "running" ? `running ${age(jobs.now() - j.startedAt)}` : `${j.status}${j.code !== null ? `, exit ${j.code}` : ""}`}: ${j.title}`).join("\n");
 }
 
 export const bashOutput: Tool = {
@@ -125,7 +126,7 @@ export const bashOutput: Tool = {
   title: (a) => `Read output of ${str(a.job_id)}`,
   async run(a, ctx) {
     const id = str(a.job_id);
-    if (!id) return listJobs(ctx.jobs, new Date());
+    if (!id) return listJobs(ctx.jobs);
     const wait = Math.min(Math.max(0, num(a.wait, 0)), 120);
     const until = str(a.until);
     if (wait > 0 || until) await ctx.jobs.waitFor(id, (wait || 30) * 1000, ctx.signal, until || undefined);

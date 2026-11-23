@@ -18,6 +18,7 @@ import { Jobs } from "./jobs.ts";
 import { Redactor, registerSecrets } from "./redact.ts";
 import { forget, type ShellState } from "./tools/shell-state.ts";
 import { skillsPrompt, type SkillInfo } from "./skills.ts";
+import { messagesAsText, toolsInPrompt } from "./text-tools.ts";
 import { TextToolCalls, dollarCommand } from "./text-tool-calls.ts";
 import type { Backend } from "./backend.ts";
 import { toolsFor } from "./permissions.ts";
@@ -145,6 +146,9 @@ const CHANGED = ["content", "old_string", "new_string"];
 /** The server turned the request down because of the effort field: a 400 that names it, or a parameter it does not know. */
 const refusesEffort = (e: unknown): boolean => (e as { status?: number } | undefined)?.status === 400 && /effort|reasoning|unknown (parameter|field|argument|name)|unrecognized (parameter|field|request argument)|unsupported (parameter|field)|extra inputs|additional properties|not permitted/i.test(e instanceof Error ? e.message : "");
 
+/** The server says the model has no tool calling at all (a 400 that names it): the request goes again without tools, and so does every later one of that model. */
+const refusesTools = (e: unknown): boolean => (e as { status?: number } | undefined)?.status === 400 && /does not support tools|tools? (is|are)? ?not supported|no tool (support|calling)/i.test(e instanceof Error ? e.message : "");
+
 /** The words a person is shown when the model cannot see pictures. */
 const BLIND = "This model cannot see pictures, so they were not sent.";
 const REFUSES_PICTURES = /image|picture|vision|multimodal|multi-modal|modalit/i;
@@ -180,6 +184,7 @@ export class Engine implements AgentEngine {
   #efforts: Effort[] | undefined;
   /** Models that turned the effort field down in this session: none is offered for them again. */
   readonly #noEffort = new Set<string>();
+  readonly #noTools = new Set<string>();
   #busy = false;
   readonly #qids = new RecentIds();
   /** The prompt that started the running turn, and what the turn has used so far. */
@@ -580,9 +585,9 @@ export class Engine implements AgentEngine {
       const said = (text: string): void => { if (text) { endThought(); this.#emit({ ev: "text", text }); } };
       const ask = (effort: Effort | undefined): Promise<ModelReply> => this.#provider.stream(
         {
-          system: systemPrompt({ cwd: this.#o.cwd, platform: process.platform, date: (this.#o.now?.() ?? new Date()).toISOString().slice(0, 10), ...(this.#persona ? { persona: this.#persona } : {}), ...(this.#reference && asksAboutProgram(this.#lastUserText()) ? { reference: this.#reference } : {}), tools: tools.map((t) => t.name), ...(also.length ? { also } : {}), ...(finished.length ? { finished } : {}), ...(instructions ? { instructions } : {}), ...(skills.length ? { skills: skillsPrompt(skills, small)! } : {}), small, ...(this.#kind === "chat" ? { kind: "chat" as const, sandboxed: this.#o.sandboxed === true } : {}) }, this.#mode),
-          messages: this.#messages,
-          tools: tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
+          system: systemPrompt({ cwd: this.#o.cwd, platform: process.platform, date: (this.#o.now?.() ?? new Date()).toISOString().slice(0, 10), ...(this.#persona ? { persona: this.#persona } : {}), ...(this.#reference && asksAboutProgram(this.#lastUserText()) ? { reference: this.#reference } : {}), tools: tools.map((t) => t.name), ...(also.length ? { also } : {}), ...(finished.length ? { finished } : {}), ...(instructions ? { instructions } : {}), ...(skills.length ? { skills: skillsPrompt(skills, small)! } : {}), small, ...(this.#kind === "chat" ? { kind: "chat" as const, sandboxed: this.#o.sandboxed === true } : {}) }, this.#mode) + (this.#noTools.has(this.#model ?? "") ? `\n\n${toolsInPrompt(tools)}` : ""),
+          messages: this.#noTools.has(this.#model ?? "") ? messagesAsText(this.#messages) : this.#messages,
+          tools: this.#noTools.has(this.#model ?? "") ? [] : tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
           ...(effort ? { effort } : {}),
         },
         this.#abort.signal,
@@ -597,9 +602,9 @@ export class Engine implements AgentEngine {
       let model: ModelReply;
       try { model = await ask(this.#effort); }
       catch (e) {
-        if (!this.#effort || !refusesEffort(e)) throw e;
-        this.#dropEffort();
-        model = await ask(undefined);
+        if (tools.length && !this.#noTools.has(this.#model ?? "") && refusesTools(e)) { this.#noTools.add(this.#model ?? ""); model = await ask(this.#effort); }
+        else if (this.#effort && refusesEffort(e)) { this.#dropEffort(); model = await ask(undefined); }
+        else throw e;
       }
 
       // The model has the news only once its request has gone through: a request that failed does not use it up.

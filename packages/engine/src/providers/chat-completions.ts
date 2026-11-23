@@ -5,7 +5,7 @@
 import type { Message, ModelReply, ModelRequest, Part, Provider, StreamHandlers, ToolCall } from "../types.ts";
 import { sseData } from "./sse.ts";
 import { fetchModel, retryAfterMs } from "./net.ts";
-
+import type { Credentials } from "../signin.ts";
 
 export interface ChatCompletionsConfig {
   /** Base URL including the version prefix, e.g. `http://127.0.0.1:11434/v1`. */
@@ -36,11 +36,12 @@ export function toWire(m: Message): Record<string, unknown> {
 }
 
 export class ChatCompletionsProvider implements Provider {
-  constructor(private readonly cfg: ChatCompletionsConfig) {}
+  constructor(private readonly cfg: ChatCompletionsConfig, private readonly credentials?: Credentials) {}
 
   private url(): string { return `${this.cfg.baseUrl.replace(/\/+$/, "")}/chat/completions`; }
-  private headers(): Record<string, string> {
-    return { "content-type": "application/json", ...(this.cfg.apiKey ? { authorization: `Bearer ${this.cfg.apiKey}` } : {}), ...this.cfg.headers };
+  private async headers(): Promise<Record<string, string>> {
+    const login = this.credentials ? await this.credentials.headers(new Headers(this.cfg.headers)) : {};
+    return { "content-type": "application/json", ...(this.cfg.apiKey ? { authorization: `Bearer ${this.cfg.apiKey}` } : {}), ...this.cfg.headers, ...login };
   }
 
   async stream(req: ModelRequest, signal: AbortSignal, on: StreamHandlers): Promise<ModelReply> {
@@ -51,7 +52,7 @@ export class ChatCompletionsProvider implements Provider {
     if (req.tools.length) body.tools = req.tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } }));
     if (req.effort && this.cfg.reasoning !== "none") { if (this.cfg.effortField === "reasoning") body.reasoning = { effort: req.effort }; else body.reasoning_effort = req.effort; }
 
-    const res = await fetchModel(this.url(), { method: "POST", headers: this.headers(), body: JSON.stringify(body), signal });
+    const res = await fetchModel(this.url(), { method: "POST", headers: await this.headers(), body: JSON.stringify(body), signal });
     if (!res.ok || !res.body) {
       const detail = (await res.text().catch(() => "")).slice(0, 400);
       throw new ProviderError(`the model endpoint answered ${res.status}${detail ? `: ${detail}` : ""}`, res.status, retryAfterMs(res));
@@ -87,7 +88,7 @@ export class ChatCompletionsProvider implements Provider {
 
   async complete(system: string, user: string, signal: AbortSignal): Promise<string> {
     const res = await fetchModel(this.url(), {
-      method: "POST", headers: this.headers(), signal,
+      method: "POST", headers: await this.headers(), signal,
       body: JSON.stringify({ model: this.cfg.model, stream: false, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
     });
     if (!res.ok) throw new ProviderError(`the model endpoint answered ${res.status}`, res.status, retryAfterMs(res));

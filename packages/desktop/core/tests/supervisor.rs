@@ -124,6 +124,27 @@ fn stopping_ends_the_program_and_what_it_started() {
     assert!(wait_dead(grandchild, 5), "a program started by the program outlived the app");
 }
 
+/// The program dies on its own (killed by the system when memory runs out, say) while the app lives: what it had started must not
+/// be left behind for the next program to find, and the next one starts clean.
+#[cfg(unix)]
+#[test]
+fn when_the_program_dies_alone_what_it_started_goes_too() {
+    let dir = temp_dir("died-alone");
+    let (pidfile, grandfile) = (dir.join("pid"), dir.join("grandchild"));
+    let mut rig = start(config(&[("FAKE_PID_FILE", &pidfile.to_string_lossy()), ("FAKE_GRANDCHILD_FILE", &grandfile.to_string_lossy())]));
+    rig.running();
+    let program: i32 = std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
+    let grandchild: u32 = std::fs::read_to_string(&grandfile).unwrap().trim().parse().unwrap();
+    assert!(alive(grandchild));
+    // SAFETY: ending the fake program, whose pid it wrote itself, the way the system's out-of-memory killer would.
+    unsafe {
+        libc::kill(program, libc::SIGKILL);
+    }
+    rig.wait(|e| matches!(e, Event::Crashed { .. }).then_some(()));
+    assert!(wait_dead(grandchild, 5), "what the program started outlived the program's own crash");
+    rig.stop();
+}
+
 #[test]
 fn a_program_that_ignores_the_closed_input_is_ended_after_the_grace_time() {
     let dir = temp_dir("ignore");

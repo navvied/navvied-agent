@@ -1,4 +1,8 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { expandEndpointModel, modelNames, endpointModel, type EndpointRecord } from "./endpoints.ts";
+import { expandLocalModel } from "./local-entry.ts";
+import { PROVIDERS } from "./presets.ts";
+import { expandModel, type SavedProvider } from "./providers.ts";
 import { dirname, posix, win32 } from "node:path";
 import { hasRules, parseRules, type ChatCompletionsConfig, type HookConfig, type HookEvent, type RuleSet } from "@navvied/engine";
 import { EFFORTS, type Effort, type Result } from "@navvied/protocol";
@@ -18,6 +22,21 @@ export interface ModelEntry {
   command?: string;
   /** Use the sign-in a program on this computer already made (`claude` or `chatgpt`), with navvied's own tools. `file` says where it is saved when it is not the usual place. */
   signIn?: { provider: string; file?: string };
+  /**
+   * A model made from a provider the person gave a key (see providers.ts) holds no key and no address: only which provider, and what was chosen
+   * (the route its model list gave it, the session id it asked for, the credential file's path). Everything else is read from `providers` whenever
+   * the model is resolved, so removing the provider or saving a new key reaches every model made from it.
+   */
+  provider?: string;
+  /** A model of an endpoint the person made (see endpoints.ts): holds no key and no address either; both are read from `endpoints` when the model is resolved. */
+  endpoint?: string;
+  /** A model on this computer, run by the program's own model server while it is running: the address is the one of that run, read when the model is used. */
+  local?: { repo: string; file: string; window: number };
+  route?: { api: "chat" | "responses" | "messages"; base: string };
+  session?: string;
+  credential?: string;
+  /** The access token of every request comes from a credential file on this computer that stays where it is: only its path is kept here (see adc.ts). */
+  adc?: { file: string; tokenUri: string; scope: string };
   /** How to talk to the program at `command`: `stream` (the default) or `codex`. */
   adapter?: "stream" | "codex";
   args?: string[];
@@ -48,7 +67,7 @@ const HOOK_EVENTS = ["PreToolUse", "PostToolUse", "Stop", "UserPromptSubmit", "S
 
 /** Where the Bash tool may run its commands besides this computer. The host and the image are set here, never from a page. */
 export interface TerminalConfig { docker?: { image?: string }; ssh?: { host: string; user?: string; dir?: string } }
-export interface ConfigFile { default?: string; terminal?: TerminalConfig; /** Folders an agent may be started in, besides the one the program starts in and the ones worked in lately. Added here, never from a page. */ folders?: string[]; /** `false`: do not use the free models of navvied.com without an account (the default is to use them, as listed by the server). */ guestModels?: boolean; /** `list` (default): every step is one line, a failure or a change shows more. `fold`: steps that went well are folded away. `all`: everything every step printed. */ steps?: "list" | "fold" | "all"; /** Models to use, in this order, when the one chosen cannot be reached (names of entries in `models`). */ fallback?: string[]; theme?: string; accent?: string; autoUpdate?: boolean; /** Where a hosted session reaches the web, and the token to ask with. Written by the service that runs the session. */ webProxy?: { url: string; token: string }; models: Record<string, ModelEntry>; mcp?: Record<string, McpEntry>; hooks?: HookConfig; /** `false` keeps this computer's conversations off the account (default: they are kept there while signed in) */ syncConversations?: boolean; /** allow / ask / deny rules; see docs/CLI.md */ permissions?: RuleSet }
+export interface ConfigFile { default?: string; terminal?: TerminalConfig; /** Folders an agent may be started in, besides the one the program starts in and the ones worked in lately. Added here, never from a page. */ folders?: string[]; /** `false`: do not use the free models of navvied.com without an account (the default is to use them, as listed by the server). */ guestModels?: boolean; /** `list` (default): every step is one line, a failure or a change shows more. `fold`: steps that went well are folded away. `all`: everything every step printed. */ steps?: "list" | "fold" | "all"; /** Models to use, in this order, when the one chosen cannot be reached (names of entries in `models`). */ fallback?: string[]; theme?: string; accent?: string; autoUpdate?: boolean; /** Where a hosted session reaches the web, and the token to ask with. Written by the service that runs the session. */ webProxy?: { url: string; token: string }; models: Record<string, ModelEntry>; /** What this computer keeps for the providers a person has a key of their own for (see providers.ts). Never sent anywhere. */ providers?: Record<string, SavedProvider>; /** The servers of the person's own that were added from a page (see endpoints.ts). Never sent anywhere, keys included. */ endpoints?: Record<string, EndpointRecord>; mcp?: Record<string, McpEntry>; hooks?: HookConfig; /** `false` keeps this computer's conversations off the account (default: they are kept there while signed in) */ syncConversations?: boolean; /** allow / ask / deny rules; see docs/CLI.md */ permissions?: RuleSet }
 
 export interface ResolvedModel {
   name: string;
@@ -58,6 +77,8 @@ export interface ResolvedModel {
   api?: "chat" | "messages" | "responses" | "ollama";
   /** The saved sign-in this model is reached with, instead of a key. */
   signIn?: { provider: string; file?: string };
+  /** The access token comes from a credential file instead of a key. */
+  adc?: { file: string; tokenUri: string; scope: string };
   cli?: { command: string; args: string[]; model?: string; env: Record<string, string>; adapter?: "stream" | "codex"; models?: ModelEntry["models"] };
   /** The effort levels it accepts; none when it has no such setting. */
   efforts?: Effort[];
@@ -80,6 +101,8 @@ const stateDir = (env: Env, platform: Platform): string => {
   const base = env.XDG_STATE_HOME ?? (platform === "win32" ? env.LOCALAPPDATA ?? join(home(env, platform), "AppData", "Local") : join(home(env, platform), ".local", "state"));
   return join(base, "navvied");
 };
+/** Where local models and the runtime that runs them are kept: in navvied's own state folder, or where `NAVVIED_LOCAL_DIR` says (a bigger disk). */
+export const localDir = (env: Env, platform: Platform = process.platform): string => env.NAVVIED_LOCAL_DIR || joiner(platform)(stateDir(env, platform), "local");
 export const updateStampPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "update-check");
 /** What was said in each conversation, whatever kind of engine took part, so every window can list and open it. */
 export const journalDir = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "journal");
@@ -130,9 +153,15 @@ function entry(name: string, raw: unknown): Result<ModelEntry> {
     if (raw.args !== undefined && !(Array.isArray(raw.args) && raw.args.every((a) => typeof a === "string"))) return { ok: false, error: `model "${name}": args must be an array of strings` };
     if (raw.baseUrl !== undefined) return { ok: false, error: `model "${name}": use either command or baseUrl, not both` };
     if (raw.adapter !== undefined && raw.adapter !== "stream" && raw.adapter !== "codex") return { ok: false, error: `model "${name}": adapter must be "stream" or "codex"` };
+  } else if ((typeof raw.provider === "string" && raw.provider) || (typeof raw.endpoint === "string" && raw.endpoint) || isObj(raw.local)) {
+    if (typeof raw.model !== "string" || !raw.model) return { ok: false, error: `model "${name}": model is required` };
   } else {
     if (typeof raw.baseUrl !== "string" || !/^https?:\/\//.test(raw.baseUrl)) return { ok: false, error: `model "${name}": baseUrl must start with http:// or https:// (or set command)` };
     if (typeof raw.model !== "string" || !raw.model) return { ok: false, error: `model "${name}": model is required` };
+  }
+  if (raw.adc !== undefined) {
+    const a = isObj(raw.adc) ? raw.adc : undefined;
+    if (!a || typeof a.file !== "string" || !a.file || typeof a.tokenUri !== "string" || !/^https:\/\//.test(a.tokenUri) || typeof a.scope !== "string" || !a.scope) return { ok: false, error: `model "${name}": adc must be { "file": "…", "tokenUri": "https://…", "scope": "…" }` };
   }
   if (raw.signIn !== undefined) {
     const sign = isObj(raw.signIn) ? raw.signIn : undefined;
@@ -147,7 +176,14 @@ function entry(name: string, raw: unknown): Result<ModelEntry> {
   if (typeof raw.baseUrl === "string") out.baseUrl = raw.baseUrl;
   if (raw.api === "chat" || raw.api === "messages" || raw.api === "responses" || raw.api === "ollama") out.api = raw.api;
   if (typeof raw.model === "string" && raw.model) out.model = raw.model;
+  if (typeof raw.provider === "string" && raw.provider) out.provider = raw.provider;
+  if (typeof raw.endpoint === "string" && raw.endpoint) out.endpoint = raw.endpoint;
+  if (isObj(raw.local) && typeof raw.local.repo === "string" && typeof raw.local.file === "string" && typeof raw.local.window === "number") out.local = { repo: raw.local.repo, file: raw.local.file, window: raw.local.window };
+  if (isObj(raw.route) && typeof raw.route.base === "string" && (raw.route.api === "chat" || raw.route.api === "responses" || raw.route.api === "messages")) out.route = { api: raw.route.api, base: raw.route.base };
+  if (typeof raw.session === "string" && raw.session) out.session = raw.session;
+  if (typeof raw.credential === "string" && raw.credential) out.credential = raw.credential;
   if (typeof raw.command === "string") out.command = raw.command;
+  if (isObj(raw.adc)) out.adc = { file: raw.adc.file as string, tokenUri: raw.adc.tokenUri as string, scope: raw.adc.scope as string };
   if (isObj(raw.signIn)) out.signIn = { provider: raw.signIn.provider as string, ...(typeof raw.signIn.file === "string" ? { file: raw.signIn.file } : {}) };
   if (raw.adapter === "stream" || raw.adapter === "codex") out.adapter = raw.adapter;
   if (Array.isArray(raw.args)) out.args = raw.args as string[];
@@ -256,6 +292,26 @@ function loadConfigFile(path: string): Result<ConfigFile | null> {
     if (typeof w !== "object" || w === null || typeof w.url !== "string" || typeof w.token !== "string" || !/^https?:\/\//.test(w.url) || !w.token) return { ok: false, error: `${path}: "webProxy" needs a web address in "url" and a "token"` };
     config.webProxy = { url: w.url.replace(/\/+$/, ""), token: w.token };
   }
+  if (raw.providers !== undefined) {
+    if (!isObj(raw.providers)) return { ok: false, error: `${path}: "providers" must be an object` };
+    const providers: Record<string, SavedProvider> = {};
+    for (const [id, v] of Object.entries(raw.providers)) {
+      if (!isObj(v)) return { ok: false, error: `${path}: providers: "${id}" must be an object` };
+      const fields = isObj(v.fields) ? Object.fromEntries(Object.entries(v.fields).filter((e): e is [string, string] => typeof e[1] === "string")) : undefined;
+      providers[id] = { ...(typeof v.key === "string" && v.key ? { key: v.key } : {}), ...(typeof v.region === "string" && v.region ? { region: v.region } : {}), ...(fields && Object.keys(fields).length ? { fields } : {}) };
+    }
+    if (Object.keys(providers).length) config.providers = providers;
+  }
+  if (raw.endpoints !== undefined) {
+    if (!isObj(raw.endpoints)) return { ok: false, error: `${path}: "endpoints" must be an object` };
+    const endpoints: Record<string, EndpointRecord> = {};
+    for (const [id, v] of Object.entries(raw.endpoints)) {
+      if (!isObj(v) || typeof v.name !== "string" || typeof v.baseUrl !== "string" || !/^https?:\/\//.test(v.baseUrl) || !(v.api === "chat" || v.api === "responses" || v.api === "messages" || v.api === "ollama") || !Array.isArray(v.models)) return { ok: false, error: `${path}: endpoints: "${id}" needs a name, a baseUrl, an api and a list of models` };
+      const models = v.models.filter((m): m is Record<string, unknown> => isObj(m) && typeof m.id === "string" && !!m.id).map((m) => ({ id: m.id as string, ...(typeof m.window === "number" && m.window > 0 ? { window: m.window } : {}), ...(typeof m.vision === "boolean" ? { vision: m.vision } : {}), ...(typeof m.pdf === "boolean" ? { pdf: m.pdf } : {}) }));
+      endpoints[id] = { name: v.name, baseUrl: v.baseUrl, api: v.api, ...(typeof v.key === "string" && v.key ? { key: v.key } : {}), models };
+    }
+    if (Object.keys(endpoints).length) config.endpoints = endpoints;
+  }
   if (raw.guestModels !== undefined) {
     if (typeof raw.guestModels !== "boolean") return { ok: false, error: `${path}: "guestModels" must be true or false` };
     config.guestModels = raw.guestModels;
@@ -308,23 +364,37 @@ const toResolved = (name: string, e: ModelEntry, env: Env): ResolvedModel => {
   const apiKey = (e.apiKeyEnv ? env[e.apiKeyEnv] : undefined) ?? e.apiKey;
   const provider: ChatCompletionsConfig = { baseUrl: e.baseUrl ?? "", model: e.model ?? "", ...(apiKey ? { apiKey } : {}), ...(e.reasoning ? { reasoning: e.reasoning } : {}), ...(e.headers ? { headers: e.headers } : {}) };
   const efforts = e.efforts ?? (e.reasoning === "effort" ? DEFAULT_EFFORTS : undefined);
-  return { name, provider, window: e.window ?? DEFAULT_WINDOW, ...(e.api ? { api: e.api } : {}), ...(e.signIn ? { signIn: e.signIn } : {}), ...(efforts?.length ? { efforts } : {}), ...(e.vision !== undefined ? { vision: e.vision } : {}), ...(e.pdf ? { pdf: true } : {}) };
+  return { name, provider, window: e.window ?? DEFAULT_WINDOW, ...(e.api ? { api: e.api } : {}), ...(e.signIn ? { signIn: e.signIn } : {}), ...(e.adc ? { adc: e.adc } : {}), ...(efforts?.length ? { efforts } : {}), ...(e.vision !== undefined ? { vision: e.vision } : {}), ...(e.pdf ? { pdf: true } : {}) };
 };
 
 /** Pick the model to use: `--model`, else the file's default, else its only entry, else the NAVVIED_* environment. */
 export function resolveModel(choice: string | undefined, file: ConfigFile | null, env: Env, path: string): Result<ResolvedModel> {
   const names = Object.keys(file?.models ?? {});
-  const wanted = choice ?? file?.default ?? (names.length === 1 ? names[0] : undefined);
+  // A model of this computer's own server counts as a choice only while the server runs: one that a crash left behind must not turn "the only model" into "several".
+  const choices = names.filter((n) => !file!.models[n]!.local || !("error" in expandLocalModel(localDir(env), file!.models[n]!)));
+  const wanted = choice ?? file?.default ?? (choices.length === 1 ? choices[0] : undefined);
   if (wanted) {
     const e = file?.models[wanted];
     if (!e) return { ok: false, error: `unknown model "${wanted}"${names.length ? ` (configured: ${names.join(", ")})` : ` — no models are configured in ${path}`}` };
+    if (e.local) {
+      const made = expandLocalModel(localDir(env), e);
+      return "error" in made ? { ok: false, error: made.error } : { ok: true, value: toResolved(wanted, made.entry, env) };
+    }
+    if (e.endpoint) {
+      const made = expandEndpointModel(file?.endpoints, e);
+      return "error" in made ? { ok: false, error: made.error } : { ok: true, value: toResolved(wanted, made.entry, env) };
+    }
+    if (e.provider) {
+      const made = expandModel(PROVIDERS, file?.providers, e);
+      return "error" in made ? { ok: false, error: made.error } : { ok: true, value: toResolved(wanted, made.entry, env) };
+    }
     return { ok: true, value: toResolved(wanted, e, env) };
   }
   if (env.NAVVIED_BASE_URL && env.NAVVIED_MODEL) {
     const window = Number(env.NAVVIED_WINDOW);
     return { ok: true, value: toResolved(env.NAVVIED_MODEL, { baseUrl: env.NAVVIED_BASE_URL, model: env.NAVVIED_MODEL, ...(env.NAVVIED_API_KEY ? { apiKey: env.NAVVIED_API_KEY } : {}), ...(window > 0 ? { window } : {}) }, env) };
   }
-  if (names.length > 1) return { ok: false, error: `several models are configured (${names.join(", ")}); choose one with --model or set "default" in ${path}` };
+  if (choices.length > 1) return { ok: false, error: `several models are configured (${choices.join(", ")}); choose one with --model or set "default" in ${path}` };
   return { ok: false, error: "no model is connected yet. Run navvied init to connect one." };
 }
 
@@ -361,3 +431,53 @@ export function rememberBashPattern(path: string, pattern: string): Result<Confi
   chmodSync(path, 0o600);
   return { ok: true, value: config };
 }
+
+/** Keeps what is saved for one provider (or takes it away: `undefined`) in the configuration file, which only its owner can read. */
+export function saveProvider(path: string, id: string, saved: SavedProvider | undefined): Result<ConfigFile> {
+  const existing = loadConfig(path);
+  if (!existing.ok) return existing;
+  const config: ConfigFile = existing.value ?? { models: {} };
+  const providers = { ...config.providers };
+  if (saved && Object.keys(saved).length) providers[id] = saved; else delete providers[id];
+  if (Object.keys(providers).length) config.providers = providers; else delete config.providers;
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return { ok: true, value: config };
+}
+
+/** Adds (or replaces) one model of the configuration file. */
+export function saveModel(path: string, name: string, entry: ModelEntry): Result<ConfigFile> {
+  const existing = loadConfig(path);
+  if (!existing.ok) return existing;
+  const config: ConfigFile = existing.value ?? { models: {} };
+  config.models = { ...config.models, [name]: entry };
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return { ok: true, value: config };
+}
+
+/** Keeps an endpoint, or takes it away (`undefined`) with every model made from it; the models of an endpoint are entries of the configuration that hold only the endpoint's id. */
+export function saveEndpoint(path: string, id: string, record: EndpointRecord | undefined): Result<ConfigFile> {
+  const existing = loadConfig(path);
+  if (!existing.ok) return existing;
+  const config: ConfigFile = existing.value ?? { models: {} };
+  for (const [name, m] of Object.entries(config.models)) if (m.endpoint === id) delete config.models[name];
+  const endpoints = { ...config.endpoints };
+  if (record) {
+    endpoints[id] = record;
+    const names = modelNames(id, record.models);
+    for (const m of record.models) config.models[names.get(m.id)!] = endpointModel(id, record, m);
+  } else delete endpoints[id];
+  // What pointed at a model that is gone is let go; what still points at one that is there stays (saving an endpoint again keeps the choice of the person).
+  if (config.default && !(config.default in config.models)) delete config.default;
+  config.fallback = config.fallback?.filter((n) => n in config.models);
+  if (!config.fallback?.length) delete config.fallback;
+  if (Object.keys(endpoints).length) config.endpoints = endpoints; else delete config.endpoints;
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return { ok: true, value: config };
+}
+

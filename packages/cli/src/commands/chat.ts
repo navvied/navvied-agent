@@ -76,6 +76,8 @@ export async function chatCommand(initial: string | undefined, options: Options,
   let proposed = false;
   let capsNow: Extract<EngineEvent, { ev: "caps" }> | undefined;
   let switching = false;
+  /** The switch under way hands the conversation to a different engine: its own notice already says so in one line, so the generic one below is skipped. */
+  let switchingHandover = false;
   let summarised = false;
   /** The effort asked for on the command line, used until the person chooses one in the app. */
   let effortFlag = options.effort;
@@ -113,10 +115,14 @@ export async function chatCommand(initial: string | undefined, options: Options,
       const before = capsNow;
       capsNow = e;
       modes = e.modes;
+      // An engine that is made says its abilities first; once it is in place it is the one this screen talks to (a conversation handed to another model has a new one).
+      queueMicrotask(() => { current = hub.created() ?? current; });
       const was = before?.models?.find((m) => m.current), now = e.models?.find((m) => m.current);
       if (switching && now && now.id !== was?.id) {
         switching = false;
-        say(`${paint(io.color, "cyan", "✓")} Now using ${paint(io.color, "bold", now.name)}. Your next message goes to it.`);
+        // A hand-over says it is one with its own notice (ev:"notice", right after this); nothing more is said here.
+        if (switchingHandover) switchingHandover = false;
+        else say(`${paint(io.color, "cyan", "✓")} Now using ${paint(io.color, "bold", now.name)}. Your next message goes to it.`);
         if (summarised) say(paint(io.color, "dim", "The conversation was longer than its memory, so the earliest messages were summarised.\nNothing was deleted: /checkpoints still has every change."));
       }
       if (before && e.effort !== before.effort) say(`${paint(io.color, "cyan", "✓")} Effort is now ${e.effort ? effortLabel(e.effort) : "Auto"}. Your next message uses it.`);
@@ -393,17 +399,20 @@ export async function chatCommand(initial: string | undefined, options: Options,
     if (!current || !io.choose) return connect();
     const file = loadConfig(configPath(io.env, options.config), io.env);
     const rows = modelRows(capsNow, current.entry, file.ok ? file.value : null);
-    const answer = await io.choose("Which model do you want to use?", rows, Math.max(0, rows.findIndex((r) => r.action.kind === "current")), { numbered: false, ...(busy ? { notice: ["A task is running. Choosing another model stops it first."] } : {}) });
+    const answer = await io.choose("Which model do you want to use?", rows, Math.max(0, rows.findIndex((r) => r.action.kind === "current")), { numbered: false, ...(busy ? { notice: ["A task is running. A reply that is being written finishes first."] } : {}) });
     const action = typeof answer === "number" ? rows[answer]?.action : undefined;
     if (!action || action.kind === "current") { marker(); return; }
     if (action.kind === "connect") return connect();
-    await stopAndWait();
     if (action.kind === "switch") {
       switching = true;
+      switchingHandover = action.handover;
       summarised = false;
-      current.engine.handle({ cmd: "model", id: action.id });
+      // Through the hub: a model of the other kind is a hand-over, which it does; one the engine knows is passed on to it. A reply
+      // still being written finishes first (the hub itself waits for it), so nothing is stopped here.
+      hub.command(JSON.stringify({ cmd: "model", id: action.id }), () => undefined);
       return;
     }
+    await stopAndWait();
     options.model = action.name;
     effortFlag = undefined;
     if (start()) {

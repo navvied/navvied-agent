@@ -125,3 +125,23 @@ describe("a server that does not know the effort field", () => {
     answer = () => undefined;
   });
 });
+
+describe("a server that says the model has no tool calling", () => {
+  const refuse = (_path: string, body: any): Response | undefined =>
+    body.tools?.length ? new Response(JSON.stringify({ error: { message: "registry.example/library/tiny:135m does not support tools" } }), { status: 400, headers: { "content-type": "application/json" } }) : undefined;
+
+  test("the same request goes again without tools, and every later request of that model carries none", async () => {
+    answer = refuse;
+    seen = [];
+    const r = rig(() => ({ text: "x" }), { provider: new ChatCompletionsProvider({ baseUrl: base(), model: "m" }) });
+    await r.turn(prompt("hello"));
+    expect(seen.map((s) => (s.body.tools?.length ?? 0) > 0)).toEqual([true, false]);
+    expect(r.of("text").map((e) => e.text).join("")).toBe("ok");
+    expect(r.of("error")).toEqual([]);
+    seen = [];
+    await r.turn(prompt("and again"));
+    expect(seen.map((s) => (s.body.tools?.length ?? 0) > 0)).toEqual([false]);
+    r.cleanup();
+    answer = () => undefined;
+  });
+});

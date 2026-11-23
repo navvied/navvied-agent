@@ -12,13 +12,15 @@ const port = probe.port;
 probe.stop(true);
 writeFileSync(".bench-port", `${port}\n`);
 
-const child = spawn(process.execPath, ["web-server.ts", String(port)], { cwd: import.meta.dir, env: { ...process.env, BENCH_OUT: out }, detached: true, stdio: "ignore", windowsHide: true });
-child.unref();
+const child = spawn(process.execPath, ["web-server.ts", String(port)], { cwd: import.meta.dir, env: { ...process.env, BENCH_OUT: out }, detached: true, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
 writeFileSync(".bench-pid", `${child.pid}\n`);
 
-for (let i = 0; i < 100; i++) {
-  try { if ((await fetch(`http://127.0.0.1:${port}/ready`)).ok) process.exit(0); } catch { /* not listening yet */ }
-  await Bun.sleep(100);
-}
-console.error("the fixture web did not start");
-process.exit(1);
+// The server says "ready" once it listens, and the child ends if it cannot: this waits for one of the two, never for a number of seconds that a loaded machine can exceed.
+const started = await new Promise<boolean>((done) => {
+  child.stdout!.once("data", () => done(true));
+  child.once("exit", () => done(false));
+});
+child.stdout!.destroy();
+child.unref();
+if (!started) { console.error("the fixture web did not start"); process.exit(1); }
+process.exit(0);

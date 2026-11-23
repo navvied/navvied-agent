@@ -36,7 +36,7 @@ export class Jobs {
   readonly #jobs = new Map<string, Job>();
   #next = 1;
 
-  constructor(private readonly emit: (e: EngineEvent) => void, private readonly now: () => number = Date.now) {
+  constructor(private readonly emit: (e: EngineEvent) => void, readonly now: () => number = Date.now) {
     alive.add(this);
     guard();
   }
