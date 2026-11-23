@@ -168,8 +168,8 @@ export function localModels(d: LocalDeps): { command(cmd: Command): boolean; sto
       if (!model || !path) { fail("That model is not on this computer."); return; }
       const shape = headerOf(path);
       if (!("shape" in shape)) { fail("error" in shape ? shape.error : "The file could not be read as a model."); return; }
-      // The layers go to the card only if the build that runs has a card backend: a processor build is planned as if the computer had no card.
-      const plan = planRun(model.sizeBytes, shape.shape, rt.backend === "cpu" ? { ...m, gpus: [] } : m, asked);
+      // The layers go to the card only if the build that runs has a card backend: a processor build (or the processor asked for) is planned as if the computer had no card.
+      const plan = planRun(model.sizeBytes, shape.shape, rt.backend === "cpu" || forced() === "cpu" ? { ...m, gpus: [] } : m, asked);
       if ("error" in plan) { fail(plan.error); return; }
       await stopServer();
       tellServer({ state: "starting", repo, file, window: plan.window, layers: plan.layers });

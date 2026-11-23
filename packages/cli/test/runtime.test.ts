@@ -64,6 +64,9 @@ describe("which build runs on a computer", () => {
     expect(pickAsset(RUNTIME, m, RUNTIME_DRIVERS, "cpu")).toMatchObject({ backend: "cpu", os: "linux", arch: "x64" });
     expect(pickAsset(RUNTIME, m, RUNTIME_DRIVERS, "vulkan")?.backend).toBe("vulkan");
     expect(pickAsset(RUNTIME, machine({ os: "macos", arch: "arm64" }), RUNTIME_DRIVERS, "cuda12")).toBeUndefined();
+    // Apple silicon has one build, which also runs on the processor alone: asking for the processor gives it (the run then puts no layer on the graphics).
+    expect(pickAsset(RUNTIME, machine({ os: "macos", arch: "arm64" }), RUNTIME_DRIVERS, "cpu")).toMatchObject({ os: "macos", arch: "arm64", backend: "metal" });
+    expect(pickAsset(RUNTIME, machine({ os: "macos" }), RUNTIME_DRIVERS, "cpu")).toMatchObject({ os: "macos", arch: "x64", backend: "cpu" });
   });
 
   test("the table of builds has, for every system the program runs on, a build for the processor, and for every backend that can be chosen a build to go with it", () => {
@@ -88,6 +91,8 @@ describe("which build runs on a computer", () => {
   });
 });
 
+/** What the installer runs to unpack: the system's own tar on Windows, whose name is a path. */
+const TAR = tarProgram(process.platform, process.env);
 const NAME = process.platform === "win32" ? "llama-server.exe" : "llama-server";
 
 /** A build as the release makes one: an archive with the program in a folder of its own, and a library beside it. */
@@ -98,7 +103,7 @@ async function archive(o: { extra?: (root: string) => void; noServer?: boolean }
   writeFileSync(join(root, "libx.so"), "library");
   o.extra?.(root);
   const file = join(d, "a.tar.gz");
-  const made = Bun.spawnSync([tarProgram(process.platform, process.env), "-czf", file, "-C", join(d, "src"), "build-x"]);
+  const made = Bun.spawnSync([TAR, "-czf", file, "-C", join(d, "src"), "build-x"]);
   if (made.exitCode !== 0) throw new Error("tar could not make the archive");
   const bytes = new Uint8Array(readFileSync(file));
   return { file: "a.tar.gz", sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.length, bytes };
@@ -120,7 +125,7 @@ function install(a: Awaited<ReturnType<typeof archive>>, served: Uint8Array | un
   const ran: string[][] = [];
   const run = async (argv: string[], _t: number) => {
     ran.push(argv);
-    if (argv[0] === tarProgram(process.platform, process.env)) { const r = Bun.spawnSync(argv); return { code: r.exitCode ?? 1, output: "" }; }
+    if (argv[0] === TAR) { const r = Bun.spawnSync(argv); return { code: r.exitCode ?? 1, output: "" }; }
     return { code: o.version ?? 0, output: "version: 1" };
   };
   const go = () => installRuntime({ pin, asset, local, fetchFn: fetch, run, freeBytes: () => o.free, platform: process.platform, ...(o.signal ? { signal: o.signal } : {}), onState: (s) => states.push(s) });
@@ -135,7 +140,7 @@ describe("fetching a build", () => {
     expect(r.ok).toBe(true);
     const binary = (r as { binary: string }).binary;
     expect(binary.endsWith(NAME)).toBe(true);
-    expect(i.ran.map((x) => x[0])).toEqual([tarProgram(process.platform, process.env), binary]);
+    expect(i.ran.map((x) => x[0])).toEqual([TAR, binary]);
     expect(i.ran[1]).toEqual([binary, "--version"]);
     expect(i.states.map((s) => s.state).filter((s, n, all) => all.indexOf(s) === n)).toEqual(["installing", "verifying", "ready"]);
     expect(i.states.at(-1)).toMatchObject({ state: "ready", tag: "b1", backend: "cpu", binary });
@@ -166,14 +171,14 @@ describe("fetching a build", () => {
     const b = await archive({ noServer: true });
     const j = install(b, b.bytes);
     expect(await j.go()).toEqual({ ok: false, error: "The program was not in what was unpacked." });
-    expect(j.ran.map((x) => x[0])).toEqual(["tar"]);
+    expect(j.ran.map((x) => x[0])).toEqual([TAR]);
   });
 
   test.skipIf(process.platform === "win32")("an archive that puts a file outside its folder is refused and deleted, and the program is not run", async () => {
     const a = await archive({ extra: (root) => symlinkSync("/etc", join(root, "out")) });
     const i = install(a, a.bytes);
     expect(await i.go()).toEqual({ ok: false, error: "The unpacked files were not all inside the folder they belong in: they were deleted." });
-    expect(i.ran.map((x) => x[0])).toEqual(["tar"]);
+    expect(i.ran.map((x) => x[0])).toEqual([TAR]);
     expect(existsSync(join(i.local, "runtime", "b1", "linux-x64-cpu"))).toBe(false);
   });
 
@@ -205,7 +210,7 @@ describe("fetching a build", () => {
     const local = dir();
     const pin: RuntimePin = { tag: "b2", commit: "d".repeat(40), base: srv.base, assets: [] };
     const asset: RuntimeAsset = { os: "linux", arch: "x64", backend: "cuda12", file: "a.tar.gz", sha256: a.sha256, size: a.size, with: { file: "rt.tar.gz", sha256: b.sha256, size: b.size } };
-    const run = async (argv: string[]) => (argv[0] === "tar" ? { code: Bun.spawnSync(argv).exitCode ?? 1, output: "" } : { code: 0, output: "" });
+    const run = async (argv: string[]) => (argv[0] === TAR ? { code: Bun.spawnSync(argv).exitCode ?? 1, output: "" } : { code: 0, output: "" });
     const r = await installRuntime({ pin, asset, local, fetchFn: fetch, run, freeBytes: () => undefined, platform: process.platform, onState: () => undefined });
     expect(r.ok).toBe(true);
     expect(srv.asked).toEqual(["/b2/a.tar.gz", "/b2/rt.tar.gz"]);
@@ -227,7 +232,7 @@ describe("fetching a build", () => {
     stops.push(() => s.stop(true));
     const pin: RuntimePin = { tag: "b3", commit: "e".repeat(40), base: `http://127.0.0.1:${s.port}`, assets: [] };
     const asset: RuntimeAsset = { os: "linux", arch: "x64", backend: "cpu", file: a.file, sha256: a.sha256, size: a.size };
-    const run = async (argv: string[]) => (argv[0] === "tar" ? { code: Bun.spawnSync(argv).exitCode ?? 1, output: "" } : { code: 0, output: "" });
+    const run = async (argv: string[]) => (argv[0] === TAR ? { code: Bun.spawnSync(argv).exitCode ?? 1, output: "" } : { code: 0, output: "" });
     const part = join(local, "runtime", "b3", "downloads", `${a.file}.part`);
     const watch = setInterval(() => { try { if (statSync(part).size > 0) stall.abort("pause"); } catch { /* not there yet */ } }, 5);
     const first = await installRuntime({ pin, asset, local, fetchFn: fetch, run, freeBytes: () => undefined, platform: process.platform, signal: stall.signal, onState: () => undefined });

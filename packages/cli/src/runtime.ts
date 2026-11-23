@@ -43,7 +43,9 @@ export function pickAsset(pin: RuntimePin, m: Machine, rules: DriverRules, force
   const os = osOf(m);
   if (!os || (m.arch !== "x64" && m.arch !== "arm64")) return undefined;
   // A person may name the build (`NAVVIED_LOCAL_BACKEND`): to keep a card out of it, or to try another.
-  for (const b of forced ? [forced] : backendsFor(m, rules)) { const a = pin.assets.find((x) => x.os === os && x.arch === m.arch && x.backend === b); if (a) return a; }
+  // Apple silicon has one build, which runs on the processor alone as well (no layer is given to the graphics), so asking for the processor gives it.
+  const wanted = forced ? (forced === "cpu" && os === "macos" && m.arch === "arm64" ? ["cpu", "metal"] : [forced]) : backendsFor(m, rules);
+  for (const b of wanted) { const a = pin.assets.find((x) => x.os === os && x.arch === m.arch && x.backend === b); if (a) return a; }
   return undefined;
 }
 
