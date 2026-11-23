@@ -103,3 +103,14 @@ describe("a kind of model the formula is not proven for", () => {
     for (const architecture of PROVEN_ARCHITECTURES) expect(fitOf(weights, { ...shape, architecture }, 8192, computer({ gpus: card(23000) }))?.fit).toBe("gpu");
   });
 });
+
+describe("a small model on a small Mac", () => {
+  const small: ModelShape = { architecture: "qwen2", layers: 28, kvHeads: Array(28).fill(2), keyLength: 128, valueLength: 128, contextLength: 32768 };
+  const oneAndAHalf = 1.1 * GB;
+
+  test("a 1.5B model at the usual context fits an 8 GB Apple silicon Mac with 7 GB free (all on the graphics), and an Intel Mac with the same free memory (in RAM)", () => {
+    expect(fit(oneAndAHalf, small, 32768, computer({ os: "macos", arch: "arm64", ramMb: 8192, freeRamMb: 7000, gpus: [{ name: "m", vendor: "apple", kind: "unified", memoryMb: 8192 }] })).fit).toBe("gpu");
+    expect(fit(oneAndAHalf, small, 32768, computer({ os: "macos", arch: "x64", ramMb: 16384, freeRamMb: 7000 })).fit).toBe("ram");
+  });
+});
+

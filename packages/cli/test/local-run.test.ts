@@ -5,7 +5,7 @@ import { validateCommand } from "@navvied/protocol";
 import { createHub } from "../src/commands/hub.ts";
 import { configPath, loadConfig, localDir, resolveModel } from "../src/config.ts";
 import { serverNote } from "../src/local-entry.ts";
-import { readMachine, realProbe } from "../src/machine.ts";
+import { readMachine, realProbe, type Probe } from "../src/machine.ts";
 import { RUNTIME, RUNTIME_DRIVERS } from "../src/presets.ts";
 import { pickAsset } from "../src/runtime.ts";
 import { fakeIO, remove, tempDir, until } from "./helpers.ts";
@@ -20,14 +20,23 @@ type Ev = { ev: string; state?: string; backend?: string; server?: string; repo?
 
 const REPO = "org/tiny", FILE = "tiny-Q4_K_M.gguf";
 
+/**
+ * The computer every plan here is made for: this system and this processor (the stand-in for the model server is a script that runs here), but a memory and a graphics
+ * card of the test's own, so what a plan says never depends on the machine the test runs on (a CI machine may have little free memory, or none that a program can use).
+ */
+const probe = (memory = { totalMb: 32768, freeMb: 24000 }): Probe => {
+  const real = realProbe({ run: async () => ({ code: 1, output: "" }) });
+  return { ...real, env: {}, run: async () => undefined, read: () => undefined, exists: () => false, ram: () => memory };
+};
+
 /** A computer with a runtime that is ready (a stand-in for the model server, in the folder a real one would be in) and one model on it. */
-async function computer(o: { cloud?: false | "flag"; runtime?: boolean; model?: boolean; stale?: boolean; backend?: "cpu" } = {}) {
+async function computer(o: { cloud?: false | "flag"; runtime?: boolean; model?: boolean; stale?: boolean; backend?: "cpu"; memory?: { totalMb: number; freeMb: number } } = {}) {
   const state = tempDir(), work = tempDir();
   dirs.push(state, work);
   const env: Record<string, string> = { HOME: state, XDG_STATE_HOME: state, XDG_CONFIG_HOME: state, NAVVIED_GUEST_MODELS: "0", ...(o.backend ? { NAVVIED_LOCAL_BACKEND: o.backend } : {}) };
   const local = localDir(env);
   if (o.runtime !== false) {
-    const m = await readMachine(realProbe({ run: async () => ({ code: 1, output: "" }) }), local);
+    const m = await readMachine(probe(o.memory), local);
     const a = pickAsset(RUNTIME, m, RUNTIME_DRIVERS, o.backend)!;
     const folder = join(local, "runtime", RUNTIME.tag, `${a.os}-${a.arch}-${a.backend}`);
     mkdirSync(folder, { recursive: true });
@@ -45,7 +54,7 @@ async function computer(o: { cloud?: false | "flag"; runtime?: boolean; model?: 
   const file = configPath(env);
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify({ models: { m: { baseUrl: "http://127.0.0.1:1/v1", model: "x", window: 1000 }, ...(o.stale ? { "local-old": { local: { repo: REPO, file: FILE, window: 8192 }, model: "old" } } : {}) } }));
-  const hub = createHub({ json: false, yes: false, thinking: false, cwd: work, ...(o.cloud === "flag" ? { sandboxed: true } : {}) } as never, fakeIO({ env }).io, { watch: false, import: false });
+  const hub = createHub({ json: false, yes: false, thinking: false, cwd: work, ...(o.cloud === "flag" ? { sandboxed: true } : {}) } as never, fakeIO({ env }).io, { probe: () => probe(o.memory), watch: false, import: false });
   hubs.push(hub);
   const got: Ev[] = [];
   hub.attach({ send: (line) => { got.push(JSON.parse(String(line))); } }, 0);
@@ -128,6 +137,14 @@ describe.skipIf(win)("the model server of this computer", () => {
     c.send({ cmd: "local.run", repo: REPO, file: FILE });
     await until(() => c.of("local.server", "failed").length === 1);
     expect(c.of("local.server", "failed")[0]!.error).toBe("The runtime is not fetched yet.");
+  });
+
+  test("the plan follows the computer it is made for: the same model does not fit where there is no memory for it, and the page is told", async () => {
+    const c = await computer({ memory: { totalMb: 2048, freeMb: 1500 } });
+    c.send({ cmd: "local.run", repo: REPO, file: FILE });
+    await until(() => c.of("local.server", "failed").length === 1);
+    expect(c.of("local.server", "failed")[0]!.error).toContain("This model does not fit in the memory this computer has free");
+    expect(c.names()).not.toContain(NAME);
   });
 
   test("a build for the processor is planned as if the computer had no card: no layer goes to a card that the build cannot use", async () => {

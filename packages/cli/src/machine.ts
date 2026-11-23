@@ -164,11 +164,22 @@ function osOf(p: Probe): Machine["os"] {
   return "unknown";
 }
 
-/** MemAvailable is what a Linux program can really get; elsewhere the system's own count of free memory is the best that is said (it can understate). */
-function freeRamOf(p: Probe, os: Machine["os"]): number | undefined {
+/**
+ * What a program can really get. Linux says it (`MemAvailable`). macOS keeps most of its memory in use for files it can give back at once, so its count of free pages
+ * is far too low: what a program can get is the free pages, the speculative ones and the inactive ones (the ones of files nobody uses now), which `vm_stat` counts.
+ * Elsewhere the system's own count of free memory is the best that is said (it can understate).
+ */
+async function freeRamOf(p: Probe, os: Machine["os"]): Promise<number | undefined> {
   if (os === "linux" || os === "wsl") {
     const kb = num(/^MemAvailable:\s+(\d+)\s*kB/m.exec(p.read("/proc/meminfo") ?? "")?.[1]);
     if (kb !== undefined) return Math.round(kb / 1024);
+  }
+  if (os === "macos") {
+    const out = (await p.run(["vm_stat"])) ?? "";
+    const page = num(/page size of (\d+) bytes/.exec(out)?.[1]);
+    const pages = (name: string): number => num(new RegExp(`^Pages ${name}:\\s+(\\d+)`, "m").exec(out)?.[1]) ?? 0;
+    const available = pages("free") + pages("speculative") + pages("inactive");
+    if (page && available > 0) return Math.min(p.ram().totalMb, Math.round((available * page) / MB));
   }
   return p.ram().freeMb;
 }
@@ -182,7 +193,7 @@ export async function readMachine(p: Probe, dir: string): Promise<Machine> {
   if (os === "linux" || os === "wsl") gpus.push(...await linuxOthers(p, have));
   else if (os === "macos") gpus.push(...await macOthers(p, ramMb));
   else if (os === "windows") gpus.push(...await windowsOthers(p, have));
-  const free = freeRamOf(p, os);
+  const free = await freeRamOf(p, os);
   const disk = p.disk(dir);
   return {
     os,

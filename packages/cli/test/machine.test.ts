@@ -71,6 +71,14 @@ describe("macOS", () => {
     expect(m).toMatchObject({ os: "macos", arch: "arm64", ramMb: 32768, gpus: [{ name: "Apple M2 Pro", vendor: "apple", kind: "unified", memoryMb: 32768 }] });
   });
 
+  test("what a Mac can give a program counts the pages it can take back at once (free, speculative, inactive), not only the free ones", async () => {
+    const vmStat = ["Mach Virtual Memory Statistics: (page size of 16384 bytes)", "Pages free:                               20000.", "Pages active:                            200000.", "Pages inactive:                          180000.", "Pages speculative:                        10000.", "Pages purgeable:                           5000."].join("\n");
+    const m = await readMachine(computer({ platform: "darwin", arch: "arm64", ramMb: 16384, freeMb: 300, programs: { vm_stat: vmStat } }), "/d");
+    expect(m.freeRamMb).toBe(Math.round((210000 * 16384) / 1048576));
+    const silent = await readMachine(computer({ platform: "darwin", arch: "arm64", ramMb: 16384, freeMb: 300 }), "/d");
+    expect(silent.freeRamMb).toBe(300);
+  });
+
   test("an Intel Mac: the card with memory of its own is discrete, the one built in is not", async () => {
     const profiler = JSON.stringify({ SPDisplaysDataType: [{ sppci_model: "AMD Radeon Pro 5500M", spdisplays_vendor: "sppci_vendor_amd", spdisplays_vram: "8 GB" }, { sppci_model: "Intel UHD Graphics 630", spdisplays_vendor: "sppci_vendor_intel", spdisplays_vram_shared: "1536 MB" }] });
     const m = await readMachine(computer({ platform: "darwin", programs: { "system_profiler SPDisplaysDataType -json": profiler } }), "/d");

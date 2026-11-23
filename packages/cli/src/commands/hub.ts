@@ -20,7 +20,7 @@ import { TerminalState, listBackends } from "../terminal.ts";
 import { DraftStore } from "../drafts.ts";
 import { checkCredentialFile, findCredentialFile } from "../adc.ts";
 import { localModels } from "../local-models.ts";
-import { readMachine, realProbe } from "../machine.ts";
+import { readMachine, realProbe, type Probe } from "../machine.ts";
 import { askModels, detectApi, newEndpointId, reportEndpoints, type EndpointRecord } from "../endpoints.ts";
 import { API_STYLES, MODEL_HUB, PROVIDERS, authHeaders } from "../presets.ts";
 import { baseOf, entryName, headersOf, listModels, mergeSaved, modelEntryOf, reportOf, type ListedRoute } from "../providers.ts";
@@ -58,6 +58,8 @@ export interface HubOptions {
   transferMs?: number;
   /** Bring the hosted conversations of the signed-in account onto this computer when it starts (default true). */
   import?: boolean;
+  /** The computer models are planned for, when it is not the one this runs on (a test gives its own). */
+  probe?: () => Probe;
   /** Look for a model again every second while there is none (a server wants this; the interactive app sets one up itself). Default true. */
   watch?: boolean;
 }
@@ -757,6 +759,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   };
   const local = localModels({
     io,
+    ...(hubOptions.probe ? { probe: hubOptions.probe } : {}),
     inCloud: () => { const f = loadConfig(configPath(io.env, main.options.config)); return !!main.options.sandboxed || (f.ok && !!f.value?.webProxy); },
     hubToken: () => { const f = loadConfig(configPath(io.env, main.options.config)); return f.ok ? f.value?.providers?.[MODEL_HUB.tokenProvider]?.key : undefined; },
     tell: (e) => say(main, e),

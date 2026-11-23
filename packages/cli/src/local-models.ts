@@ -7,7 +7,7 @@ import { serverNote } from "./local-entry.ts";
 import { reapOrphan, startServer, type RunningServer } from "./llama-server.ts";
 import { localDir } from "./config.ts";
 import type { IO } from "./io.ts";
-import { readMachine, realProbe, type Machine } from "./machine.ts";
+import { readMachine, realProbe, type Machine, type Probe } from "./machine.ts";
 import { askOllama, ollamaRoot, pullOllama, type OllamaPullState } from "./ollama-pull.ts";
 import { recommendedModels, searchModels, type Candidate } from "./model-hub.ts";
 import { MODEL_HUB, RECOMMENDED_MODELS, RUNTIME, RUNTIME_DRIVERS } from "./presets.ts";
@@ -20,6 +20,8 @@ export interface LocalDeps {
   inCloud(): boolean;
   /** The token saved for the model hub, when there is one. */
   hubToken(): string | undefined;
+  /** The computer to plan with, when it is not the one this runs on (a test gives its own). */
+  probe?(): Probe;
   /** Tells every window. */
   tell(e: EngineEvent): void;
   /** The model of the configuration that this computer's own server makes when it runs (it is in the list only while it runs); every window is told the list at once. */
@@ -31,7 +33,7 @@ const REFUSED = "A model is run only on a computer, never in Navvied Cloud.";
 /** What the commands that are about running models on this computer do: the machine, the search, the runtime. */
 export function localModels(d: LocalDeps): { command(cmd: Command): boolean; stop(): Promise<void>; running(): string | undefined } {
   const dir = (): string => localDir(d.io.env);
-  const probe = () => realProbe(d.io.system);
+  const probe = (): Probe => d.probe?.() ?? realProbe(d.io.system);
   const machine = (): Promise<Machine> => readMachine(probe(), dir());
   const BACKENDS: readonly string[] = ["cpu", "vulkan", "cuda12", "cuda13", "metal"];
   const forced = (): Backend | undefined => { const b = d.io.env.NAVVIED_LOCAL_BACKEND; return b && BACKENDS.includes(b) ? (b as Backend) : undefined; };
