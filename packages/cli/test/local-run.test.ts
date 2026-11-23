@@ -160,7 +160,9 @@ describe.skipIf(win)("the model server of this computer", () => {
       expect(given.args[given.args.indexOf("-ngl") + 1]).toBe("0");
       c.send({ cmd: "local.runtime" });
       await until(() => c.of("local.runtime").length === 1);
-      expect(c.of("local.runtime")[0]).toMatchObject({ state: "ready", backend: "cpu", server: "running" });
+      // Apple silicon has one build (metal), which also runs on the processor: asking for the processor takes that build, with no layer on the card.
+      const build = process.platform === "darwin" && process.arch === "arm64" ? "metal" : "cpu";
+      expect(c.of("local.runtime")[0]).toMatchObject({ state: "ready", backend: build, server: "running" });
     } finally { delete process.env.FAKE_LLAMA_ARGS; }
   });
 
