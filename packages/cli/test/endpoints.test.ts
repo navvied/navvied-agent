@@ -146,6 +146,7 @@ describe("an endpoint on a computer", () => {
     c.send({ cmd: "endpoint.save", id: "custom-s", name: "S", baseUrl: s.url, api: "chat", key: "", models: [{ id: "alpha" }] });
     await until(() => c.said("endpoints").length === 4);
     expect(c.config().endpoints["custom-s"].key).toBeUndefined();
+    expect(readFileSync(c.file, "utf8")).not.toContain("sk-2");
     expect((c.said("endpoints")[3]!.items as { key: boolean }[])[0]!.key).toBe(false);
   });
 

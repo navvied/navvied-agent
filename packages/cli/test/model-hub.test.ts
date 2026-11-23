@@ -1,12 +1,15 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import type { Machine } from "../src/machine.ts";
 import { listFiles, rateOf, readRemoteShape, recommendedModels, searchModels } from "../src/model-hub.ts";
 import { gguf, llama } from "./gguf-builder.ts";
 
 const stops: (() => void)[] = [];
+/** What a hub shows as the checksum of a file: 64 hexadecimal digits. */
+const digest = (path: string): string => createHash("sha256").update(path).digest("hex");
 afterAll(() => { stops.forEach((f) => f()); });
 
-interface Repo { id: string; gated?: boolean | string; downloads?: number; files: { path: string; size: number; lfs?: boolean }[]; header?: Uint8Array; template?: string }
+interface Repo { id: string; gated?: boolean | string; downloads?: number; files: { path: string; size: number; lfs?: boolean }[]; header?: Uint8Array; template?: string; /** The page of the model is refused without a token too. */ hidePage?: boolean; /** The tree shows the checksums as the hub does for a model whose licence is not accepted. */ masked?: boolean }
 
 /** A hub of a few repositories: a search, the files of each, and the start of a file by Range; it records what it was asked, with which token. */
 function hub(repos: Repo[], o: { remaining?: () => number; status429?: boolean } = {}) {
@@ -23,6 +26,8 @@ function hub(repos: Repo[], o: { remaining?: () => number; status429?: boolean }
       const one = /^\/api\/models\/(.+)$/.exec(url.pathname);
       if (one && !one[1]!.endsWith("/tree/main")) {
         const r = repos.find((x) => x.id === one[1]);
+        if (url.searchParams.get("blobs") && r?.hidePage && !req.headers.get("authorization")) return new Response("", { status: 401 });
+        if (url.searchParams.get("blobs") && r) return Response.json({ id: r.id, siblings: [{ rfilename: "README.md", size: 10 }, ...r.files.map((f) => ({ rfilename: f.path, size: f.size, ...(f.lfs === false ? {} : { lfs: { sha256: digest(f.path), size: f.size } }) }))] }, { headers: rate });
         return r ? Response.json({ id: r.id, gated: r.gated ?? false, ...(r.template !== undefined ? { gguf: { chat_template: r.template } } : {}) }, { headers: rate }) : new Response("", { status: 404 });
       }
       const tree = /^\/api\/models\/(.+)\/tree\/main$/.exec(url.pathname);
@@ -30,7 +35,7 @@ function hub(repos: Repo[], o: { remaining?: () => number; status429?: boolean }
         const r = repos.find((x) => x.id === tree[1]);
         if (!r) return new Response("", { status: 404 });
         if (r.gated && !req.headers.get("authorization")) return new Response("", { status: 401 });
-        return Response.json([{ type: "file", path: "README.md", size: 10 }, ...r.files.map((f) => ({ type: "file", path: f.path, size: f.lfs === false ? f.size : 134, ...(f.lfs === false ? {} : { lfs: { oid: `sha-${f.path}`, size: f.size, pointerSize: 134 } }) }))], { headers: rate });
+        return Response.json([{ type: "file", path: "README.md", size: 10 }, ...r.files.map((f) => ({ type: "file", path: f.path, size: f.lfs === false ? f.size : 134, ...(f.lfs === false ? {} : { lfs: { oid: r.masked ? "*".repeat(64) : digest(f.path), size: f.size, pointerSize: 134 } }) }))], { headers: rate });
       }
       const file = /^\/(.+?)\/resolve\/main\/(.+)$/.exec(url.pathname);
       if (file) {
@@ -59,15 +64,25 @@ describe("the files of a repository", () => {
     const files = await listFiles(fetch, h, "a/b", false, undefined);
     if ("error" in files) throw new Error(files.error);
     expect(files.map((f) => ({ file: f.file, quant: f.quant, sizeBytes: f.sizeBytes, parts: f.parts.map((p) => p.path), sha256: f.parts.map((p) => p.sha256) }))).toEqual([
-      { file: "m-Q4_K_M.gguf", quant: "Q4_K_M", sizeBytes: 100, parts: ["m-Q4_K_M.gguf"], sha256: ["sha-m-Q4_K_M.gguf"] },
-      { file: "m.FP16.gguf", quant: "FP16", sizeBytes: 400, parts: ["m.FP16.gguf"], sha256: ["sha-m.FP16.gguf"] },
-      { file: "big-Q8_0-00001-of-00002.gguf", quant: "Q8_0", sizeBytes: 1000, parts: ["big-Q8_0-00001-of-00002.gguf", "big-Q8_0-00002-of-00002.gguf"], sha256: ["sha-big-Q8_0-00001-of-00002.gguf", "sha-big-Q8_0-00002-of-00002.gguf"] },
+      { file: "m-Q4_K_M.gguf", quant: "Q4_K_M", sizeBytes: 100, parts: ["m-Q4_K_M.gguf"], sha256: [digest("m-Q4_K_M.gguf")] },
+      { file: "m.FP16.gguf", quant: "FP16", sizeBytes: 400, parts: ["m.FP16.gguf"], sha256: [digest("m.FP16.gguf")] },
+      { file: "big-Q8_0-00001-of-00002.gguf", quant: "Q8_0", sizeBytes: 1000, parts: ["big-Q8_0-00001-of-00002.gguf", "big-Q8_0-00002-of-00002.gguf"], sha256: [digest("big-Q8_0-00001-of-00002.gguf"), digest("big-Q8_0-00002-of-00002.gguf")] },
     ]);
   });
 
-  test("a licence not accepted is said, not guessed", async () => {
-    const h = hub([{ id: "a/gated", gated: "manual", files: [] }]);
-    expect(await listFiles(fetch, h, "a/gated", true, undefined)).toEqual({ error: "This model needs the licence accepted on its page, and a token." });
+  test("a model that needs its licence is still listed, from the page of the model when the hub refuses its tree; the licence is said only when nothing can be listed", async () => {
+    const h = hub([{ id: "a/gated", gated: "manual", files: [{ path: "m-Q4_K_M.gguf", size: 700 }] }, { id: "a/hidden", gated: "manual", hidePage: true, files: [{ path: "m-Q4_K_M.gguf", size: 700 }] }]);
+    const listed = await listFiles(fetch, h, "a/gated", true, undefined);
+    if ("error" in listed) throw new Error(listed.error);
+    expect(listed.map((f) => ({ file: f.file, sizeBytes: f.sizeBytes, gated: f.gated, sha256: f.parts[0]!.sha256 }))).toEqual([{ file: "m-Q4_K_M.gguf", sizeBytes: 700, gated: true, sha256: digest("m-Q4_K_M.gguf") }]);
+    expect(await listFiles(fetch, h, "a/hidden", true, undefined)).toEqual({ error: "This model needs the licence accepted on its page, and a token." });
+  });
+
+  test("a checksum the hub hides is never kept: a file without a real one is not fetched later", async () => {
+    const h = hub([{ id: "a/masked", gated: "manual", masked: true, files: [{ path: "m-Q4_K_M.gguf", size: 700 }] }]);
+    const listed = await listFiles(fetch, h, "a/masked", true, "tok");
+    if ("error" in listed) throw new Error(listed.error);
+    expect(listed[0]!.parts[0]!.sha256).toBeUndefined();
   });
 });
 
@@ -132,13 +147,14 @@ describe("a search", () => {
     expect(found.items.at(-1)!.quant).toBe("BF16");
   });
 
-  test("a licence: without the token the repository is left out and said; with it the token goes with every question, to the hub only, and is nowhere in the answer", async () => {
+  test("a licence: without the token the repository is listed all the same, as gated and with no claim of fit; with it the token goes with every question, to the hub only, and is nowhere in the answer", async () => {
     const repos = [small("a/open"), small("a/locked", { gated: "manual" })];
     const h = hub(repos);
     const without = await searchModels(fetch, h, { query: "m", window: 8192, machine: withCard });
     if ("error" in without) throw new Error(without.error);
-    expect(without.items.every((i) => i.repo === "a/open")).toBe(true);
-    expect(without.notes).toEqual(["a/locked: This model needs the licence accepted on its page, and a token."]);
+    expect(without.items.filter((i) => i.repo === "a/locked").map((i) => [i.gated, i.fit])).toEqual([[true, undefined], [true, undefined], [true, undefined], [true, undefined]]);
+    expect(without.items.filter((i) => i.repo === "a/open").every((i) => !i.gated && i.fit !== undefined)).toBe(true);
+    expect(without.notes).toEqual([]);
     const h2 = hub(repos);
     const withToken = await searchModels(fetch, h2, { query: "m", window: 8192, machine: withCard, token: "hf-secret" });
     if ("error" in withToken) throw new Error(withToken.error);

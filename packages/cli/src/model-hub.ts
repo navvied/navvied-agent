@@ -61,10 +61,20 @@ export async function searchRepos(fetchFn: typeof fetch, hub: Hub, query: string
 export async function listFiles(fetchFn: typeof fetch, hub: Hub, repo: string, gated: boolean, token: string | undefined, allowance?: Allowance): Promise<HubFile[] | Error1> {
   const res = await ask(fetchFn, `${hub.base}/api/models/${repo}/tree/main`, token, {}, allowance);
   if ("error" in res) return res;
-  if (res.status === 401 || res.status === 403) return { error: "This model needs the licence accepted on its page, and a token." };
-  if (!res.ok) return { error: `The model hub answered ${res.status}.` };
-  const tree = (await res.json().catch(() => [])) as { type?: string; path?: string; size?: number; lfs?: { oid?: string; size?: number } }[];
-  const files = tree.filter((f) => f.type === "file" && typeof f.path === "string" && /\.gguf$/i.test(f.path) && !/(^|\/)mmproj/i.test(f.path)).map((f) => ({ path: f.path!, sizeBytes: f.lfs?.size ?? f.size ?? 0, ...(f.lfs?.oid ? { sha256: f.lfs.oid } : {}) }));
+  let tree: { type?: string; path?: string; size?: number; lfs?: { oid?: string; size?: number } }[];
+  if (res.status === 401 || res.status === 403) {
+    // A model that needs its licence accepted is still listed: its files and their sizes are on the page of the model, which the hub answers without a token.
+    const page = await ask(fetchFn, `${hub.base}/api/models/${repo}?blobs=true`, token, {}, allowance);
+    if ("error" in page) return page;
+    const siblings = page.ok ? ((await page.json().catch(() => ({}))) as { siblings?: { rfilename?: string; size?: number; lfs?: { sha256?: string; size?: number } }[] }).siblings : undefined;
+    if (!siblings) return { error: "This model needs the licence accepted on its page, and a token." };
+    tree = siblings.map((s) => ({ type: "file", path: s.rfilename, ...(s.size !== undefined ? { size: s.size } : {}), ...(s.lfs ? { lfs: { ...(s.lfs.sha256 ? { oid: s.lfs.sha256 } : {}), ...(s.lfs.size !== undefined ? { size: s.lfs.size } : {}) } } : {}) }));
+  } else {
+    if (!res.ok) return { error: `The model hub answered ${res.status}.` };
+    tree = (await res.json().catch(() => [])) as typeof tree;
+  }
+  // The hub hides the checksum of a model that needs its licence from whoever has not accepted it (it says `****`): only a real one is kept.
+  const files = tree.filter((f) => f.type === "file" && typeof f.path === "string" && /\.gguf$/i.test(f.path) && !/(^|\/)mmproj/i.test(f.path)).map((f) => ({ path: f.path!, sizeBytes: f.lfs?.size ?? f.size ?? 0, ...(f.lfs?.oid && /^[0-9a-f]{64}$/i.test(f.lfs.oid) ? { sha256: f.lfs.oid } : {}) }));
   const whole = new Map<string, HubFile>();
   for (const f of files) {
     const part = PART.exec(f.path);

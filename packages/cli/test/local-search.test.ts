@@ -23,7 +23,9 @@ function computer(o: { cloud?: false | "flag" | "config"; token?: string } = {})
     const path = u.slice(MODEL_HUB.base.length);
     if (path.startsWith("/api/models?")) return Response.json([{ id: "org/tiny", gated: false, downloads: 9, gguf: { chat_template: "{% if tools %}x{% endif %}" } }, { id: "org/locked", gated: "manual", downloads: 3, gguf: { chat_template: "{{ messages }}" } }]);
     if (path === "/api/models/org/tiny/tree/main") return Response.json([{ type: "file", path: "tiny-Q4_K_M.gguf", size: 134, lfs: { oid: "abc", size: 300 * MB } }]);
+    if (path.startsWith("/api/models/org/locked?")) return Response.json({ siblings: [{ rfilename: "locked-Q4_K_M.gguf", size: 400 * MB, lfs: { size: 400 * MB, sha256: "d".repeat(64) } }] });
     if (path === "/api/models/org/locked/tree/main") return auth ? Response.json([{ type: "file", path: "locked-Q4_K_M.gguf", size: 134, lfs: { oid: "def", size: 400 * MB } }]) : new Response("", { status: 401 });
+    if (path.startsWith("/org/locked/resolve/") && !auth) return new Response("", { status: 401 });
     if (path.includes("/resolve/main/")) return new Response(llama({ layers: 4, embed: 512, heads: 8, kvHeads: 2 }).slice(0, 4096), { status: 206 });
     return new Response("", { status: 404 });
   }) as unknown as typeof fetch;
@@ -50,15 +52,18 @@ describe("what a page may send", () => {
 });
 
 describe("a search through the hub", () => {
-  test("files with their quant, size and where they run here, the page of the model for its licence, and the licence-gated one left out without a token", async () => {
+  test("files with their quant, size and where they run here, the page of the model for its licence, and the licence-gated one listed without a token (as gated, with no claim of fit)", async () => {
     const c = computer();
     c.send({ cmd: "local.search", query: "tiny" });
     await until(() => c.got.some((e) => e.ev === "local.found"));
     const found = c.got.find((e) => e.ev === "local.found")!;
-    expect(found.items).toHaveLength(1);
-    expect(found.items![0]).toMatchObject({ repo: "org/tiny", page: `${MODEL_HUB.base}/org/tiny`, file: "tiny-Q4_K_M.gguf", quant: "Q4_K_M", sizeMb: 300, parts: 1, gated: false, window: 32768, tools: true });
-    expect(["gpu", "ram", "none"]).toContain(found.items![0]!.fit as string);
-    expect(found.notes).toEqual(["org/locked: This model needs the licence accepted on its page, and a token."]);
+    expect(found.items).toHaveLength(2);
+    expect(found.items!.find((i) => i.repo === "org/tiny")).toMatchObject({ repo: "org/tiny", page: `${MODEL_HUB.base}/org/tiny`, file: "tiny-Q4_K_M.gguf", quant: "Q4_K_M", sizeMb: 300, parts: 1, gated: false, window: 32768, tools: true });
+    expect(["gpu", "ram", "none"]).toContain(found.items!.find((i) => i.repo === "org/tiny")!.fit as string);
+    const locked = found.items!.find((i) => i.repo === "org/locked")!;
+    expect(locked).toMatchObject({ page: `${MODEL_HUB.base}/org/locked`, file: "locked-Q4_K_M.gguf", sizeMb: 400, gated: true });
+    expect(locked).not.toHaveProperty("fit");
+    expect(found.notes).toBeUndefined();
     expect(c.asked[0]!.url).toContain("search=tiny");
     expect(c.asked[0]!.url).toContain("expand[]=gguf");
     expect(c.asked.every((a) => a.auth === null)).toBe(true);
