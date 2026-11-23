@@ -7,7 +7,6 @@ import { historyOf } from "./store.ts";
 import { join, resolve } from "node:path";
 import { REFUSED, RecentIds, type Command, type Effort, type EngineEvent, type FileNote, type ModelInfo, type PermMode, type PromptCommand, type SessionKind, type StopReason, type ToolOutcome, type TurnTokens } from "@navvied/protocol";
 import { ALLOW, ALLOW_ALWAYS, ApprovalBroker, EDIT, approvalOptions } from "./approvals.ts";
-import { approvalScope } from "./approval-scope.ts";
 import type { Checkpoint, Checkpoints } from "./checkpoints.ts";
 import type { AgentEngine } from "./contract.ts";
 import { KEEP_TAIL, compactMessages, estimateTokens, shouldCompact } from "./context.ts";
@@ -21,8 +20,8 @@ import { forget, type ShellState } from "./tools/shell-state.ts";
 import { skillsPrompt, type SkillInfo } from "./skills.ts";
 import { TextToolCalls, dollarCommand } from "./text-tool-calls.ts";
 import type { Backend } from "./backend.ts";
-import { needsApproval, toolsFor } from "./permissions.ts";
-import { riskOf } from "./risk.ts";
+import { toolsFor } from "./permissions.ts";
+import { judge } from "./judge.ts";
 import { isConfined, profileTools } from "./profiles.ts";
 import { hardBlock, type Rules } from "./rules.ts";
 import { asksAboutProgram, systemPrompt } from "./prompt.ts";
@@ -731,27 +730,18 @@ export class Engine implements AgentEngine {
     if (bad.length) return fail(`Error: ${bad[0]} is not a value you can write: it stands for a secret you were not shown, or one this conversation does not know any more. To keep a value as it is, write the [hidden:N] mark that Read gave for it; otherwise ask the person for the value.`);
     this.#emit({ ev: "tool", id: call.id, name: tool.name, status: "running", input: this.#shown(args) });
 
-    // What may never be done is stopped in every mode, before anything else is asked.
-    const forbidden = hardBlock(tool.name, args, this.#o.cwd);
-    if (forbidden) return fail(`Blocked: ${forbidden}. navvied never does this.`, "blocked");
-    const verdict = this.#o.rules?.check(tool.name, args) ?? { kind: "none" as const };
-    if (verdict.kind === "deny") return fail(`Blocked by the permission rule ${verdict.rule}. Do not try again; tell the user what you wanted to do.`, "blocked");
-    // What cannot be undone is asked about in every mode but Bypass, and a rule that allows "git" does not allow it: what is allowed is a kind of thing.
-    const risk = tool.readOnly || this.#mode === "plan" || this.#mode === "bypass" ? undefined : riskOf(tool.name, args, this.#o.cwd);
-    const riskAsked = risk !== undefined && !this.#allowed.has(risk.key);
-    // An address nobody gave (not the person, not a search, not a page that was read) is the way out for what an injected page asks for: asked about, or refused where nobody is asked.
-    const strange = tool.name === "WebFetch" && verdict.kind !== "allow" && this.#mode !== "auto" && this.#mode !== "bypass" && !this.#knownUrl(args.url);
-    if (strange && this.#mode === "edits") return fail(`Not fetched: ${String(args.url)} was not in the request, in a search result or in a page that was read. Search for it: WebSearch {"query": "…"}, or ask the person for the address.`, "blocked");
-    const mustAsk = verdict.kind === "ask" ? this.#mode !== "plan" : riskAsked || strange || (needsApproval(this.#mode, tool, args) && verdict.kind !== "allow");
-    if (mustAsk) {
-      const scope = riskAsked ? { key: risk!.key, phrase: risk!.phrase } : approvalScope(tool.name, args, this.#o.cwd);
+    // What a mode means for this call is decided in one place for every engine.
+    const judged = judge({ mode: this.#mode, tool, args, cwd: this.#o.cwd, rules: this.#o.rules, allowed: this.#allowed, knownUrl: (u) => this.#knownUrl(u) });
+    if (judged.kind === "stop") return fail(judged.message, "blocked");
+    if (judged.kind === "ask") {
+      const { scope, risk, strange } = judged;
       if (this.#o.noQuestions) return fail(`Blocked: this needs the person's say-so${risk ? ` (${risk.reason})` : ""}, and a helper cannot ask. Do not try again; say what you wanted to do.`, "blocked");
-      if (verdict.kind === "ask" || riskAsked || !(scope.keys ?? [scope.key]).every((k) => this.#allowed.has(k))) {
+      {
         const { id, answer } = this.#approvals.open();
         const change = approvalChange(tool.name, this.#shown(args));
         // A command can be changed by the person before it is allowed.
         const editable = tool.name === "Bash" && typeof args.command === "string" ? this.#vault.hide(args.command).text : undefined;
-        this.#emit({ ev: "approval", id, title: this.#vault.hide(strange && !riskAsked ? `Open an address that was not in your request: ${String(args.url)}` : attempt(() => tool.title(args!)) ?? `Run ${tool.name}`).text, options: approvalOptions(scope.phrase, editable), tool: call.id, ...(change ? { change } : {}), ...(riskAsked ? { risk: risk!.reason } : {}) });
+        this.#emit({ ev: "approval", id, title: this.#vault.hide(strange ? `Open an address that was not in your request: ${String(args.url)}` : attempt(() => tool.title(args!)) ?? `Run ${tool.name}`).text, options: approvalOptions(scope.phrase, editable), tool: call.id, ...(change ? { change } : {}), ...(risk ? { risk: risk.reason } : {}) });
         const given = await answer;
         if (given.optionId === ALLOW_ALWAYS) for (const k of scope.keys ?? [scope.key]) this.#allowed.add(k);
         else if (given.optionId === EDIT && editable !== undefined && given.input?.trim()) {

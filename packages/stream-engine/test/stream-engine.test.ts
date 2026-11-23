@@ -81,7 +81,7 @@ describe("a step is timed by the engine's own clock", () => {
 describe("a plain turn", () => {
   test("announces its capabilities up front: auto and plan, no compact, steering", () => {
     const r = rig();
-    expect(r.of("caps")[0]).toEqual({ ev: "caps", steer: true, modes: ["auto", "plan"], defaultMode: "auto", compact: false });
+    expect(r.of("caps")[0]).toEqual({ ev: "caps", steer: true, modes: ["ask", "edits", "plan", "auto", "bypass"], defaultMode: "auto", compact: false });
     expect(r.of("session")).toEqual([]); // an external agent only reports its session after the first message
     r.engine.close();
   });
@@ -91,7 +91,7 @@ describe("a plain turn", () => {
     const t = await r.turn(say("hello", { qid: "q-1" }));
     expect(r.starts()).toHaveLength(1);
     const argv = r.starts()[0]!;
-    expect(argv).toEqual(expect.arrayContaining(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--dangerously-skip-permissions", "--model", "some-model"]));
+    expect(argv).toEqual(expect.arrayContaining(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--permission-mode", "default", "--model", "some-model"]));
     expect(argv).not.toContain("--resume");
     expect(t.filter((e) => e.ev === "text").map((e) => (e as { text: string }).text).join("")).toBe("Hello");
     expect(t.some((e) => e.ev === "thought")).toBe(true);
@@ -196,13 +196,16 @@ describe("modes", () => {
     r.engine.close();
   });
 
-  test("ask mode is refused with a clear message, and nothing is started", async () => {
-    const r = rig();
-    const t = await r.turn(say("hello", { mode: "ask" }));
-    expect(t.find((e) => e.ev === "error")).toMatchObject({ msg: expect.stringMatching(/can only run in Auto or Plan/) });
-    expect(t.at(-1)).toEqual({ ev: "done", stop: "error" });
-    expect(r.starts()).toHaveLength(0);
-    r.engine.close();
+  test("auto runs with the program's default mode (navvied decides in the hook), never with its permission prompts turned off; bypass is the one that does", async () => {
+    const auto = rig();
+    await auto.turn(say("hello", { mode: "auto" }));
+    expect(auto.starts()[0]).toEqual(expect.arrayContaining(["--permission-mode", "default"]));
+    expect(auto.starts()[0]).not.toContain("--dangerously-skip-permissions");
+    auto.engine.close();
+    const bypass = rig();
+    await bypass.turn(say("hello", { mode: "bypass" }));
+    expect(bypass.starts()[0]).toContain("--dangerously-skip-permissions");
+    bypass.engine.close();
   });
 });
 

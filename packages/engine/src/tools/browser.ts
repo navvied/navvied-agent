@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { killTree, usesProcessGroups } from "../platform.ts";
 import type { Tool } from "../types.ts";
 import { isPrivateHost } from "./web-fetch.ts";
+import { refusal } from "./web-guard.ts";
 import { clip, num, outputBudget, str } from "./util.ts";
 
 /**
@@ -64,6 +65,14 @@ export async function openWithRetry(go: () => Promise<string | undefined>, wait:
   return go();
 }
 
+/** `NAVVIED_BROWSER_ARGS`: more flags for the browser, as a JSON list of texts (a proxy, a test); anything else is ignored. */
+function extraFlags(): string[] {
+  try {
+    const list: unknown = JSON.parse(process.env.NAVVIED_BROWSER_ARGS ?? "[]");
+    return Array.isArray(list) ? list.filter((f): f is string => typeof f === "string" && f.startsWith("--")) : [];
+  } catch { return []; }
+}
+
 class Session {
   #socket!: WebSocket;
   #next = 1;
@@ -73,6 +82,10 @@ class Session {
   #dir = "";
   #idle: ReturnType<typeof setTimeout> | undefined;
   closed = false;
+  /** Whether this computer may be sent to local and private addresses (the host's choice, set at each call). */
+  allowPrivate = false;
+  /** Why the last request was not let through, for the sentence that tells the person a page could not be opened. */
+  #lastRefusal = "";
 
   /** Starts the browser. One that stops while starting is started once more: a crash at launch is rare and does not repeat. */
   static async open(chrome: string): Promise<Session> {
@@ -83,7 +96,7 @@ class Session {
     const s = new Session();
     // The long form of the folder: a short 8.3 name (RUNNER~1) in a profile path is one more thing for a browser on Windows to trip over.
     s.#dir = realpathSync.native(mkdtempSync(join(tmpdir(), "navvied-browser-")));
-    s.#child = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${s.#dir}`, "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync", "--mute-audio", "--hide-scrollbars", "--window-size=1280,900", ...(process.platform === "win32" ? ["--disable-gpu"] : []), ...(process.getuid?.() === 0 || process.env.NAVVIED_BROWSER_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), "about:blank"], { detached: usesProcessGroups(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+    s.#child = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${s.#dir}`, "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync", "--mute-audio", "--hide-scrollbars", "--window-size=1280,900", ...(process.platform === "win32" ? ["--disable-gpu"] : []), ...(process.getuid?.() === 0 || process.env.NAVVIED_BROWSER_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), ...extraFlags(), "about:blank"], { detached: usesProcessGroups(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
     let said = "", stopped: number | null | undefined;
     s.#child.stderr?.on("data", (d: Buffer) => { said = (said + d.toString("utf8")).slice(-600); });
     s.#child.on("exit", (code) => { stopped = code; s.close(); });
@@ -111,6 +124,8 @@ class Session {
     s.#sessionId = attached.sessionId;
     await s.#send("Page.enable");
     await s.#send("Runtime.enable");
+    // Every request the page makes waits here until it has been looked at: a document, an image, a script's fetch.
+    await s.#send("Fetch.enable", { patterns: [{ urlPattern: "*" }] });
     s.touch();
     return s;
   }
@@ -118,14 +133,31 @@ class Session {
   touch(): void { clearTimeout(this.#idle); this.#idle = setTimeout(() => this.close(), IDLE_MS); this.#idle.unref?.(); }
 
   #message(text: string): void {
-    let m: { id?: number; result?: unknown; error?: { message?: string } };
+    let m: { id?: number; method?: string; params?: { requestId?: string; request?: { url?: string } }; result?: unknown; error?: { message?: string } };
     try { m = JSON.parse(text); } catch { return; }
+    if (m.method === "Fetch.requestPaused" && m.params?.requestId) { void this.#gate(m.params.requestId, m.params.request?.url ?? ""); return; }
     if (typeof m.id !== "number") return;
     const p = this.#pending.get(m.id);
     if (!p) return;
     this.#pending.delete(m.id);
     clearTimeout(p.timer);
     if (m.error) p.reject(new Error(m.error.message ?? "the browser reported an error")); else p.resolve(m.result);
+  }
+
+  /**
+   * A request the page makes is let through, or failed, by the same look as the web tools make of an address: a name is looked up and every
+   * address it has must be public, and a name that cannot be looked up is not let through. It is asked of every request, so a page that
+   * redirects, navigates or loads something from a local or private address cannot reach it. Only addresses of the network are looked at:
+   * what is inside the page (`data:`, `blob:`) goes nowhere, and a file on this computer is never loaded.
+   */
+  async #gate(requestId: string, address: string): Promise<void> {
+    let why: string | undefined;
+    try {
+      const url = new URL(address);
+      why = url.protocol === "file:" ? "files on this computer are not opened." : url.protocol === "http:" || url.protocol === "https:" ? await refusal(url, this.allowPrivate) : undefined;
+    } catch { why = "the address could not be read, so it was not loaded."; }
+    if (why) this.#lastRefusal = why;
+    try { await this.#send(why ? "Fetch.failRequest" : "Fetch.continueRequest", why ? { requestId, errorReason: "AccessDenied" } : { requestId }); } catch { /* the browser is closing */ }
   }
 
   #send(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
@@ -147,8 +179,9 @@ class Session {
 
   async navigate(url: string): Promise<void> {
     this.touch();
+    this.#lastRefusal = "";
     const error = await openWithRetry(async () => ((await this.#send("Page.navigate", { url })) as { errorText?: string }).errorText);
-    if (error) throw new Error(`the page could not be opened (${error})`);
+    if (error) throw new Error(this.#lastRefusal && /ACCESS_DENIED/.test(error) ? `the page was not opened: ${this.#lastRefusal}` : `the page could not be opened (${error})`);
     await this.settle();
   }
 
@@ -248,6 +281,7 @@ export const browser: Tool = {
     try {
       if (!session || session.closed) session = await Session.open(chrome);
       const s = session;
+      s.allowPrivate = ctx.allowPrivateNetwork;
       if (action === "open") { await s.navigate(url!.href); }
       else if (action === "back") { if (!(await s.back())) return "Error: there is no earlier page."; }
       else if (action === "scroll") { await s.eval(`window.scrollBy(0, ${a.direction === "up" ? "-" : ""}Math.round(innerHeight * 0.85))`); await new Promise((r) => setTimeout(r, 300)); }

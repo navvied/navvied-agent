@@ -5,7 +5,8 @@
  */
 import { StepClock } from "./step-clock.ts";
 import { LineSplitter, RecentIds, type Command, type Effort, type EngineEvent, type ModelInfo, type PermMode, type PromptCommand } from "@navvied/protocol";
-import { launch, type AgentEngine } from "@navvied/engine";
+import { ALLOW, ALLOW_ALWAYS, ApprovalBroker, DENY, EDIT, approvalChange, approvalOptions, hardBlock, judge, launch, type AgentEngine, type Rules } from "@navvied/engine";
+import { AskServer, type AskReply, type AskedCall } from "./ask-channel.ts";
 import { buildArgv } from "./argv.ts";
 import { Translator } from "./translate.ts";
 
@@ -29,6 +30,8 @@ export interface StreamEngineOptions {
   persona?: string;
   /** A command the program runs before each of its tools. */
   guard?: string;
+  /** The person's permission rules, which the hook's questions are judged by (with the mode). */
+  rules?: Rules;
   env?: Record<string, string>;
   /** How long to wait for the agent to stop after a cancel before killing it (ms, default 5000). */
   cancelGraceMs?: number;
@@ -36,6 +39,18 @@ export interface StreamEngineOptions {
 }
 
 type Child = ReturnType<typeof Bun.spawn>;
+
+/** The tools of the program that only look, so a mode that asks about everything else does not ask about them. */
+const READ_ONLY = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "TodoWrite", "BashOutput"]);
+
+/** What a card says the program is about to do. */
+function titleOf(name: string, args: Record<string, unknown>): string {
+  const text = (v: unknown): string => (typeof v === "string" ? v.split("\n")[0]!.slice(0, 200) : "");
+  if (name === "Bash") return `Run ${text(args.command)}`;
+  if (name === "Write" || name === "Edit") return `${name === "Write" ? "Write" : "Edit"} ${text(args.file_path)}`;
+  if (name === "WebFetch") return `Fetch ${text(args.url)}`;
+  return `Use ${name}`;
+}
 
 const imageBlock = (i: NonNullable<PromptCommand["images"]>[number]) => ({ type: "image", source: { type: "base64", media_type: i.mime, data: i.data } });
 
@@ -61,6 +76,10 @@ export class StreamEngine implements AgentEngine {
   #heartbeat: ReturnType<typeof setInterval> | undefined;
   #closed = false;
   readonly #clock = new StepClock();
+  readonly #approvals = new ApprovalBroker();
+  /** What the person said "do not ask again" to. */
+  readonly #allowed = new Set<string>();
+  readonly #ask = new AskServer((call, gone) => this.#decide(call, gone));
 
   constructor(opts: StreamEngineOptions) {
     this.#o = opts;
@@ -82,7 +101,7 @@ export class StreamEngine implements AgentEngine {
   #announce(): void {
     const { models, efforts } = this.#o;
     this.#emit({
-      ev: "caps", steer: true, modes: ["auto", "plan"], defaultMode: "auto", compact: false,
+      ev: "caps", steer: true, modes: ["ask", "edits", "plan", "auto", "bypass"], defaultMode: "auto", compact: false,
       ...(models?.length ? { models: models.map((m) => ({ ...m, current: m.id === (this.#model ?? DEFAULT_MODEL) })) } : this.#o.entry ? { models: [{ ...this.#o.entry, current: true }] } : {}),
       ...(efforts?.length ? { efforts } : {}),
       ...(this.#effort ? { effort: this.#effort } : {}),
@@ -95,7 +114,7 @@ export class StreamEngine implements AgentEngine {
     switch (cmd.cmd) {
       case "prompt": return this.#prompt(cmd);
       case "cancel": return this.#cancel();
-      case "approve": return;
+      case "approve": this.#approvals.answer(cmd.id, cmd.optionId, cmd.input); return;
       case "compact": this.#emit({ ev: "error", msg: "This engine cannot compact on demand." }); return;
       case "model": return this.#useModel(cmd.id);
       case "effort": return this.#setEffort(cmd.level);
@@ -110,6 +129,8 @@ export class StreamEngine implements AgentEngine {
 
   close(): void {
     this.#closed = true;
+    this.#approvals.denyAll();
+    this.#ask.close();
     if (this.#heartbeat) clearInterval(this.#heartbeat);
     if (this.#killTimer) clearTimeout(this.#killTimer);
     try { this.#child?.kill("SIGKILL"); } catch { /* already gone */ }
@@ -125,11 +146,6 @@ export class StreamEngine implements AgentEngine {
 
   #prompt(cmd: PromptCommand): void {
     if (cmd.qid && !this.#qids.isNew(cmd.qid)) return;
-    if (cmd.mode === "ask") {
-      this.#emit({ ev: "error", msg: "This computer's engine is a program you are signed in to, and it can only run in Auto or Plan: it cannot ask before each change." });
-      this.#emit({ ev: "done", stop: "error" });
-      return;
-    }
     const mode: PermMode = cmd.mode ?? this.#mode;
     const effort = cmd.effort ?? this.#effort;
     // The mode and effort are process flags: change them only between turns, by restarting the agent on the same session.
@@ -162,6 +178,7 @@ export class StreamEngine implements AgentEngine {
   }
 
   #cancel(): void {
+    this.#approvals.denyAll();
     if (!this.#busy || !this.#child) return;
     this.#tr.interrupting = true;
     this.#write({ type: "control_request", request_id: crypto.randomUUID(), request: { subtype: "interrupt" } });
@@ -177,7 +194,7 @@ export class StreamEngine implements AgentEngine {
     });
     let child: Child;
     try {
-      child = Bun.spawn(launch(argv), { cwd: this.#o.cwd, env: { ...process.env, ...this.#o.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+      child = Bun.spawn(launch(argv), { cwd: this.#o.cwd, env: { ...process.env, ...this.#o.env, ...(this.#o.guard ? this.#ask.listen() : {}) }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
     } catch (e) {
       this.#emit({ ev: "error", msg: `Could not start "${this.#o.command}": ${e instanceof Error ? e.message : String(e)}` });
       this.#emit({ ev: "done", stop: "error" });
@@ -193,6 +210,45 @@ export class StreamEngine implements AgentEngine {
     void this.#readStderr(child);
     void child.exited.then((code) => this.#exited(child, code));
     return true;
+  }
+
+  /**
+   * What a program's hook asks before each tool it runs: judged by the same rules as the built-in engine's (`judge`), and where the person is
+   * to be asked, asked in the same card with the same answers. A tool that is let through is said so out loud, which is what lets the program
+   * run it without asking itself; in Plan and Bypass the program's own mode stays in charge and nothing is said.
+   */
+  async #decide(call: AskedCall, gone: AbortSignal): Promise<AskReply> {
+    const asked = typeof call.tool_name === "string" ? call.tool_name : "";
+    const name = asked === "MultiEdit" || asked === "NotebookEdit" ? "Edit" : asked;
+    const args = typeof call.tool_input === "object" && call.tool_input !== null && !Array.isArray(call.tool_input) ? call.tool_input as Record<string, unknown> : {};
+    const cwd = typeof call.cwd === "string" && call.cwd ? call.cwd : this.#o.cwd;
+    const mode = this.#mode;
+    const settled: AskReply = mode === "plan" || mode === "bypass" ? { decision: "pass" } : { decision: "allow" };
+    const judged = judge({ mode, tool: { name, readOnly: READ_ONLY.has(asked) }, args, cwd, rules: this.#o.rules, allowed: this.#allowed, knownUrl: () => true });
+    if (judged.kind === "stop") return { decision: "deny", message: judged.message };
+    if (judged.kind === "go") return settled;
+
+    const { scope, risk } = judged;
+    const { id, answer } = this.#approvals.open();
+    const editable = name === "Bash" && typeof args.command === "string" ? args.command : undefined;
+    const change = approvalChange(name, args);
+    const stopped = (): void => { this.#approvals.answer(id, DENY); };
+    gone.addEventListener("abort", stopped, { once: true });
+    this.#emit({ ev: "approval", id, title: titleOf(name, args), options: approvalOptions(scope.phrase, editable), ...(typeof call.tool_use_id === "string" ? { tool: call.tool_use_id } : {}), ...(change ? { change } : {}), ...(risk ? { risk: risk.reason } : {}) });
+    const given = await answer;
+    gone.removeEventListener("abort", stopped);
+    if (given.optionId === ALLOW_ALWAYS) { for (const k of scope.keys ?? [scope.key]) this.#allowed.add(k); return settled; }
+    if (given.optionId === EDIT && editable !== undefined && given.input?.trim()) {
+      const edited = { ...args, command: given.input.trim() };
+      const again = hardBlock(name, edited, cwd);
+      if (again) return { decision: "deny", message: `Blocked: ${again}. navvied never does this.` };
+      const rule = this.#o.rules?.check(name, edited);
+      if (rule?.kind === "deny") return { decision: "deny", message: `Blocked by the permission rule ${rule.rule}.` };
+      return { decision: "allow", input: edited };
+    }
+    if (given.optionId === ALLOW || given.optionId === EDIT) return settled;
+    const said = given.input?.trim();
+    return { decision: "deny", message: said ? `Not run. The person said: ${said}` : "The user denied this action." };
   }
 
   /** Stop the process between turns (to restart it with other flags). Its exit is expected, so nothing is reported. */

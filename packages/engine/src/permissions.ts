@@ -22,7 +22,7 @@ const FILE_COMMANDS = /^(mkdir|touch|mv|cp|rmdir|ln)$/;
  * Whether a call must be asked about in a mode, before anything about risk or rules. `ask` asks for everything that is not a plain look;
  * `edits` also lets file edits and plain file commands through; `auto` and `bypass` ask for nothing here (risk is judged apart).
  */
-export function needsApproval(mode: PermMode, tool: Tool, args: Record<string, unknown> = {}): boolean {
+export function needsApproval(mode: PermMode, tool: Pick<Tool, "name" | "readOnly">, args: Record<string, unknown> = {}): boolean {
   if (tool.readOnly || mode === "auto" || mode === "bypass" || mode === "plan") return false;
   if (tool.name === "Bash" && typeof args.command === "string") {
     if (onlyLooks(args.command)) return false;

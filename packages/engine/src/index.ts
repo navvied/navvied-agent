@@ -7,7 +7,10 @@ export { ResponsesApiProvider, toInput as toResponsesInput, type ResponsesApiCon
 export { MESSAGES_HEADERS, MessagesApiProvider, toWire as toMessagesWire, type MessagesApiConfig } from "./providers/messages-api.ts";
 export { OllamaProvider, toWire as toOllamaWire, type OllamaConfig } from "./providers/ollama.ts";
 export { FileSessionStore, MemorySessionStore, historyOf } from "./store.ts";
-export { ApprovalBroker } from "./approvals.ts";
+export { ALLOW, ALLOW_ALWAYS, ApprovalBroker, DENY, EDIT, approvalOptions } from "./approvals.ts";
+export { approvalScope } from "./approval-scope.ts";
+export { approvalChange } from "./approval-change.ts";
+export { judge, type Judgement, type JudgeInput } from "./judge.ts";
 export { Checkpoints, forgetCheckpoints, spawnGit, type Checkpoint, type CheckpointsOptions, type Git, type RepoSnapshot } from "./checkpoints.ts";
 export { INSTRUCTION_FILE, INSTRUCTION_FILES, instructionFiles, loadInstructions } from "./instructions.ts";
 export { compactMessages, estimateTokens, shouldCompact, COMPACT_AT } from "./context.ts";

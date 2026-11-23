@@ -18,8 +18,29 @@ const result = (subtype = "success", extra: Record<string, unknown> = {}) => out
 let started = false;
 let slowTimer: ReturnType<typeof setTimeout> | undefined;
 
+/** What the real program does with a hook: runs it before the tool with the call on standard input; exit 2 stops the tool and says why, a decision on standard output may change the input. */
+async function viaHook(command: string, id: string) {
+  const settings = flag("--settings");
+  const hook = settings ? (JSON.parse(settings) as { hooks: { PreToolUse: { hooks: { command: string }[] }[] } }).hooks.PreToolUse[0]!.hooks[0]!.command : undefined;
+  let input: Record<string, unknown> = { command };
+  let stopped: string | undefined;
+  if (hook) {
+    const child = Bun.spawn(["sh", "-c", hook], { stdin: new TextEncoder().encode(JSON.stringify({ tool_name: "Bash", tool_input: input, tool_use_id: id, cwd: process.cwd() })), stdout: "pipe", stderr: "pipe", env: process.env });
+    const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    const code = await child.exited;
+    if (code === 2) stopped = stderr.trim();
+    else if (stdout.trim()) { const decision = (JSON.parse(stdout) as { hookSpecificOutput?: { updatedInput?: Record<string, unknown> } }).hookSpecificOutput; if (decision?.updatedInput) input = decision.updatedInput; }
+  }
+  out({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "Bash", input: { command } }], usage } });
+  out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: stopped !== undefined, content: stopped ?? `ran: ${String(input.command)}` }] } });
+  out({ type: "assistant", message: { content: [{ type: "text", text: stopped ? "stopped" : "ran it" }], usage } });
+  result();
+}
+
 function reply(text: string, content: Record<string, unknown>[]) {
   const t = text.toLowerCase();
+  const asked = /run bash: (.+)/i.exec(text);
+  if (asked) { void viaHook(asked[1]!.trim(), `hook${Math.random().toString(36).slice(2, 8)}`); return; }
   if (t.includes("die")) { process.stderr.write("boom: something broke\n"); process.exit(3); }
   if (t.includes("stubborn")) return; // never answers, ignores interrupts
   if (t.includes("slow")) { slowTimer = setTimeout(() => { out({ type: "assistant", message: { content: [{ type: "text", text: "finally" }], usage } }); result(); }, 3000); return; }

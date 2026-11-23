@@ -218,12 +218,6 @@ describe("an external command-line agent as the model", () => {
     expect(f.out()).toContain("1. First");
     expect(f.err()).toContain("Plan ready.");
   });
-  test("ask mode is not available and says so; exit 1", async () => {
-    const { env, cfg, work } = external();
-    const f = fakeIO({ env });
-    expect(await main(["run", "hello", "--mode", "ask", "--config", cfg, "--cwd", work], f.io)).toBe(1);
-    expect(f.err()).toMatch(/can only run in Auto or Plan/);
-  });
   test("serve announces that capability set to the host", async () => {
     const { env, cfg, work } = external();
     const f = fakeIO({ env });
@@ -232,7 +226,7 @@ describe("an external command-line agent as the model", () => {
     f.input.end();
     await done;
     const caps = f.out().trim().split("\n").map((l) => JSON.parse(l)).find((e) => e.ev === "caps");
-    expect(caps).toMatchObject({ modes: ["auto", "plan"], compact: false });
+    expect(caps).toMatchObject({ modes: ["ask", "edits", "plan", "auto", "bypass"], compact: false });
   });
   test("models lists it by its command", async () => {
     const { env, cfg } = external();

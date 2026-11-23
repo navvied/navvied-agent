@@ -142,20 +142,29 @@ describe("end of turn", () => {
 });
 
 describe("argv", () => {
-  test("auto mode: no permission prompts; model, effort, resume and persona are passed through", () => {
+  test("model, effort, resume and persona are passed through", () => {
     const a = buildArgv({ command: "agent", args: ["--x"], model: "m", mode: "auto", effort: "high", resume: "sid", persona: "Be brief." });
     expect(a.slice(0, 3)).toEqual(["agent", "--x", "-p"]);
-    expect(a).toContain("--dangerously-skip-permissions");
-    expect(a).not.toContain("--permission-mode");
     for (const pair of [["--input-format", "stream-json"], ["--output-format", "stream-json"], ["--model", "m"], ["--effort", "high"], ["--resume", "sid"], ["--append-system-prompt", "Be brief."]]) {
       expect(a[a.indexOf(pair[0]!) + 1]).toBe(pair[1]!);
     }
     for (const f of ["--verbose", "--include-partial-messages", "--replay-user-messages"]) expect(a).toContain(f);
   });
+  test("every mode is put to the program the way the mode means: Plan and Bypass by its own modes, the rest by its default mode with navvied deciding in the hook; and only Bypass is no permission prompts at all", () => {
+    const permission = (mode: "ask" | "edits" | "plan" | "auto" | "bypass"): string[] => {
+      const a = buildArgv({ command: "agent", mode });
+      return a.includes("--dangerously-skip-permissions") ? ["--dangerously-skip-permissions"] : ["--permission-mode", a[a.indexOf("--permission-mode") + 1]!];
+    };
+    expect(permission("ask")).toEqual(["--permission-mode", "default"]);
+    expect(permission("edits")).toEqual(["--permission-mode", "default"]);
+    expect(permission("plan")).toEqual(["--permission-mode", "plan"]);
+    expect(permission("auto")).toEqual(["--permission-mode", "default"]);
+    expect(permission("bypass")).toEqual(["--dangerously-skip-permissions"]);
+  });
   test("a guard is handed to the program as a hook that runs before every tool", () => {
     const a = buildArgv({ command: "agent", mode: "auto", guard: "'/bin/navvied' guard" });
-    const settings = JSON.parse(a[a.indexOf("--settings") + 1]!) as { hooks: { PreToolUse: { matcher: string; hooks: { type: string; command: string }[] }[] } };
-    expect(settings.hooks.PreToolUse).toEqual([{ matcher: "*", hooks: [{ type: "command", command: "'/bin/navvied' guard" }] }]);
+    const settings = JSON.parse(a[a.indexOf("--settings") + 1]!) as { hooks: { PreToolUse: { matcher: string; hooks: { type: string; command: string; timeout?: number }[] }[] } };
+    expect(settings.hooks.PreToolUse).toEqual([{ matcher: "*", hooks: [{ type: "command", command: "'/bin/navvied' guard", timeout: 3600 }] }]);
     expect(buildArgv({ command: "agent", mode: "auto" })).not.toContain("--settings");
   });
   test("plan mode uses the agent's read-only mode", () => {
