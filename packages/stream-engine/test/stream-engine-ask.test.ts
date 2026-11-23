@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { Command, EngineEvent, PermMode } from "@navvied/protocol";
 import { ASK_ADDRESS, ASK_TOKEN, AskServer, askEngine, StreamEngine } from "../src/index.ts";
 import { HOOK_MS, hook, removeTrees } from "../../protocol/test/support/cleanup.ts";
@@ -181,10 +182,10 @@ describe("a program is not started unless its guard is seen to work", () => {
   });
 
   test("when the program's hook cannot run, its default mode refuses the tool, and only turned-off prompts let it run (what the program does, as the fake models it)", async () => {
-    // The guard works when the engine looks, then stops working: the program is started with it broken.
+    // The guard works when the engine looks, then stops working: the program is started with it broken. (The copy of the stub names the module by its address, not by a path: a Windows path in a string is not the same text once its backslashes are read.)
     const dir = mkdtempSync(join(tmpdir(), "navvied-guard-gone-")); dirs.push(dir);
     const stub = join(dir, "stub.ts");
-    writeFileSync(stub, readFileSync(STUB, "utf8").replace("../src/index.ts", join(import.meta.dir, "../src/index.ts")));
+    writeFileSync(stub, readFileSync(STUB, "utf8").replace("../src/index.ts", pathToFileURL(join(import.meta.dir, "../src/index.ts")).href));
     const events: EngineEvent[] = [];
     const engine = new StreamEngine({ command: "bun", args: [FAKE], cwd: dir, window: 100_000, emit: (e) => events.push(e), heartbeatMs: 0, guard: `bun "${stub}"` });
     engine.handle({ cmd: "prompt", text: "echo warm", mode: "bypass" } as Command);

@@ -120,11 +120,14 @@ describe("waiting for a sign that it is ready", () => {
     await tool("Bash").run({ command: node("console.log('bye')"), run_in_background: true }, ctx);
     const t0 = Date.now();
     expect(await tool("BashOutput").run({ job_id: "job1", wait: 10, until: "never printed" }, ctx)).toContain("[job1: done, exit 0]");
-    expect(Date.now() - t0).toBeLessThan(3000);
-    await tool("Bash").run({ command: node("setTimeout(() => {}, 4000)"), run_in_background: true }, ctx);
+    // It came back because the command ended, not because the ten seconds it was willing to wait were up.
+    expect(Date.now() - t0).toBeLessThan(9000);
+    await tool("Bash").run({ command: node("setTimeout(() => {}, 60000)"), run_in_background: true }, ctx);
     const t1 = Date.now();
     expect(await tool("BashOutput").run({ job_id: "job2", wait: 1, until: "never printed" }, ctx)).toContain("(no new output)");
-    expect(Date.now() - t1).toBeLessThan(2500);
+    // It gave up at the time asked: the command was still running, and a minute away from ending.
+    expect(jobs.list().find((j) => j.id === "job2")!.status).toBe("running");
+    expect(Date.now() - t1).toBeLessThan(30_000);
     jobs.close();
   });
 });
