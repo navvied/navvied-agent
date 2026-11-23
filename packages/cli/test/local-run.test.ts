@@ -36,7 +36,7 @@ async function computer(o: { cloud?: false | "flag"; runtime?: boolean; model?: 
     writeFileSync(join(folder, "installed.json"), JSON.stringify({ tag: RUNTIME.tag, commit: RUNTIME.commit, backend: a.backend, binary: "llama-server", files: [{ file: a.file, sha256: a.sha256 }] }));
   }
   if (o.model !== false) {
-    const bytes = llama({ layers: 4, heads: 8, kvHeads: 2, embed: 512, context: 131072 });
+    const bytes = llama({ layers: 4, heads: 8, kvHeads: 2, embed: 512, context: 131072, template: "{% if tools %}{{ tools }}{% endif %}" });
     const at = join(local, "models", "org--tiny", FILE);
     mkdirSync(dirname(at), { recursive: true });
     writeFileSync(at, bytes);
@@ -76,8 +76,11 @@ describe.skipIf(win)("the model server of this computer", () => {
     await until(() => c.of("local.server", "running").length === 1, 20_000);
     expect(c.of("local.server", "starting")[0]).toMatchObject({ repo: REPO, file: FILE, window: 32768 });
     await until(() => c.names().includes(NAME));
-    expect(c.of("caps").at(-1)!.models!.find((m) => m.id === NAME)).toMatchObject({ handover: true });
+    expect(c.of("caps").at(-1)!.models!.find((m) => m.id === NAME)).toMatchObject({ handover: true, tools: true });
     expect(c.of("local.file", "running")).toHaveLength(1);
+    c.send({ cmd: "local.models" });
+    await until(() => c.of("local.installed").length > 0);
+    expect(c.of("local.installed").at(-1)!.items![0]).toMatchObject({ repo: REPO, file: FILE, tools: true });
     const resolved = c.resolve(NAME);
     if (!resolved.ok) throw new Error(resolved.error);
     expect(resolved.value).toMatchObject({ api: "chat", window: 32768, provider: { model: "tiny-Q4_K_M" } });
@@ -104,6 +107,27 @@ describe.skipIf(win)("the model server of this computer", () => {
     expect(existsSync(serverNote(c.local))).toBe(false);
     await until(() => !c.names().includes(NAME));
     expect(c.resolve(NAME)).toEqual({ ok: false, error: "tiny-Q4_K_M is not running. Start it first." });
+  });
+
+  test("the runtime is taken away only when no model runs, the models stay, and the state is none", async () => {
+    const c = await computer();
+    c.send({ cmd: "local.run", repo: REPO, file: FILE });
+    await until(() => c.of("local.server", "running").length === 1, 20_000);
+    c.send({ cmd: "local.runtime.remove" });
+    await until(() => c.of("error").length === 1);
+    expect(c.of("error")[0]!.msg).toBe("A model is running. Stop it first.");
+    expect(existsSync(join(c.local, "runtime"))).toBe(true);
+    c.send({ cmd: "local.stop" });
+    await until(() => c.of("local.server", "stopped").length === 1, 20_000);
+    const before = c.of("local.runtime").length;
+    c.send({ cmd: "local.runtime.remove" });
+    await until(() => c.of("local.runtime").length > before);
+    expect(c.of("local.runtime").at(-1)).toMatchObject({ state: "none", server: "stopped" });
+    expect(existsSync(join(c.local, "runtime"))).toBe(false);
+    expect(existsSync(join(c.local, "models", "org--tiny", FILE))).toBe(true);
+    c.send({ cmd: "local.run", repo: REPO, file: FILE });
+    await until(() => c.of("local.server", "failed").length === 1);
+    expect(c.of("local.server", "failed")[0]!.error).toBe("The runtime is not fetched yet.");
   });
 
   test("a build for the processor is planned as if the computer had no card: no layer goes to a card that the build cannot use", async () => {

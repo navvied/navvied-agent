@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync
 import { join } from "node:path";
 import type { Machine } from "../src/machine.ts";
 import { RUNTIME, RUNTIME_DRIVERS } from "../src/presets.ts";
-import { atLeast, backendsFor, installedBinary, installRuntime, pickAsset, runtimeState, type RuntimeAsset, type RuntimePin, type RuntimeState } from "../src/runtime.ts";
+import { atLeast, backendsFor, installedBinary, installRuntime, pickAsset, runtimeState, tarProgram, type RuntimeAsset, type RuntimePin, type RuntimeState } from "../src/runtime.ts";
 import { remove, tempDir } from "./helpers.ts";
 
 const dirs: string[] = [];
@@ -15,6 +15,16 @@ const dir = (): string => { const d = tempDir(); dirs.push(d); return d; };
 const machine = (o: Partial<Machine> & { driver?: string; vendor?: "nvidia" | "amd" | "intel" | "apple"; kind?: "discrete" | "integrated" | "unified" } = {}): Machine => ({
   os: o.os ?? "linux", arch: o.arch ?? "x64", ramMb: 16384,
   gpus: o.gpus ?? (o.vendor ? [{ name: "gpu", vendor: o.vendor, kind: o.kind ?? "discrete", ...(o.driver ? { driver: o.driver } : {}) }] : []),
+});
+
+describe("the program that unpacks", () => {
+  test("on Windows the one the system brings, wherever the system is; elsewhere the tar of the path", () => {
+    expect(tarProgram("win32", { SystemRoot: "D:\\Win" })).toBe("D:\\Win\\System32\\tar.exe");
+    expect(tarProgram("win32", { windir: "E:\\W" })).toBe("E:\\W\\System32\\tar.exe");
+    expect(tarProgram("win32", {})).toBe("C:\\Windows\\System32\\tar.exe");
+    expect(tarProgram("linux", { SystemRoot: "x" })).toBe("tar");
+    expect(tarProgram("darwin", {})).toBe("tar");
+  });
 });
 
 describe("which build runs on a computer", () => {
@@ -88,7 +98,7 @@ async function archive(o: { extra?: (root: string) => void; noServer?: boolean }
   writeFileSync(join(root, "libx.so"), "library");
   o.extra?.(root);
   const file = join(d, "a.tar.gz");
-  const made = Bun.spawnSync(["tar", "-czf", file, "-C", join(d, "src"), "build-x"]);
+  const made = Bun.spawnSync([tarProgram(process.platform, process.env), "-czf", file, "-C", join(d, "src"), "build-x"]);
   if (made.exitCode !== 0) throw new Error("tar could not make the archive");
   const bytes = new Uint8Array(readFileSync(file));
   return { file: "a.tar.gz", sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.length, bytes };
@@ -110,7 +120,7 @@ function install(a: Awaited<ReturnType<typeof archive>>, served: Uint8Array | un
   const ran: string[][] = [];
   const run = async (argv: string[], _t: number) => {
     ran.push(argv);
-    if (argv[0] === "tar") { const r = Bun.spawnSync(argv); return { code: r.exitCode ?? 1, output: "" }; }
+    if (argv[0] === tarProgram(process.platform, process.env)) { const r = Bun.spawnSync(argv); return { code: r.exitCode ?? 1, output: "" }; }
     return { code: o.version ?? 0, output: "version: 1" };
   };
   const go = () => installRuntime({ pin, asset, local, fetchFn: fetch, run, freeBytes: () => o.free, platform: process.platform, ...(o.signal ? { signal: o.signal } : {}), onState: (s) => states.push(s) });
@@ -125,7 +135,7 @@ describe("fetching a build", () => {
     expect(r.ok).toBe(true);
     const binary = (r as { binary: string }).binary;
     expect(binary.endsWith(NAME)).toBe(true);
-    expect(i.ran.map((x) => x[0])).toEqual(["tar", binary]);
+    expect(i.ran.map((x) => x[0])).toEqual([tarProgram(process.platform, process.env), binary]);
     expect(i.ran[1]).toEqual([binary, "--version"]);
     expect(i.states.map((s) => s.state).filter((s, n, all) => all.indexOf(s) === n)).toEqual(["installing", "verifying", "ready"]);
     expect(i.states.at(-1)).toMatchObject({ state: "ready", tag: "b1", backend: "cpu", binary });

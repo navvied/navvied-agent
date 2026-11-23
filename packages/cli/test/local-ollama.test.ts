@@ -10,7 +10,7 @@ import { fakeIO, remove, tempDir, until } from "./helpers.ts";
 const dirs: string[] = [];
 afterAll(() => dirs.forEach(remove));
 
-type Ev = { ev: string; state?: string; model?: string; bytes?: number; total?: number; error?: string; msg?: string; baseUrl?: string; version?: string; models?: string[] };
+type Ev = { ev: string; state?: string; model?: string; bytes?: number; total?: number; error?: string; msg?: string; baseUrl?: string; version?: string; models?: { name: string; tools?: boolean }[] };
 
 interface Fake { fetchFn: typeof fetch; calls: string[]; finish(): void }
 
@@ -24,7 +24,8 @@ function ollama(o: { up?: boolean; lines?: string[]; hold?: boolean; endWithout?
     calls.push(`${init?.method ?? "GET"} ${u}${init?.body ? ` ${String(init.body)}` : ""}`);
     if (o.up === false) throw new Error("refused");
     if (u.endsWith("/api/version")) return Response.json({ version: "0.9.0" });
-    if (u.endsWith("/api/tags")) return Response.json({ models: [{ name: "b:1b" }, { name: "a:2b" }] });
+    if (u.endsWith("/api/tags")) return Response.json({ models: [{ name: "b:1b" }, { name: "a:2b" }, { name: "c:3b" }] });
+    if (u.endsWith("/api/show")) { const name = JSON.parse(String(init?.body)).model; return name === "a:2b" ? Response.json({ capabilities: ["completion", "tools"] }) : name === "b:1b" ? Response.json({ capabilities: ["completion"] }) : new Response("", { status: 404 }); }
     if (u.endsWith("/api/pull")) {
       const enc = new TextEncoder();
       const body = new ReadableStream({
@@ -82,7 +83,7 @@ describe("local.ollama", () => {
     const c = computer(ollama().fetchFn);
     c.send({ cmd: "local.ollama" });
     await until(() => c.got.some((e) => e.ev === "local.ollama"));
-    expect(c.got.find((e) => e.ev === "local.ollama")).toMatchObject({ state: "ready", baseUrl: "http://127.0.0.1:11434", version: "0.9.0", models: ["a:2b", "b:1b"] });
+    expect(c.got.find((e) => e.ev === "local.ollama")).toMatchObject({ state: "ready", baseUrl: "http://127.0.0.1:11434", version: "0.9.0", models: [{ name: "a:2b", tools: true }, { name: "b:1b", tools: false }, { name: "c:3b" }] });
     await c.stop();
   });
 

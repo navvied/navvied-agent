@@ -49,10 +49,10 @@ export type RouteApi = "chat" | "responses" | "messages";
 export interface ProviderRoute { protocol: string; api: RouteApi }
 
 /** What a computer keeps for one provider. Written to the configuration file, which only its owner can read. */
-export interface SavedProvider { key?: string; region?: string; fields?: Record<string, string> }
+export interface SavedProvider { key?: string; region?: string; /** The address the person set instead of the provider's own (it replaces the region's too). */ base?: string; fields?: Record<string, string> }
 
 const missing = (e: ProviderEntry, saved: SavedProvider): string | undefined => {
-  if (e.regions && !e.regions.some((r) => r.id === saved.region)) return "a region";
+  if (e.regions && !saved.base && !e.regions.some((r) => r.id === saved.region)) return "a region";
   const field = e.fields?.find((f) => f.required && !saved.fields?.[f.id]);
   return field ? field.label : undefined;
 };
@@ -61,6 +61,7 @@ const missing = (e: ProviderEntry, saved: SavedProvider): string | undefined => 
 export function baseOf(e: ProviderEntry, saved: SavedProvider): { base: string } | { missing: string } {
   const lacking = missing(e, saved);
   if (lacking) return { missing: lacking };
+  if (saved.base) return { base: saved.base };
   const region = e.regions?.find((r) => r.id === saved.region);
   const raw = region?.base ?? e.base ?? "";
   return { base: raw.replace(/\{(\w+)\}/g, (_, id: string) => encodeURIComponent(saved.fields?.[id] ?? "")) };
@@ -82,7 +83,7 @@ export function modelEntryOf(e: ProviderEntry, saved: SavedProvider, model: stri
   if (e.adc && !credentialFile) return { missing: "a credential file" };
   const headers = { ...headersOf(e, saved), ...(e.sessionHeader && session ? { [e.sessionHeader]: session } : {}) };
   const api = route?.api ?? e.api;
-  return { entry: { baseUrl: route?.base ?? where.base, model, ...(api ? { api } : {}), ...(saved.key && !e.keyHeader ? { apiKey: saved.key } : {}), ...(e.adc && credentialFile ? { adc: { file: credentialFile, tokenUri: e.adc.tokenUri, scope: e.adc.scope } } : {}), ...(Object.keys(headers).length ? { headers } : {}) } };
+  return { entry: { baseUrl: saved.base ? where.base : route?.base ?? where.base, model, ...(api ? { api } : {}), ...(saved.key && !e.keyHeader ? { apiKey: saved.key } : {}), ...(e.adc && credentialFile ? { adc: { file: credentialFile, tokenUri: e.adc.tokenUri, scope: e.adc.scope } } : {}), ...(Object.keys(headers).length ? { headers } : {}) } };
 }
 
 /** What may be said about what is saved: that a key is there and the values that are not secret. */
@@ -93,13 +94,13 @@ export function reportOf(entries: readonly ProviderEntry[], saved: Record<string
     if (!s) continue;
     const secret = new Set((e.fields ?? []).filter((f) => f.secret).map((f) => f.id));
     const fields = Object.fromEntries(Object.entries(s.fields ?? {}).filter(([id]) => !secret.has(id)));
-    out.push({ id: e.id, key: !!s.key, ...(s.region ? { region: s.region } : {}), ...(Object.keys(fields).length ? { fields } : {}) });
+    out.push({ id: e.id, key: !!s.key, ...(s.base ? { base: s.base } : {}), ...(s.region ? { region: s.region } : {}), ...(Object.keys(fields).length ? { fields } : {}) });
   }
   return out;
 }
 
 /** The values to save for a request from a page: only the fields the provider has, a key kept when none is sent, a field sent empty taken away. */
-export function mergeSaved(e: ProviderEntry, before: SavedProvider | undefined, patch: { key?: string; region?: string; fields?: Record<string, string> }): { saved: SavedProvider } | { error: string } {
+export function mergeSaved(e: ProviderEntry, before: SavedProvider | undefined, patch: { key?: string; region?: string; base?: string; fields?: Record<string, string> }): { saved: SavedProvider } | { error: string } {
   if (e.adc && patch.key !== undefined) return { error: `${e.name} takes no key: it signs in with a credential file of this computer` };
   if (patch.region !== undefined && !e.regions?.some((r) => r.id === patch.region)) return { error: `${e.name} has no region ${patch.region}` };
   const known = new Set((e.fields ?? []).map((f) => f.id));
@@ -108,7 +109,8 @@ export function mergeSaved(e: ProviderEntry, before: SavedProvider | undefined, 
   for (const id of Object.keys(fields)) if (!fields[id]) delete fields[id];
   const key = patch.key ?? before?.key;
   const region = patch.region ?? before?.region;
-  return { saved: { ...(key ? { key } : {}), ...(region ? { region } : {}), ...(Object.keys(fields).length ? { fields } : {}) } };
+  const base = patch.base ?? before?.base;
+  return { saved: { ...(key ? { key } : {}), ...(region ? { region } : {}), ...(base ? { base } : {}), ...(Object.keys(fields).length ? { fields } : {}) } };
 }
 
 const slug = (v: string): string => v.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "model";

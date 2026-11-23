@@ -120,7 +120,7 @@ export function resolved(choice: string | undefined, file: ConfigFile | null, en
 }
 
 /** One entry of the model list as a page is told of it. */
-export const modelInfoOf = (id: string, e: ModelEntry): ModelInfo => ({ id, name: e.display?.name ?? e.model ?? id, blurb: e.display?.blurb ?? describeEntry(e), ...(e.display?.brand ? { brand: e.display.brand } : {}), ...(e.display?.badge ? { badge: e.display.badge } : {}), ...(e.display?.locked ? { locked: true } : {}), ...(catalogOf(id, e) ? { catalog: catalogOf(id, e)! } : {}) });
+export const modelInfoOf = (id: string, e: ModelEntry): ModelInfo => ({ id, name: e.display?.name ?? e.model ?? id, blurb: e.display?.blurb ?? describeEntry(e), ...(e.display?.brand ? { brand: e.display.brand } : {}), ...(e.display?.badge ? { badge: e.display.badge } : {}), ...(e.display?.locked ? { locked: true } : {}), ...(catalogOf(id, e) ? { catalog: catalogOf(id, e)! } : {}), ...(e.local?.tools !== undefined ? { tools: e.local.tools } : {}) });
 
 function switcherFor(file: ConfigFile | null, current: string, env: Record<string, string | undefined>, path: string, window: number, efforts: Effort[] | undefined): ModelSwitch | undefined {
   const own = Object.entries(file?.models ?? {}).filter(([, e]) => !e.command);

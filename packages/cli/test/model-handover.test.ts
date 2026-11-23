@@ -9,7 +9,9 @@ import { fakeIO, remove, startMockModel, tempDir, until } from "./helpers.ts";
 let mock: ReturnType<typeof startMockModel>;
 const dirs: string[] = [];
 beforeAll(() => { mock = startMockModel(); });
-afterAll(() => { mock.stop(); dirs.forEach(remove); });
+/** Every hub made here is stopped before its folders are removed: a hub that is still running holds its engines, their programs and their folders (Windows will not remove a folder that something still has open). */
+const hubs: { stop(): Promise<void> }[] = [];
+afterAll(async () => { await Promise.all(hubs.map((h) => h.stop())); mock.stop(); dirs.forEach(remove); });
 
 const AGENT = join(import.meta.dir, "../../stream-engine/test/fake-agent.ts");
 type Ev = { ev: string; msg?: string; text?: string; id?: string; models?: { id: string; name: string; current?: boolean; handover?: boolean }[]; items?: { k: string; text: string }[]; [k: string]: unknown };
@@ -32,6 +34,7 @@ function open(first: "own" | "prog", extra: Record<string, unknown> = {}, kind?:
     },
   }));
   const hub = createHub({ json: false, yes: false, thinking: false, cwd: work, ...(kind ? { kind } : {}) } as never, fakeIO({ env }).io, { watch: false, import: false });
+  hubs.push(hub);
   const got: Ev[] = [];
   hub.attach({ send: (line) => { got.push(JSON.parse(String(line))); } }, 0);
   const send = (cmd: object): void => hub.command(JSON.stringify(cmd), () => undefined);

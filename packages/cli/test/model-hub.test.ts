@@ -1,12 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import type { Machine } from "../src/machine.ts";
-import { listFiles, rateOf, readRemoteShape, searchModels } from "../src/model-hub.ts";
+import { listFiles, rateOf, readRemoteShape, recommendedModels, searchModels } from "../src/model-hub.ts";
 import { gguf, llama } from "./gguf-builder.ts";
 
 const stops: (() => void)[] = [];
 afterAll(() => { stops.forEach((f) => f()); });
 
-interface Repo { id: string; gated?: boolean | string; downloads?: number; files: { path: string; size: number; lfs?: boolean }[]; header?: Uint8Array }
+interface Repo { id: string; gated?: boolean | string; downloads?: number; files: { path: string; size: number; lfs?: boolean }[]; header?: Uint8Array; template?: string }
 
 /** A hub of a few repositories: a search, the files of each, and the start of a file by Range; it records what it was asked, with which token. */
 function hub(repos: Repo[], o: { remaining?: () => number; status429?: boolean } = {}) {
@@ -20,6 +20,11 @@ function hub(repos: Repo[], o: { remaining?: () => number; status429?: boolean }
       const rate = { "ratelimit": `"${kind}";r=${o.remaining?.() ?? 400};t=200` };
       if (o.status429) return new Response("", { status: 429, headers: { "retry-after": "42" } });
       if (url.pathname === "/api/models") return Response.json(repos.map((r) => ({ id: r.id, gated: r.gated ?? false, downloads: r.downloads ?? 1 })), { headers: rate });
+      const one = /^\/api\/models\/(.+)$/.exec(url.pathname);
+      if (one && !one[1]!.endsWith("/tree/main")) {
+        const r = repos.find((x) => x.id === one[1]);
+        return r ? Response.json({ id: r.id, gated: r.gated ?? false, ...(r.template !== undefined ? { gguf: { chat_template: r.template } } : {}) }, { headers: rate }) : new Response("", { status: 404 });
+      }
       const tree = /^\/api\/models\/(.+)\/tree\/main$/.exec(url.pathname);
       if (tree) {
         const r = repos.find((x) => x.id === tree[1]);
@@ -162,5 +167,28 @@ describe("what the hub says of its limits", () => {
   test("the kind of question, how many are left and the seconds to the reset", () => {
     expect(rateOf(new Response("", { headers: { ratelimit: '"api";r=498;t=83' } }))).toEqual({ kind: "api", remaining: 498, resetSeconds: 83 });
     expect(rateOf(new Response(""))).toBeUndefined();
+  });
+});
+
+describe("the models to start with", () => {
+  const TOOLS = "{%- if tools %}{{ tools }}{%- endif %}";
+  const model = (id: string, extra: Partial<Repo> = {}): Repo => ({ ...small(id), template: TOOLS, ...extra });
+
+  test("only a model whose template handles tools, one file of each (the best-liked quant that fits), the card first and then the order given", async () => {
+    const h = hub([model("a/first", { files: [{ path: "m-Q4_K_M.gguf", size: 30000 * MB }, { path: "m-IQ2_XS.gguf", size: 9000 * MB }] }), model("a/second"), model("a/talker", { template: "{{ messages }}" }), model("a/unsaid", { template: undefined })]);
+    const found = await recommendedModels(fetch, h, ["a/first", "a/second", "a/talker", "a/unsaid", "a/missing"], { window: 8192, machine: withCard });
+    expect(found.items.map((i) => [i.repo, i.quant, i.fit, i.tools])).toEqual([["a/first", "IQ2_XS", "gpu", true], ["a/second", "Q4_K_M", "gpu", true]]);
+    expect(found.notes).toEqual(["a/missing: The model hub answered 404."]);
+    const small8: Machine = { ...withCard, gpus: [{ ...withCard.gpus[0]!, memoryMb: 8000, freeMb: 8000 }] };
+    const ranked = await recommendedModels(fetch, h, ["a/first", "a/second"], { window: 8192, machine: small8 });
+    expect(ranked.items.map((i) => [i.repo, i.fit])).toEqual([["a/second", "gpu"], ["a/first", "ram"]]);
+  });
+
+  test("nothing that does not fit is offered, and the list is no longer than asked", async () => {
+    const big = model("a/big", { files: [{ path: "m-Q4_K_M.gguf", size: 60000 * MB }] });
+    expect((await recommendedModels(fetch, hub([big]), ["a/big"], { window: 8192, machine: laptop })).items).toEqual([]);
+    const many = ["a/1", "a/2", "a/3", "a/4", "a/5"].map((id) => model(id));
+    const found = await recommendedModels(fetch, hub(many), many.map((m) => m.id), { window: 8192, machine: withCard, limit: 4 });
+    expect(found.items.map((i) => i.repo)).toEqual(["a/1", "a/2", "a/3", "a/4"]);
   });
 });

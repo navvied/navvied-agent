@@ -40,6 +40,17 @@ function endpointAddress(raw: Obj): { value: { baseUrl: string; api: "auto" | "c
   if (raw.api !== "auto" && raw.api !== "chat" && raw.api !== "responses" && raw.api !== "messages" && raw.api !== "ollama") return { error: "api must be auto, chat, responses, messages or ollama" };
   return { value: { baseUrl: raw.baseUrl, api: raw.api } };
 }
+/** An address a provider may be reached at when the person sets one: https, or http for this computer only; no name or password in it, no fragment. */
+export function isBaseAddress(v: string): boolean {
+  if (v.length > 2048) return false;
+  try {
+    const u = new URL(v);
+    if (u.username || u.password || u.hash) return false;
+    const loopback = u.hostname === "localhost" || u.hostname === "127.0.0.1" || u.hostname === "[::1]";
+    return u.protocol === "https:" || (u.protocol === "http:" && loopback);
+  } catch { return false; }
+}
+
 const isName = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,40}$/.test(v);
 const isId = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= LIMITS.id;
 
@@ -150,7 +161,10 @@ function validateOne(raw: unknown): Result<Command> {
       if (typeof raw.file !== "string" || !raw.file || raw.file.length > 300 || !/\.gguf$/i.test(raw.file) || raw.file.split("/").some((b: string) => !b || b === "." || b === "..") || /[\\\0]/.test(raw.file)) return fail(`${raw.cmd}.file must be the path of a .gguf file in the repository`);
       return ok({ cmd: raw.cmd, repo: raw.repo, file: raw.file });
     }
-    case "local.runtime": case "local.runtime.install": case "local.runtime.cancel": return ok({ cmd: raw.cmd });
+    case "local.runtime": case "local.runtime.install": case "local.runtime.cancel": case "local.runtime.remove": return ok({ cmd: raw.cmd });
+    case "local.recommended":
+      if (raw.window !== undefined && !(typeof raw.window === "number" && Number.isInteger(raw.window) && raw.window >= 1024 && raw.window <= 1_048_576)) return fail("local.recommended.window must be a whole number from 1024 to 1048576");
+      return ok({ cmd: "local.recommended", ...(raw.window !== undefined ? { window: raw.window as number } : {}) });
     case "local.search":
       if (typeof raw.query !== "string" || !raw.query.trim() || raw.query.length > 200) return fail("local.search.query must be words of at most 200 characters");
       if (raw.window !== undefined && !(typeof raw.window === "number" && Number.isInteger(raw.window) && raw.window >= 1024 && raw.window <= 1_048_576)) return fail("local.search.window must be a whole number from 1024 to 1048576");
@@ -197,6 +211,7 @@ function validateOne(raw: unknown): Result<Command> {
       if (!isName(raw.id)) return fail("provider.save needs the id of a provider");
       if (raw.key !== undefined && (typeof raw.key !== "string" || !raw.key || raw.key.length > 4096 || /\s/.test(raw.key))) return fail("provider.save.key must be a key of at most 4096 characters, without spaces");
       if (raw.region !== undefined && !isName(raw.region)) return fail("provider.save.region must be the id of a region");
+      if (raw.base !== undefined && !(typeof raw.base === "string" && (raw.base === "" || isBaseAddress(raw.base)))) return fail("provider.save.base must be an https address, or an http address of this computer, without a name or password in it (empty takes it away)");
       let fields: Record<string, string> | undefined;
       if (raw.fields !== undefined) {
         if (!isObj(raw.fields) || Object.keys(raw.fields).length > 12) return fail("provider.save.fields must be an object of at most 12 fields");
@@ -206,7 +221,7 @@ function validateOne(raw: unknown): Result<Command> {
           fields[k] = v;
         }
       }
-      return ok({ cmd: "provider.save", id: raw.id, ...(raw.key !== undefined ? { key: raw.key } : {}), ...(raw.region !== undefined ? { region: raw.region } : {}), ...(fields ? { fields } : {}) });
+      return ok({ cmd: "provider.save", id: raw.id, ...(raw.key !== undefined ? { key: raw.key } : {}), ...(raw.region !== undefined ? { region: raw.region } : {}), ...(raw.base !== undefined ? { base: raw.base } : {}), ...(fields ? { fields } : {}) });
     }
     case "tools": return ok({ cmd: "tools" });
     case "drafts": return ok({ cmd: "drafts" });

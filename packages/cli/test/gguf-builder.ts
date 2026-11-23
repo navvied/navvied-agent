@@ -19,7 +19,7 @@ export function gguf(kvs: [string, Value][], version = 3): Uint8Array {
 }
 
 /** The keys of a model of the usual kind (llama-like), then the long tokenizer ones. */
-export function llama(o: { layers?: number; heads?: number; kvHeads?: number | number[]; embed?: number; context?: number; keyLength?: number; tokens?: number } = {}): Uint8Array {
+export function llama(o: { layers?: number; heads?: number; kvHeads?: number | number[]; embed?: number; context?: number; keyLength?: number; tokens?: number; template?: string } = {}): Uint8Array {
   const layers = o.layers ?? 32, heads = o.heads ?? 32;
   const kv: [string, Value][] = [
     ["general.architecture", { t: "str", v: "llama" }],
@@ -32,6 +32,7 @@ export function llama(o: { layers?: number; heads?: number; kvHeads?: number | n
     ...(o.keyLength ? ([["llama.attention.key_length", { t: "u32", v: o.keyLength }], ["llama.attention.value_length", { t: "u32", v: o.keyLength }]] as [string, Value][]) : []),
     ["tokenizer.ggml.model", { t: "str", v: "gpt2" }],
     ["tokenizer.ggml.tokens", { t: "strs", v: Array.from({ length: o.tokens ?? 50 }, (_, i) => `tok${i}`) }],
+    ...(o.template !== undefined ? ([["tokenizer.chat_template", { t: "str", v: o.template }]] as [string, Value][]) : []),
   ];
   return gguf(kv);
 }

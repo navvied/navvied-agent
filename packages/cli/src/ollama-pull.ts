@@ -3,7 +3,7 @@
  * checked here. Progress is the sum of its layers (`digest`, `total`, `completed` on each line of the stream); stopping closes the request, and Ollama takes up the
  * layers that were fetched at the next pull.
  */
-export type OllamaState = { state: "missing" } | { state: "ready"; baseUrl: string; version: string; models: string[] };
+export type OllamaState = { state: "missing" } | { state: "ready"; baseUrl: string; version: string; models: { name: string; tools?: boolean }[] };
 export type OllamaPullState = { state: "downloading" | "verifying"; bytes: number; total: number } | { state: "done" } | { state: "failed"; error: string } | { state: "idle" };
 
 /** Where Ollama listens: what its own `OLLAMA_HOST` says (a bare host or port is allowed), else the port it starts on. Always an address on this computer. */
@@ -24,8 +24,18 @@ export async function askOllama(fetchFn: typeof fetch, root: string): Promise<Ol
     if (typeof version !== "string") return { state: "missing" };
     const t = await fetchFn(`${root}/api/tags`, { signal: AbortSignal.timeout(5000) }).catch(() => undefined);
     const tags = t?.ok ? ((await t.json().catch(() => ({}))) as { models?: { name?: unknown }[] }).models : undefined;
-    return { state: "ready", baseUrl: root, version, models: (Array.isArray(tags) ? tags : []).flatMap((m) => (typeof m?.name === "string" ? [m.name] : [])).sort() };
+    const names = (Array.isArray(tags) ? tags : []).flatMap((m) => (typeof m?.name === "string" ? [m.name] : [])).sort();
+    return { state: "ready", baseUrl: root, version, models: await Promise.all(names.map(async (name) => { const tools = await takesTools(fetchFn, root, name); return { name, ...(tools !== undefined ? { tools } : {}) }; })) };
   } catch { return { state: "missing" }; }
+}
+
+/** What Ollama says the model can do (`capabilities` of `/api/show`, in the versions that have it): whether `tools` is among them. A server that does not say, says nothing. */
+async function takesTools(fetchFn: typeof fetch, root: string, model: string): Promise<boolean | undefined> {
+  try {
+    const res = await fetchFn(`${root}/api/show`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model }), signal: AbortSignal.timeout(5000) });
+    const caps = res.ok ? ((await res.json().catch(() => ({}))) as { capabilities?: unknown }).capabilities : undefined;
+    return Array.isArray(caps) ? caps.includes("tools") : undefined;
+  } catch { return undefined; }
 }
 
 export async function pullOllama(o: { fetchFn: typeof fetch; root: string; model: string; signal: AbortSignal; onState(s: OllamaPullState): void }): Promise<{ ok: true } | { ok: false; why: "cancelled" | "failed" }> {

@@ -12,7 +12,9 @@ import { fakeIO, remove, tempDir, until } from "./helpers.ts";
 
 const dirs: string[] = [];
 const stops: (() => void)[] = [];
-afterAll(() => { dirs.forEach(remove); stops.forEach((f) => f()); });
+/** Every hub made here is stopped before its folders are removed: a hub that is still running holds its engines, their programs and their folders (Windows will not remove a folder that something still has open). */
+const hubs: { stop(): Promise<void> }[] = [];
+afterAll(async () => { await Promise.all(hubs.map((h) => h.stop())); dirs.forEach(remove); stops.forEach((f) => f()); });
 
 /** A server of the person's own: a list of models, and a chat endpoint that records the key each request carried. */
 function server(models: unknown[] = [{ id: "alpha", context_length: 32768 }, { id: "beta", max_model_len: 8192 }, { id: "gamma" }]) {
@@ -43,6 +45,7 @@ function computer(cloud: false | "config" | "flag" = false) {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify({ models: { own: { baseUrl: "http://127.0.0.1:1/v1", model: "x", apiKey: "sk-own", window: 1000 } }, ...(cloud === "config" ? { webProxy: { url: "http://127.0.0.1:1/v1/web", token: "t" } } : {}) }));
   const hub = createHub({ json: false, yes: false, thinking: false, cwd: work, ...(cloud === "flag" ? { sandboxed: true } : {}) } as never, fakeIO({ env }).io, { watch: false, import: false });
+  hubs.push(hub);
   const got: { ev: string; msg?: string; items?: unknown[] }[] = [];
   hub.attach({ send: (line) => { got.push(JSON.parse(String(line))); } }, 0);
   const send = (cmd: object): void => hub.command(JSON.stringify(cmd), () => undefined);

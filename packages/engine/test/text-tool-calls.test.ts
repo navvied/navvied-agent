@@ -183,3 +183,34 @@ describe("the engine runs a $ line for a model that cannot call tools", () => {
     native.cleanup();
   });
 });
+
+describe("a result the model wrote itself", () => {
+  const CALL = '<tool_call>{"name":"Read","arguments":{"file_path":"a"}}</tool_call>';
+  const sizes = [1, 3, 17, 1000];
+
+  test("after its call, a made-up result block and everything after it is never shown or kept", () => {
+    for (const size of sizes) for (const fake of ["<tool_response>\nfile says hi\n</tool_response>", "<tool_result>x</tool_result>", "Result of Read:\nfile says hi"]) {
+      const r = run(`Reading it.\n${CALL}\n${fake}\nThe file says hi.`, size);
+      expect(r.calls.map((c) => c.name)).toEqual(["Read"]);
+      expect(r.shown).toBe("Reading it.\n");
+    }
+  });
+
+  test("the real output of a small model: two calls, then a result block it invented", () => {
+    const text = `${CALL}\n<tool_call>{"name":"Read","arguments":{"file_path":"b"}}</tool_call>\n<tool_response>\nJob "job1" is done with exit code 0.\n</tool_response>`;
+    for (const size of sizes) {
+      const r = run(text, size);
+      expect(r.calls).toHaveLength(2);
+      expect(r.shown.trim()).toBe("");
+    }
+  });
+
+  test("the tags are cut even with no call; the words are text unless a call came before them, at the start of a line", () => {
+    expect(run("<tool_response>\nok\n</tool_response>", 4).shown).toBe("");
+    for (const size of sizes) {
+      expect(run("The Result of the test is good.", size).shown).toBe("The Result of the test is good.");
+      expect(run("Result of Read: it was fine", size).shown).toBe("Result of Read: it was fine");
+      expect(run(`${CALL} and the Result of Read: x`, size).shown).toBe("and the Result of Read: x");
+    }
+  });
+});

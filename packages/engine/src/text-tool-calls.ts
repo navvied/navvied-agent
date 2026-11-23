@@ -3,7 +3,7 @@ import type { ToolCall } from "./types.ts";
 
 type Schema = { properties?: Record<string, { type?: string }> };
 
-const MARKERS = ["<tool_call>", "<function=", "</tool_call>", "```"];
+const MARKERS = ["<tool_call>", "<function=", "</tool_call>", "```", "<tool_response>", "<tool_result>", "Result of "];
 const CLOSER = { tool_call: "</tool_call>", function: "</function>", fence: "```" } as const;
 
 /** What a model's server did not turn into a call: it wrote the call out as text, so the text is turned into a call here. */
@@ -21,11 +21,14 @@ export class TextToolCalls {
   /** The reply began with `{`: it is held to the end, because a reply that is nothing but one JSON object may be a call written out bare. */
   #bare = false;
   #started = false;
+  /** The model went on to write the result of its own call: nothing of it is shown or kept, and nothing after it. */
+  #cut = false;
 
   constructor(private readonly schemas: Record<string, Schema>, private readonly idPrefix: string) {}
 
   /** Takes the next piece of the reply and returns the part that is safe to show now. */
   push(piece: string): string {
+    if (this.#cut) return "";
     this.#held += piece;
     // The first word of a reply says whether it may be a call written bare, so nothing is shown before it is there.
     if (!this.#started) {
@@ -75,6 +78,24 @@ export class TextToolCalls {
         out += "```";
         this.#held = this.#held.slice(3);
         continue;
+      }
+      if (found && (found.m === "<tool_response>" || found.m === "<tool_result>" || found.m === "Result of ")) {
+        // The result of a call is the program's to give, so a model that writes one has made it up: it is cut here, with everything after it. The tags are never anything
+        // else; the words "Result of <tool>:" at the start of a line are cut only after a call of this reply (they are how the program itself gives a result back).
+        const rest = this.#held.slice(found.at);
+        const words = found.m === "Result of ";
+        const before = found.at > 0 ? this.#held[found.at - 1] : (out + this.shown).slice(-1);
+        if (words && !(this.calls.length && (before === "" || before === "\n"))) { out += this.#held.slice(0, found.at + found.m.length); this.#held = this.#held.slice(found.at + found.m.length); continue; }
+        if (words && !/^Result of [A-Za-z]+:/.test(rest)) {
+          if (/^Result of [A-Za-z]*$/.test(rest)) { out += this.#held.slice(0, found.at); this.#held = rest; break; }
+          out += this.#held.slice(0, found.at + found.m.length);
+          this.#held = this.#held.slice(found.at + found.m.length);
+          continue;
+        }
+        out += this.#held.slice(0, found.at).trimEnd();
+        this.#held = "";
+        this.#cut = true;
+        break;
       }
       if (found) {
         out += this.#held.slice(0, found.at);

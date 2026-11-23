@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { dirname, join } from "node:path";
 import { createHub } from "../src/commands/hub.ts";
 import { configPath, loadConfig, resolveModel } from "../src/config.ts";
+import { validateCommand } from "@navvied/protocol";
 import { PROVIDERS } from "../src/presets.ts";
 import { redact } from "../../engine/src/redact.ts";
 import { secretsOf } from "../src/create.ts";
@@ -10,7 +11,9 @@ import { baseOf, headersOf, listModels, mergeSaved, modelEntryOf, reportOf, save
 import { fakeIO, remove, tempDir, until } from "./helpers.ts";
 
 const dirs: string[] = [];
-afterAll(() => { dirs.forEach(remove); });
+/** Every hub made here is stopped before its folders are removed: a hub that is still running holds its engines, their programs and their folders (Windows will not remove a folder that something still has open). */
+const hubs: { stop(): Promise<void> }[] = [];
+afterAll(async () => { await Promise.all(hubs.map((h) => h.stop())); dirs.forEach(remove); });
 const entry = (id: string): ProviderEntry => PROVIDERS.find((p) => p.id === id)!;
 /** A provider with a field that is sent as a header (an organisation) and one that is not. */
 const withOrg = PROVIDERS.find((p) => p.fields?.some((f) => f.id === "org" && f.header) && p.fields.some((f) => f.id === "project"))!;
@@ -93,6 +96,7 @@ function computer(cloud: false | "config" | "flag" = false, fetchFn?: typeof fet
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify({ models: { m: { baseUrl: "http://127.0.0.1:1/v1", model: "x", apiKey: "k", window: 1000 } }, ...(cloud === "config" ? { webProxy: { url: "http://127.0.0.1:1/v1/web", token: "t" } } : {}) }));
   const hub = createHub({ json: false, yes: false, thinking: false, cwd: work, ...(cloud === "flag" ? { sandboxed: true } : {}) } as never, fakeIO({ env, fetch: fetchFn ?? listing }).io, { watch: false, import: false });
+  hubs.push(hub);
   const got: { ev: string; msg?: string; items?: unknown[]; models?: string[]; id?: string }[] = [];
   hub.attach({ send: (line) => { got.push(JSON.parse(String(line))); } }, 0);
   const send = (cmd: object): void => hub.command(JSON.stringify(cmd), () => undefined);
@@ -487,5 +491,34 @@ describe("what is hidden in every output", () => {
 describe("what the provider itself never printed is marked", () => {
   test("only these four rest on what widely used open tools ship", () => {
     expect(PROVIDERS.filter((p) => p.evidence).map((p) => p.id)).toEqual(["tokenplan", "minimax-plan", "alibaba-coding", "alibaba-token"]);
+  });
+});
+
+describe("an address the person sets instead of the provider's own", () => {
+  const GATEWAY = "https://gateway.example.com/proxy/v1";
+
+  test("only https, or http for this computer, with no name or password in it; empty takes it away", () => {
+    for (const base of [GATEWAY, "http://localhost:8080/v1", "http://127.0.0.1:4000", "http://[::1]:1/v1", ""]) expect(validateCommand({ cmd: "provider.save", id: "deepseek", base }).ok).toBe(true);
+    for (const base of ["http://gateway.example.com/v1", "ftp://x/v1", "https://user:pw@gateway.example.com/v1", "https://x/v1#frag", "not an address", "https://" + "a".repeat(2100), 3]) expect(validateCommand({ cmd: "provider.save", id: "deepseek", base }).ok).toBe(false);
+  });
+
+  test("it replaces the address and the region choice wherever the model is made, and the others keep the key", () => {
+    expect(baseOf(entry("kimi"), { key: "k", region: "cn", base: GATEWAY })).toEqual({ base: GATEWAY });
+    expect(baseOf(entry("kimi"), { key: "k", base: GATEWAY })).toEqual({ base: GATEWAY });
+    expect((modelEntryOf(entry("deepseek"), { key: "k", base: GATEWAY }, "m", { api: "chat", base: "https://other.example.com/v1" }) as { entry: { baseUrl: string } }).entry.baseUrl).toBe(GATEWAY);
+    expect(reportOf([entry("deepseek")], { deepseek: { key: "k", base: GATEWAY } })).toEqual([{ id: "deepseek", key: true, base: GATEWAY }]);
+  });
+
+  test("saved with the command: the new key is tried at the overridden address, it is in the report, and an empty value takes it away", async () => {
+    const seen: string[] = [];
+    const c = computer(false, (async (url: string | URL | Request) => { seen.push(String(url)); return new Response(JSON.stringify({ data: [{ id: "m1" }] }), { headers: { "content-type": "application/json" } }); }) as unknown as typeof fetch);
+    c.send({ cmd: "provider.save", id: "deepseek", key: "sk-gw", base: GATEWAY });
+    await until(() => c.said("providers").length === 1);
+    expect(seen).toEqual([`${GATEWAY}/models`]);
+    expect(keyed(c.said("providers")[0]!.items)).toEqual([{ id: "deepseek", key: true, base: GATEWAY }]);
+    expect(JSON.parse(readFileSync(c.file, "utf8")).providers.deepseek).toEqual({ key: "sk-gw", base: GATEWAY });
+    c.send({ cmd: "provider.save", id: "deepseek", base: "" });
+    await until(() => c.said("providers").length === 2);
+    expect(JSON.parse(readFileSync(c.file, "utf8")).providers.deepseek).toEqual({ key: "sk-gw" });
   });
 });

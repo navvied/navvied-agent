@@ -130,7 +130,7 @@ export interface TerminalUseCommand { cmd: "terminal.use"; backend: "local" | "d
 /** Ask for the providers whose keys can be saved on this computer, and which have one (answered with `providers`). */
 export interface ProvidersCommand { cmd: "providers" }
 /** Save what a provider needs on this computer: its key (sent once, never sent back), the region, and the other fields it asks for. A key left out keeps the one already saved. */
-export interface ProviderSaveCommand { cmd: "provider.save"; id: string; key?: string; region?: string; fields?: Record<string, string> }
+export interface ProviderSaveCommand { cmd: "provider.save"; id: string; key?: string; region?: string; /** Another address for the provider (a gateway or proxy of the person): https, or http for this computer only; empty takes it away. It replaces the provider's own address, whatever region is chosen. */ base?: string; fields?: Record<string, string> }
 /** Ask a provider, with what is saved for it, which models it has (answered with `provider.models`). */
 export interface ProviderModelsCommand { cmd: "provider.models"; id: string }
 /** Go on with one of the models of a provider, with what is saved for it: the conversation is handed over to it as for any other model. */
@@ -150,10 +150,12 @@ export interface MachineCommand { cmd: "machine" }
 /** Search the model hub for models that can be run here: GGUF files that match the words, each with where it runs on this computer at the context `window` (default 32768). A token for models that need a licence is the one saved for its provider. */
 export interface LocalSearchCommand { cmd: "local.search"; query: string; window?: number }
 /** The runtime that runs models here: its state (answered with `local.runtime`), fetching it, and stopping that (what was fetched is taken away). */
-export interface LocalRuntimeCommand { cmd: "local.runtime" | "local.runtime.install" | "local.runtime.cancel" }
+export interface LocalRuntimeCommand { cmd: "local.runtime" | "local.runtime.install" | "local.runtime.cancel" | "local.runtime.remove" }
 /** A model file on this computer: fetched, paused, cancelled (what was fetched is taken away) or removed (with the file). Fetching goes on from where it stopped. `local.models` lists what is there and what is being fetched. */
 export interface LocalFileCommand { cmd: "local.pull" | "local.pause" | "local.cancel" | "local.remove"; repo: string; file: string }
 /** Run a model that is on this computer with the program's own model server (its context defaults to the largest that fits, up to 32768), or stop the one that runs. */
+/** A short list of models to start with: small coding models that handle tools and fit this computer, best first (answered with `local.found` flagged `recommended`). */
+export interface LocalRecommendedCommand { cmd: "local.recommended"; window?: number }
 export interface LocalRunCommand { cmd: "local.run"; repo: string; file: string; window?: number }
 export interface LocalStopCommand { cmd: "local.stop" }
 export interface LocalModelsCommand { cmd: "local.models" }
@@ -175,7 +177,7 @@ export interface PinCommand { cmd: "pin"; id: string; pinned: boolean }
 export interface RestoreCommand { cmd: "restore"; id: string; preview?: boolean }
 
 /** Every command may say which kind of conversation it is for. */
-export type Command = (ProvidersCommand | LocalRunCommand | LocalStopCommand | LocalFileCommand | LocalModelsCommand | LocalOllamaCommand | LocalOllamaPullCommand | LocalRuntimeCommand | LocalSearchCommand | MachineCommand | EndpointsCommand | EndpointSaveCommand | EndpointRemoveCommand | EndpointModelsCommand | ProviderModelsCommand | ProviderUseCommand | ProviderSaveCommand | ProviderRemoveCommand | PromptCommand | CancelCommand | ApproveCommand | CompactCommand | ModelCommand | EffortCommand | LoadCommand | SessionsCommand | SearchCommand | CheckpointsCommand | RestoreCommand | JobStopCommand | NewCommand | RenameCommand | RemoveCommand | PinCommand | ImportCommand | TransferCommand | ForkCommand | ArchiveCommand | MarkCommand | ReceiveCommand | SchedulesCommand | ScheduleAddCommand | ScheduleUpdateCommand | ScheduleRemoveCommand | ScheduleRunCommand | PluginsCommand | PluginToggleCommand | DraftCommand | DraftsCommand | ToolsCommand | ToolToggleCommand | TerminalUseCommand | ArtifactsCommand | ArtifactReadCommand) & { kind?: SessionKind };
+export type Command = (ProvidersCommand | LocalRunCommand | LocalStopCommand | LocalFileCommand | LocalModelsCommand | LocalRecommendedCommand | LocalOllamaCommand | LocalOllamaPullCommand | LocalRuntimeCommand | LocalSearchCommand | MachineCommand | EndpointsCommand | EndpointSaveCommand | EndpointRemoveCommand | EndpointModelsCommand | ProviderModelsCommand | ProviderUseCommand | ProviderSaveCommand | ProviderRemoveCommand | PromptCommand | CancelCommand | ApproveCommand | CompactCommand | ModelCommand | EffortCommand | LoadCommand | SessionsCommand | SearchCommand | CheckpointsCommand | RestoreCommand | JobStopCommand | NewCommand | RenameCommand | RemoveCommand | PinCommand | ImportCommand | TransferCommand | ForkCommand | ArchiveCommand | MarkCommand | ReceiveCommand | SchedulesCommand | ScheduleAddCommand | ScheduleUpdateCommand | ScheduleRemoveCommand | ScheduleRunCommand | PluginsCommand | PluginToggleCommand | DraftCommand | DraftsCommand | ToolsCommand | ToolToggleCommand | TerminalUseCommand | ArtifactsCommand | ArtifactReadCommand) & { kind?: SessionKind };
 /** What this computer is, as far as it could be read: a card or a number that could not be read is not there, never a guess. */
 export interface MachineInfo {
   os: "linux" | "wsl" | "macos" | "windows" | "unknown";
@@ -186,9 +188,9 @@ export interface MachineInfo {
   disk?: { path: string; freeMb: number; totalMb: number };
 }
 /** One model file the hub offers: `fit` says where it runs on this computer (`gpu`: all in the card, `ram`: it needs the computer\'s memory, `none`: neither has room), absent when the file\'s header could not be read. */
-export interface LocalFile { repo: string; /** The page of the model on the hub: where a licence is read and accepted by the person, never for them. */ page: string; file: string; quant: string; sizeMb: number; parts: number; gated: boolean; fit?: "gpu" | "ram" | "none"; needMb?: number; gpuLayers?: number; window?: number }
+export interface LocalFile { repo: string; /** The page of the model on the hub: where a licence is read and accepted by the person, never for them. */ page: string; file: string; quant: string; sizeMb: number; parts: number; gated: boolean; /** Whether the chat template of the model handles tools (a model that does not can only talk in the agent): left out when it is not known. */ tools?: boolean; fit?: "gpu" | "ram" | "none"; needMb?: number; gpuLayers?: number; window?: number }
 export interface EndpointSaved { id: string; name: string; baseUrl: string; api: "chat" | "responses" | "messages" | "ollama"; /** Whether a key is saved: it is never sent back. */ key: boolean; models: EndpointModel[] }
-export interface ProviderSaved { id: string; key: boolean; /** A provider that signs in with a credential file of the computer: whether one was found now (its path and contents are never said). */ credential?: boolean; region?: string; fields?: Record<string, string> }
+export interface ProviderSaved { id: string; key: boolean; /** The address the person set instead of the provider's own. */ base?: string; /** A provider that signs in with a credential file of the computer: whether one was found now (its path and contents are never said). */ credential?: boolean; region?: string; fields?: Record<string, string> }
 export type CommandName = Command["cmd"];
 
 /* ── engine → front-end ─────────────────────────────────────────────────────────────────────────────────────── */
@@ -238,6 +240,8 @@ export interface ModelInfo {
   handover?: true;
   /** Whether this model takes file attachments from whoever is asking. Left out means yes. */
   files?: boolean;
+  /** Whether the model handles tools, read from its own chat template; left out when that is not known. A model that does not can only talk. */
+  tools?: boolean;
   /** An administrator has turned this model off. Shown to everyone, dimmed and not clickable, except to an administrator, who may still pick it. Left out means on. */
   enabled?: boolean;
   /** Who reaches it: a short id the models file gives each backend (the local computer is one), so the picker can group models into sections. Never a vendor's own name: that only ever lives in the deployed, never-committed models file. */
@@ -323,15 +327,15 @@ type EngineEventBody =
   /** The answer to `machine`. */
   | ({ ev: "machine" } & MachineInfo)
   /** The answer to `local.search`: files that match, those that run best here first; `notes` says what was left out and why (a rate limit, a repository that could not be read). */
-  | { ev: "local.found"; items: LocalFile[]; notes?: string[] }
+  | { ev: "local.found"; items: LocalFile[]; notes?: string[]; /** The answer to `local.recommended`, not to a search. */ recommended?: true }
   /** The state of the runtime that runs models here: `none` (not fetched), `installing` (`file`, `bytes` of `total`), `verifying`, `failed` (`error`, in words), `ready` (`backend`: the build for this computer's card or processor). `version` is the release it is pinned to. */
   /** The state of one model file: `downloading` (`bytes` of `total`), `paused`, `nodisk` (`error` says how much is needed), `failed`, `done`, `running` (the program's own model server runs it) or `idle` (nothing of it is here). */
   | { ev: "local.file"; repo: string; file: string; state: "idle" | "downloading" | "paused" | "nodisk" | "done" | "running" | "failed"; bytes?: number; total?: number; error?: string }
   /** The model files on this computer and the ones being fetched. */
-  | { ev: "local.installed"; items: { repo: string; file: string; quant: string; sizeMb: number; state: "done" | "running" | "downloading" | "paused" | "nodisk" | "failed"; bytes?: number; total?: number; error?: string }[] }
+  | { ev: "local.installed"; items: { repo: string; file: string; quant: string; sizeMb: number; /** Whether the chat template inside the file handles tools: left out when the file does not say. */ tools?: boolean; state: "done" | "running" | "downloading" | "paused" | "nodisk" | "failed"; bytes?: number; total?: number; error?: string }[] }
   /** The model server of this computer: `starting`, `running` (`window` is the context it was started with, `layers` how many went to the card), `stopped`, or `failed` (`error`, in words). One model runs at a time; while it runs its model is in the list of models. */
   /** Ollama on this computer: `missing` (it does not answer), or `ready` with the address it listens on, its version and the models it keeps. */
-  | { ev: "local.ollama"; state: "missing" | "ready"; baseUrl?: string; version?: string; models?: string[] }
+  | { ev: "local.ollama"; state: "missing" | "ready"; baseUrl?: string; version?: string; models?: { name: string; /** Whether Ollama says the model takes tools (its `capabilities`): left out when it does not say. */ tools?: boolean }[] }
   /** One model being fetched through Ollama: `downloading` (`bytes` of `total`, summed over its layers), `verifying`, `done` (it is in Ollama's list), `failed` (`error`, in words) or `idle` (stopped). */
   | { ev: "local.ollama.model"; model: string; state: "downloading" | "verifying" | "done" | "failed" | "idle"; bytes?: number; total?: number; error?: string }
   | { ev: "local.server"; state: "starting" | "running" | "stopped" | "failed"; repo?: string; file?: string; window?: number; layers?: number; error?: string }

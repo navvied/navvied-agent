@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import { validateCommand } from "@navvied/protocol";
 import { createHub } from "../src/commands/hub.ts";
 import { configPath } from "../src/config.ts";
-import { MODEL_HUB } from "../src/presets.ts";
+import { MODEL_HUB, RECOMMENDED_MODELS } from "../src/presets.ts";
 import { fakeIO, remove, tempDir, until } from "./helpers.ts";
 import { llama } from "./gguf-builder.ts";
 
@@ -21,7 +21,7 @@ function computer(o: { cloud?: false | "flag" | "config"; token?: string } = {})
     asked.push({ url: u, auth });
     if (!u.startsWith(MODEL_HUB.base)) return new Response("", { status: 404 });
     const path = u.slice(MODEL_HUB.base.length);
-    if (path.startsWith("/api/models?")) return Response.json([{ id: "org/tiny", gated: false, downloads: 9 }, { id: "org/locked", gated: "manual", downloads: 3 }]);
+    if (path.startsWith("/api/models?")) return Response.json([{ id: "org/tiny", gated: false, downloads: 9, gguf: { chat_template: "{% if tools %}x{% endif %}" } }, { id: "org/locked", gated: "manual", downloads: 3, gguf: { chat_template: "{{ messages }}" } }]);
     if (path === "/api/models/org/tiny/tree/main") return Response.json([{ type: "file", path: "tiny-Q4_K_M.gguf", size: 134, lfs: { oid: "abc", size: 300 * MB } }]);
     if (path === "/api/models/org/locked/tree/main") return auth ? Response.json([{ type: "file", path: "locked-Q4_K_M.gguf", size: 134, lfs: { oid: "def", size: 400 * MB } }]) : new Response("", { status: 401 });
     if (path.includes("/resolve/main/")) return new Response(llama({ layers: 4, embed: 512, heads: 8, kvHeads: 2 }).slice(0, 4096), { status: 206 });
@@ -56,10 +56,11 @@ describe("a search through the hub", () => {
     await until(() => c.got.some((e) => e.ev === "local.found"));
     const found = c.got.find((e) => e.ev === "local.found")!;
     expect(found.items).toHaveLength(1);
-    expect(found.items![0]).toMatchObject({ repo: "org/tiny", page: `${MODEL_HUB.base}/org/tiny`, file: "tiny-Q4_K_M.gguf", quant: "Q4_K_M", sizeMb: 300, parts: 1, gated: false, window: 32768 });
+    expect(found.items![0]).toMatchObject({ repo: "org/tiny", page: `${MODEL_HUB.base}/org/tiny`, file: "tiny-Q4_K_M.gguf", quant: "Q4_K_M", sizeMb: 300, parts: 1, gated: false, window: 32768, tools: true });
     expect(["gpu", "ram", "none"]).toContain(found.items![0]!.fit as string);
     expect(found.notes).toEqual(["org/locked: This model needs the licence accepted on its page, and a token."]);
     expect(c.asked[0]!.url).toContain("search=tiny");
+    expect(c.asked[0]!.url).toContain("expand[]=gguf");
     expect(c.asked.every((a) => a.auth === null)).toBe(true);
   });
 
@@ -69,9 +70,21 @@ describe("a search through the hub", () => {
     await until(() => c.got.some((e) => e.ev === "local.found"));
     const found = c.got.find((e) => e.ev === "local.found")!;
     expect(found.items!.map((i) => i.repo)).toContain("org/locked");
-    expect(found.items!.find((i) => i.repo === "org/locked")).toMatchObject({ gated: true, window: 8192 });
+    expect(found.items!.find((i) => i.repo === "org/locked")).toMatchObject({ gated: true, window: 8192, tools: false });
+    expect(found.items!.find((i) => i.repo === "org/tiny")).toMatchObject({ tools: true });
     expect(c.asked.every((a) => a.url.startsWith(MODEL_HUB.base) && a.auth === "Bearer hf-token-1")).toBe(true);
     expect(JSON.stringify(c.got)).not.toContain("hf-token-1");
+  });
+
+  test("the models to start with are asked from the repositories of the program's own list, and the answer says it is that", async () => {
+    const c = computer();
+    c.send({ cmd: "local.recommended", window: 8192 });
+    await until(() => c.got.some((e) => e.ev === "local.found"));
+    const found = c.got.find((e) => e.ev === "local.found") as { items: unknown[]; notes: string[]; recommended?: boolean };
+    expect(found.recommended).toBe(true);
+    expect(found.items).toEqual([]);
+    expect(found.notes).toHaveLength(RECOMMENDED_MODELS.length);
+    expect(c.asked.map((a) => a.url).sort()).toEqual(RECOMMENDED_MODELS.map((m) => `${MODEL_HUB.base}/api/models/${m.repo}`).sort());
   });
 
   test("in Navvied Cloud it is refused and the hub is not asked", async () => {

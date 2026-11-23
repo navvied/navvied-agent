@@ -133,7 +133,7 @@ export async function installRuntime(i: InstallInput): Promise<{ ok: true; binar
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   for (const f of files) {
-    const un = await i.run(["tar", "-xf", join(staging, f.file), "-C", dir], 600_000);
+    const un = await i.run([tarProgram(i.platform, process.env), "-xf", join(staging, f.file), "-C", dir], 600_000);
     if (un.code !== 0) { rmSync(dir, { recursive: true, force: true }); return fail("The downloaded file could not be unpacked."); }
   }
   for (const f of files) rmSync(join(staging, f.file), { force: true });
@@ -157,3 +157,14 @@ export function runtimeState(local: string, pin: RuntimePin, m: Machine, rules: 
   return binary ? { state: "ready", tag: pin.tag, backend: asset.backend, binary, asset } : { state: "none", asset };
 }
 
+
+/**
+ * The program that unpacks an archive. On Windows it is the one the system brings (`System32\tar.exe`, which reads zip and tar files alike), never the first `tar` of the
+ * path: a computer with Git installed has a tar of another kind there, which takes `D:\folder\file` for a file on a computer called `D`.
+ */
+export const tarProgram = (platform: NodeJS.Platform, env: Record<string, string | undefined>): string => (platform === "win32" ? `${env.SystemRoot ?? env.windir ?? "C:\\Windows"}\\System32\\tar.exe` : "tar");
+
+/** Takes the runtime away: every release that was fetched (and what a failed fetch left). The models are not touched. */
+export function removeRuntime(local: string): void {
+  rmSync(join(local, "runtime"), { recursive: true, force: true });
+}

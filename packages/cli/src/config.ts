@@ -5,7 +5,7 @@ import { PROVIDERS } from "./presets.ts";
 import { expandModel, type SavedProvider } from "./providers.ts";
 import { dirname, posix, win32 } from "node:path";
 import { hasRules, parseRules, type ChatCompletionsConfig, type HookConfig, type HookEvent, type RuleSet } from "@navvied/engine";
-import { EFFORTS, type Effort, type Result } from "@navvied/protocol";
+import { EFFORTS, isBaseAddress, type Effort, type Result } from "@navvied/protocol";
 import { DEFAULT_SERVER, GUEST_PREFIX, HOSTED_PREFIX, guestEntries, hostedEntries, readAccount, readHostedModels } from "./account.ts";
 
 export type Env = Record<string, string | undefined>;
@@ -31,7 +31,8 @@ export interface ModelEntry {
   /** A model of an endpoint the person made (see endpoints.ts): holds no key and no address either; both are read from `endpoints` when the model is resolved. */
   endpoint?: string;
   /** A model on this computer, run by the program's own model server while it is running: the address is the one of that run, read when the model is used. */
-  local?: { repo: string; file: string; window: number };
+  /** A model of this computer's own server; `tools` is whether its chat template handles tools, when the file says. */
+  local?: { repo: string; file: string; window: number; tools?: boolean };
   route?: { api: "chat" | "responses" | "messages"; base: string };
   session?: string;
   credential?: string;
@@ -178,7 +179,7 @@ function entry(name: string, raw: unknown): Result<ModelEntry> {
   if (typeof raw.model === "string" && raw.model) out.model = raw.model;
   if (typeof raw.provider === "string" && raw.provider) out.provider = raw.provider;
   if (typeof raw.endpoint === "string" && raw.endpoint) out.endpoint = raw.endpoint;
-  if (isObj(raw.local) && typeof raw.local.repo === "string" && typeof raw.local.file === "string" && typeof raw.local.window === "number") out.local = { repo: raw.local.repo, file: raw.local.file, window: raw.local.window };
+  if (isObj(raw.local) && typeof raw.local.repo === "string" && typeof raw.local.file === "string" && typeof raw.local.window === "number") out.local = { repo: raw.local.repo, file: raw.local.file, window: raw.local.window, ...(typeof raw.local.tools === "boolean" ? { tools: raw.local.tools } : {}) };
   if (isObj(raw.route) && typeof raw.route.base === "string" && (raw.route.api === "chat" || raw.route.api === "responses" || raw.route.api === "messages")) out.route = { api: raw.route.api, base: raw.route.base };
   if (typeof raw.session === "string" && raw.session) out.session = raw.session;
   if (typeof raw.credential === "string" && raw.credential) out.credential = raw.credential;
@@ -298,7 +299,7 @@ function loadConfigFile(path: string): Result<ConfigFile | null> {
     for (const [id, v] of Object.entries(raw.providers)) {
       if (!isObj(v)) return { ok: false, error: `${path}: providers: "${id}" must be an object` };
       const fields = isObj(v.fields) ? Object.fromEntries(Object.entries(v.fields).filter((e): e is [string, string] => typeof e[1] === "string")) : undefined;
-      providers[id] = { ...(typeof v.key === "string" && v.key ? { key: v.key } : {}), ...(typeof v.region === "string" && v.region ? { region: v.region } : {}), ...(fields && Object.keys(fields).length ? { fields } : {}) };
+      providers[id] = { ...(typeof v.key === "string" && v.key ? { key: v.key } : {}), ...(typeof v.region === "string" && v.region ? { region: v.region } : {}), ...(typeof v.base === "string" && isBaseAddress(v.base) ? { base: v.base } : {}), ...(fields && Object.keys(fields).length ? { fields } : {}) };
     }
     if (Object.keys(providers).length) config.providers = providers;
   }

@@ -1,5 +1,5 @@
 import { fitOf, type Fit } from "./fit.ts";
-import { readShape, type ModelShape } from "./gguf.ts";
+import { readShape, templateTakesTools, type ModelShape } from "./gguf.ts";
 import type { Machine } from "./machine.ts";
 
 /** The place models are searched and fetched from (its address is data of presets.ts). */
@@ -14,6 +14,8 @@ export interface HubFile {
   /** Every part of a model that comes in several files, in order (this is the first); one entry for a model that is one file. */
   parts: { path: string; sizeBytes: number; sha256?: string }[];
   gated: boolean;
+  /** Whether the chat template of the repository handles tools, when the hub says its template; left out when it does not. */
+  tools?: boolean;
 }
 
 export interface Candidate extends HubFile { fit?: Fit["fit"]; needMb?: number; gpuLayers?: number; contextLength?: number }
@@ -46,13 +48,13 @@ async function ask(fetchFn: typeof fetch, url: string, token: string | undefined
 }
 
 /** The repositories of GGUF models that match the words, the most downloaded first. */
-export async function searchRepos(fetchFn: typeof fetch, hub: Hub, query: string, token: string | undefined, limit = 12, allowance?: Allowance): Promise<{ repos: { id: string; gated: boolean; downloads: number }[] } | Error1> {
-  const url = `${hub.base}/api/models?filter=gguf&search=${encodeURIComponent(query)}&sort=downloads&limit=${limit}&expand[]=gated&expand[]=downloads`;
+export async function searchRepos(fetchFn: typeof fetch, hub: Hub, query: string, token: string | undefined, limit = 12, allowance?: Allowance): Promise<{ repos: { id: string; gated: boolean; downloads: number; tools?: boolean }[] } | Error1> {
+  const url = `${hub.base}/api/models?filter=gguf&search=${encodeURIComponent(query)}&sort=downloads&limit=${limit}&expand[]=gated&expand[]=downloads&expand[]=gguf`;
   const res = await ask(fetchFn, url, token, {}, allowance);
   if ("error" in res) return res;
   if (!res.ok) return { error: `The model hub answered ${res.status}.` };
-  const body = (await res.json().catch(() => [])) as { id?: unknown; gated?: unknown; downloads?: unknown }[];
-  return { repos: body.filter((m) => typeof m.id === "string").map((m) => ({ id: m.id as string, gated: m.gated === true || typeof m.gated === "string", downloads: typeof m.downloads === "number" ? m.downloads : 0 })) };
+  const body = (await res.json().catch(() => [])) as { id?: unknown; gated?: unknown; downloads?: unknown; gguf?: { chat_template?: unknown } }[];
+  return { repos: body.filter((m) => typeof m.id === "string").map((m) => ({ id: m.id as string, gated: m.gated === true || typeof m.gated === "string", downloads: typeof m.downloads === "number" ? m.downloads : 0, ...(templateTakesTools(typeof m.gguf?.chat_template === "string" ? m.gguf.chat_template : undefined) !== undefined ? { tools: templateTakesTools(m.gguf!.chat_template as string)! } : {}) })) };
 }
 
 /** The GGUF files of a repository, the parts of a split model together, the vision projectors left out (they are not models). */
@@ -96,18 +98,10 @@ const quantRank = (q: string): number => { const at = PREFERRED.indexOf(q.toUppe
 
 export interface Searched { items: Candidate[]; notes: string[] }
 
-/**
- * Models that match, with where each runs on this computer at the context asked for (smaller than what the model supports when that is what is asked).
- * One question per repository for its files and one for the start of one file (the quants of a repository are one model), a few at a time; when the hub says the
- * window of questions is nearly used up, the rest is left and said so.
- */
-export async function searchModels(fetchFn: typeof fetch, hub: Hub, input: { query: string; window: number; machine: Machine; token?: string; limit?: number }): Promise<Searched | Error1> {
-  const allowance: Allowance = new Map();
-  const found = await searchRepos(fetchFn, hub, input.query, input.token, input.limit, allowance);
-  if ("error" in found) return found;
+/** The files of these repositories with where each runs on this computer, a few repositories at a time; the order is the order the questions were answered. */
+async function describeRepos(fetchFn: typeof fetch, hub: Hub, repos: { id: string; gated: boolean; downloads: number; tools?: boolean }[], input: { window: number; machine: Machine; token?: string }, allowance: Allowance): Promise<{ items: Candidate[]; notes: string[] }> {
   const notes: string[] = [];
   const items: Candidate[] = [];
-  const repos = found.repos.slice();
   const shapes = new Map<string, ModelShape | undefined>();
   for (let i = 0; i < repos.length; i += 4) {
     // A batch needs a question of each kind per repository; when the window has less than that left, the rest waits for the next one.
@@ -117,6 +111,7 @@ export async function searchModels(fetchFn: typeof fetch, hub: Hub, input: { que
       const files = await listFiles(fetchFn, hub, r.id, r.gated, input.token, allowance);
       if ("error" in files) { notes.push(`${r.id}: ${files.error}`); return; }
       if (!files.length) return;
+      if (r.tools !== undefined) for (const f of files) f.tools = r.tools;
       const probe = files[0]!;
       const shape = await readRemoteShape(fetchFn, hub, r.id, probe.file, input.token, allowance);
       shapes.set(r.id, "error" in shape ? undefined : shape);
@@ -130,9 +125,53 @@ export async function searchModels(fetchFn: typeof fetch, hub: Hub, input: { que
       }
     }));
   }
+  return { items, notes };
+}
+
+/**
+ * Models that match, with where each runs on this computer at the context asked for (smaller than what the model supports when that is what is asked).
+ * One question per repository for its files and one for the start of one file (the quants of a repository are one model), a few at a time; when the hub says the
+ * window of questions is nearly used up, the rest is left and said so.
+ */
+export async function searchModels(fetchFn: typeof fetch, hub: Hub, input: { query: string; window: number; machine: Machine; token?: string; limit?: number }): Promise<Searched | Error1> {
+  const allowance: Allowance = new Map();
+  const found = await searchRepos(fetchFn, hub, input.query, input.token, input.limit, allowance);
+  if ("error" in found) return found;
+  const { items, notes } = await describeRepos(fetchFn, hub, found.repos.slice(), input, allowance);
+  const repos = found.repos;
   // Equal files stay in the hub's own order (most downloaded first), never in the order the questions happened to be answered.
   const place = new Map(repos.map((r, n) => [r.id, n]));
   const rank = { gpu: 0, ram: 1, none: 3, undefined: 2 } as const;
   items.sort((a, b) => rank[a.fit ?? "undefined"] - rank[b.fit ?? "undefined"] || quantRank(a.quant) - quantRank(b.quant) || b.sizeBytes - a.sizeBytes || place.get(a.repo)! - place.get(b.repo)!);
   return { items, notes };
+}
+
+/**
+ * A short list of models to start with: each repository is asked about (its template must still say it handles tools), its files are placed on this computer, the best-liked
+ * quant that fits is kept (a repository gives one), and the list is ranked by where it runs (the card first), then in the order given. Nothing that does not fit is offered.
+ */
+export async function recommendedModels(fetchFn: typeof fetch, hub: Hub, repos: readonly string[], input: { window: number; machine: Machine; token?: string; limit?: number }): Promise<Searched> {
+  const allowance: Allowance = new Map();
+  const notes: string[] = [];
+  const known: { id: string; gated: boolean; downloads: number; tools?: boolean }[] = [];
+  await Promise.all(repos.map(async (id, n) => {
+    const res = await ask(fetchFn, `${hub.base}/api/models/${id}`, input.token, {}, allowance);
+    if ("error" in res) { notes.push(`${id}: ${res.error}`); return; }
+    if (!res.ok) { notes.push(`${id}: The model hub answered ${res.status}.`); return; }
+    const body = (await res.json().catch(() => ({}))) as { gated?: unknown; gguf?: { chat_template?: unknown } };
+    const tools = templateTakesTools(typeof body.gguf?.chat_template === "string" ? body.gguf.chat_template : undefined);
+    if (tools === true) known[n] = { id, gated: body.gated === true || typeof body.gated === "string", downloads: 0, tools };
+  }));
+  const asked = known.filter(Boolean);
+  const { items, notes: more } = await describeRepos(fetchFn, hub, asked, input, allowance);
+  const place = new Map(repos.map((r, n) => [r, n]));
+  const best = new Map<string, Candidate>();
+  for (const f of items) {
+    if (f.fit !== "gpu" && f.fit !== "ram") continue;
+    const have = best.get(f.repo);
+    if (!have || quantRank(f.quant) < quantRank(have.quant) || (quantRank(f.quant) === quantRank(have.quant) && f.sizeBytes > have.sizeBytes)) best.set(f.repo, f);
+  }
+  const fitRank = { gpu: 0, ram: 1 } as const;
+  const list = [...best.values()].sort((a, b) => fitRank[a.fit as "gpu" | "ram"] - fitRank[b.fit as "gpu" | "ram"] || place.get(a.repo)! - place.get(b.repo)!).slice(0, input.limit ?? 4);
+  return { items: list, notes: [...notes, ...more] };
 }

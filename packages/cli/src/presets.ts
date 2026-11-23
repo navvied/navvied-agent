@@ -688,6 +688,17 @@ export const API_STYLES = {
 export const MODEL_HUB = { base: "https://huggingface.co", tokenProvider: "huggingface" } as const;
 
 /**
+ * The small models that are offered first to someone who has none: coding or instruct models whose chat template handles tools. A name is here only with a raw line
+ * (2026-11-24, `GET /api/models/<repo>` of the hub, kept in the evidence notes) that shows the template names `tools` (`{%- if tools %}`), and the licence. The screens never
+ * name a model: they ask for this list, which is then kept to what fits the computer and what the template still says. Best first.
+ */
+export const RECOMMENDED_MODELS = [
+  { repo: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF", kind: "coding", licence: "apache-2.0" },
+  { repo: "unsloth/Qwen3-4B-Instruct-2507-GGUF", kind: "instruct", licence: "apache-2.0" },
+  { repo: "Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF", kind: "coding", licence: "apache-2.0" },
+] as const;
+
+/**
  * The program that runs a model on this computer, as one release of its project, pinned: every file has the SHA-256 that the release page's own API gave AND that was found again
  * by downloading the file (2026-11-24; the evidence is in the notes), and nothing that does not have it is ever run. `with` is the CUDA runtime that goes beside a CUDA build.
  * Moving to another release is a change of this table and nothing else.

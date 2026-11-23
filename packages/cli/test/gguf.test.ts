@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readShape } from "../src/gguf.ts";
+import { readShape, readTemplate, templateTakesTools } from "../src/gguf.ts";
 import { gguf, llama } from "./gguf-builder.ts";
 
 describe("the shape of a model from the start of its file", () => {
@@ -34,5 +34,28 @@ describe("the shape of a model from the start of its file", () => {
     expect(readShape(gguf([], 1))).toEqual({ error: "A GGUF version that is not read (1)." });
     expect(readShape(gguf([["general.architecture", { t: "str", v: "llama" }]]))).toEqual({ error: "The file does not say its number of layers, heads or its size." });
     expect(readShape(gguf([["general.name", { t: "str", v: "x" }]]))).toEqual({ error: "The file does not say what kind of model it is." });
+  });
+});
+
+describe("whether a model handles tools, from the chat template inside its file", () => {
+  const withTools = "{%- if tools %}{{ tools }}{%- endif %}{% for m in messages %}{{ m.content }}{% endfor %}";
+  const without = "{% for m in messages %}{{ m.content }}{% endfor %}";
+
+  test("the template comes after the long lists of the tokenizer, and is read from there", () => {
+    expect(readTemplate(llama({ template: withTools, tokens: 5000 }))).toEqual({ template: withTools });
+    expect(readTemplate(llama())).toEqual({ template: undefined });
+  });
+
+  test("a file that ends before it says to ask for more, and a file that is not a model says so", () => {
+    const bytes = llama({ template: withTools, tokens: 5000 });
+    expect(readTemplate(bytes.subarray(0, 3000))).toEqual({ more: true });
+    expect(readTemplate(new Uint8Array(40))).toEqual({ error: "This file is not a GGUF file." });
+  });
+
+  test("a template that names tools handles them; one that does not, does not; none says nothing", () => {
+    expect(templateTakesTools(withTools)).toBe(true);
+    expect(templateTakesTools(without)).toBe(false);
+    expect(templateTakesTools("   ")).toBeUndefined();
+    expect(templateTakesTools(undefined)).toBeUndefined();
   });
 });

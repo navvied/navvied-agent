@@ -32,7 +32,10 @@ function computer(o: { cloud?: false | "flag" | "config" } = {}) {
 
 describe("what a page may send", () => {
   test("three plain commands", () => {
-    for (const cmd of ["local.runtime", "local.runtime.install", "local.runtime.cancel"]) expect(validateCommand({ cmd }).ok).toBe(true);
+    for (const cmd of ["local.runtime", "local.runtime.install", "local.runtime.cancel", "local.runtime.remove"]) expect(validateCommand({ cmd }).ok).toBe(true);
+    expect(validateCommand({ cmd: "local.recommended" }).ok).toBe(true);
+    expect(validateCommand({ cmd: "local.recommended", window: 8192 }).ok).toBe(true);
+    expect(validateCommand({ cmd: "local.recommended", window: 3 }).ok).toBe(false);
   });
 });
 
@@ -74,8 +77,8 @@ describe("the runtime through the hub", () => {
   test("in Navvied Cloud every one of these is refused and nothing is fetched", async () => {
     for (const how of ["flag", "config"] as const) {
       const c = computer({ cloud: how });
-      for (const cmd of ["local.runtime", "local.runtime.install", "local.runtime.cancel"]) c.send({ cmd });
-      await until(() => c.got.filter((e) => e.ev === "error").length === 3);
+      for (const cmd of ["local.runtime", "local.runtime.install", "local.runtime.cancel", "local.runtime.remove", "local.recommended"]) c.send({ cmd });
+      await until(() => c.got.filter((e) => e.ev === "error").length === 5);
       expect(c.got.filter((e) => e.ev === "error").every((e) => e.msg?.includes("never in Navvied Cloud"))).toBe(true);
       expect(c.asked).toEqual([]);
     }

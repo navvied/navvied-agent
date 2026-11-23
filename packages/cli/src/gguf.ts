@@ -100,3 +100,31 @@ export function readShape(bytes: Uint8Array): ShapeResult {
     return { error: `The file could not be read (${e instanceof Error ? e.message : "unknown"}).` };
   }
 }
+
+/** Whether a chat template handles tools: one that does says so by naming them (`{% if tools %}`). No template, or an empty one, says nothing, so nothing is claimed. */
+export const templateTakesTools = (template: string | undefined): boolean | undefined => (template?.trim() ? /\btools\b/.test(template) : undefined);
+
+export type TemplateResult = { template: string | undefined } | { more: true } | { error: string };
+
+/** The chat template of the model (`tokenizer.chat_template`), which comes after the long lists of the tokenizer: `more` says the bytes end before it was reached. */
+export function readTemplate(bytes: Uint8Array): TemplateResult {
+  const r = new Reader(bytes);
+  try {
+    if (bytes.length < 4) return { more: true };
+    if (r.u32() !== 0x46554747) return { error: "This file is not a GGUF file." };
+    const version = r.u32();
+    if (version !== 2 && version !== 3) return { error: `A GGUF version that is not read (${version}).` };
+    r.u64();
+    const count = r.u64();
+    for (let i = 0; i < count; i++) {
+      const key = r.string();
+      const type = r.u32();
+      const v = value(r, type, key === "tokenizer.chat_template");
+      if (key === "tokenizer.chat_template" && typeof v === "string") return { template: v };
+    }
+    return { template: undefined };
+  } catch (e) {
+    if (e instanceof Short) return { more: true };
+    return { error: `The file could not be read (${e instanceof Error ? e.message : "unknown"}).` };
+  }
+}
