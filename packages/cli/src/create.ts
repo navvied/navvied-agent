@@ -36,14 +36,17 @@ function rulesFor(own: RuleSet | undefined, cwd: string): Rules | undefined {
   return hasRules(set) ? new Rules(set, cwd) : undefined;
 }
 
+/** The script that is this program when it runs from source: the one it was started with, or (under a test runner, which is started with its own) the one next to this file. */
+const sourceScript = (): string | undefined => (process.argv[1] && /[\\/]main\.ts$/.test(process.argv[1]) ? process.argv[1] : process.argv[1] && !process.argv[1].startsWith("/$bunfs") && !process.argv[1].startsWith("B:\\~BUN") ? join(import.meta.dir, "main.ts") : process.argv[1]);
+
 /** The words that start this very program again: itself when it is the single compiled file, else the runtime and the script. */
-export function selfArgv(exec: string = process.execPath, script: string | undefined = process.argv[1]): string[] {
+export function selfArgv(exec: string = process.execPath, script: string | undefined = sourceScript()): string[] {
   const compiled = !script || script.startsWith("/$bunfs") || script.startsWith("B:\\~BUN") || /[\\/]navvied(\.exe)?$/.test(exec);
   return compiled ? [exec] : [exec, script!];
 }
 
 /** The command a program runs before each of its tools: this very program, asked to `guard`, with the same configuration. */
-export function guardCommandFor(configFile: string, cwd: string, platform: NodeJS.Platform = process.platform, exec: string = process.execPath, script: string | undefined = process.argv[1]): string {
+export function guardCommandFor(configFile: string, cwd: string, platform: NodeJS.Platform = process.platform, exec: string = process.execPath, script: string | undefined = sourceScript()): string {
   const q = (s: string): string => (platform === "win32" ? `"${s.replace(/"/g, '\\"')}"` : `'${s.replace(/'/g, `'\\''`)}'`);
   const compiled = !script || script.startsWith("/$bunfs") || script.startsWith("B:\\~BUN") || /[\\/]navvied(\.exe)?$/.test(exec);
   return [q(exec), ...(compiled ? [] : [q(script!)]), "guard", "--config", q(configFile), "--cwd", q(cwd)].join(" ");

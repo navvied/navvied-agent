@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Command, EngineEvent, PermMode } from "@navvied/protocol";
@@ -14,10 +14,10 @@ afterAll(hook("stream-engine-ask removes what it made", async () => { await remo
 type Tool = Extract<EngineEvent, { ev: "tool" }>;
 type Approval = Extract<EngineEvent, { ev: "approval" }>;
 
-function rig() {
+function rig(guard = `bun "${STUB}"`) {
   const dir = mkdtempSync(join(tmpdir(), "navvied-ask-")); dirs.push(dir);
   const events: EngineEvent[] = [];
-  const engine = new StreamEngine({ command: "bun", args: [FAKE], cwd: dir, window: 100_000, emit: (e) => events.push(e), heartbeatMs: 0, guard: `bun ${STUB}` });
+  const engine = new StreamEngine({ command: "bun", args: [FAKE], cwd: dir, window: 100_000, emit: (e) => events.push(e), heartbeatMs: 0, guard });
   const approvals = (): Approval[] => events.filter((e): e is Approval => e.ev === "approval");
   const results = (): string[] => events.filter((e): e is Tool => e.ev === "tool" && e.status !== "running").map((e) => e.output ?? "");
   const send = (command: string, mode: PermMode): void => { engine.handle({ cmd: "prompt", text: `run bash: ${command}`, mode } as Command); };
@@ -137,6 +137,68 @@ describe("a program's tool is asked about the way the built-in engine's is", () 
     await r.engine.idle();
     expect(r.results()).toEqual(["The user denied this action."]);
     r.engine.close();
+  });
+});
+
+describe("a program is not started unless its guard is seen to work", () => {
+  const broken = (code: number, message: string) => { const file = join(mkdtempSync(join(tmpdir(), "navvied-guard-stub-")), "stub.ts"); dirs.push(join(file, "..")); writeFileSync(file, `process.stderr.write(${JSON.stringify(message)}); process.exit(${code});`); return `bun "${file}"`; };
+
+  test("a guard that cannot start: nothing is run, the person is told why, and the program was never started", async () => {
+    const r = rig(`bun "${join(tmpdir(), "no-such-folder", "stub.ts")}"`);
+    r.send("npm test", "bypass");
+    await r.engine.idle();
+    expect(r.events.find((e): e is Extract<EngineEvent, { ev: "error" }> => e.ev === "error")!.msg).toMatch(/^navvied's guard could not be started for this program, so nothing was run: /);
+    expect(r.events.at(-1)).toEqual({ ev: "done", stop: "error" });
+    expect(r.results()).toEqual([]);
+    expect(r.events.some((e) => e.ev === "phase")).toBe(false);
+    r.engine.close();
+  });
+
+  test("a guard that ends with an error says its own last words; one that answers with something is no guard either", async () => {
+    const failing = rig(broken(1, "cannot find the program navvied\n"));
+    failing.send("npm test", "auto");
+    await failing.engine.idle();
+    expect(failing.events.find((e): e is Extract<EngineEvent, { ev: "error" }> => e.ev === "error")!.msg).toContain("cannot find the program navvied");
+    expect(failing.results()).toEqual([]);
+    failing.engine.close();
+    const noisy = rig(`bun -e "console.log('hello')"`);
+    noisy.send("npm test", "ask");
+    await noisy.engine.idle();
+    expect(noisy.events.some((e) => e.ev === "error")).toBe(true);
+    expect(noisy.results()).toEqual([]);
+    noisy.engine.close();
+  });
+
+  test("a guard that works is looked at once: the program starts, the probe asks nobody, and the next message does not look again", async () => {
+    const r = rig();
+    r.send("echo one", "bypass");
+    await r.engine.idle();
+    r.send("echo two", "bypass");
+    await r.engine.idle();
+    expect(r.approvals()).toHaveLength(0);
+    expect(r.results()).toEqual(["ran: echo one", "ran: echo two"]);
+    r.engine.close();
+  });
+
+  test("when the program's hook cannot run, its default mode refuses the tool, and only turned-off prompts let it run (what the program does, as the fake models it)", async () => {
+    // The guard works when the engine looks, then stops working: the program is started with it broken.
+    const dir = mkdtempSync(join(tmpdir(), "navvied-guard-gone-")); dirs.push(dir);
+    const stub = join(dir, "stub.ts");
+    writeFileSync(stub, readFileSync(STUB, "utf8").replace("../src/index.ts", join(import.meta.dir, "../src/index.ts")));
+    const events: EngineEvent[] = [];
+    const engine = new StreamEngine({ command: "bun", args: [FAKE], cwd: dir, window: 100_000, emit: (e) => events.push(e), heartbeatMs: 0, guard: `bun "${stub}"` });
+    engine.handle({ cmd: "prompt", text: "echo warm", mode: "bypass" } as Command);
+    await engine.idle();
+    rmSync(stub);
+    const results = (): string[] => events.filter((e): e is Tool => e.ev === "tool" && e.status !== "running").map((e) => e.output ?? "");
+    engine.handle({ cmd: "prompt", text: "run bash: rm -rf ~", mode: "bypass" } as Command);
+    await engine.idle();
+    // Bypass turns the program's own questions off, so a hook that cannot run leaves nothing in the way: the engine's check above is what stands against that.
+    expect(results().at(-1)).toBe("ran: rm -rf ~");
+    engine.handle({ cmd: "prompt", text: "run bash: rm -rf ~", mode: "auto" } as Command);
+    await until(() => events.filter((e) => e.ev === "done").length === 3);
+    expect(results().at(-1)).toBe("Permission to use Bash has been denied.");
+    engine.close();
   });
 });
 

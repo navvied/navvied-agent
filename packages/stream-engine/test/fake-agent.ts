@@ -18,19 +18,44 @@ const result = (subtype = "success", extra: Record<string, unknown> = {}) => out
 let started = false;
 let slowTimer: ReturnType<typeof setTimeout> | undefined;
 
-/** What the real program does with a hook: runs it before the tool with the call on standard input; exit 2 stops the tool and says why, a decision on standard output may change the input. */
+/** A command line cut into words the way a shell does it for the cases here: spaces separate, quotes keep words together, and a backslash is just a character (a Windows path). */
+function words(line: string): string[] {
+  const out: string[] = [];
+  let current = "", quote = "", started = false;
+  for (const c of line) {
+    if (quote) { if (c === quote) quote = ""; else current += c; }
+    else if (c === '"' || c === "'") { quote = c; started = true; }
+    else if (c === " " || c === "\t") { if (started || current) out.push(current); current = ""; started = false; }
+    else current += c;
+  }
+  if (started || current) out.push(current);
+  return out;
+}
+
+/**
+ * What the real program does with a hook, by what its documentation says: it runs the hook before the tool with the call on standard input.
+ * Exit 2 stops the tool and says why; a decision on standard output may allow it (and change its input); any other end (the hook could not
+ * start, or failed) is an error that does not stop the tool, and then the tool is left to the program's own permission mode: in its default
+ * mode a tool that needs permission is refused (nobody can be asked), and only with its permission prompts turned off does it run.
+ */
 async function viaHook(command: string, id: string) {
   const settings = flag("--settings");
   const hook = settings ? (JSON.parse(settings) as { hooks: { PreToolUse: { hooks: { command: string }[] }[] } }).hooks.PreToolUse[0]!.hooks[0]!.command : undefined;
+  const promptsOff = argv.includes("--dangerously-skip-permissions");
   let input: Record<string, unknown> = { command };
   let stopped: string | undefined;
+  let allowed = false;
   if (hook) {
-    const child = Bun.spawn(["sh", "-c", hook], { stdin: new TextEncoder().encode(JSON.stringify({ tool_name: "Bash", tool_input: input, tool_use_id: id, cwd: process.cwd() })), stdout: "pipe", stderr: "pipe", env: process.env });
-    const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    const code = await child.exited;
+    let code: number | null = null, stdout = "", stderr = "";
+    try {
+      const child = Bun.spawn(words(hook), { stdin: new TextEncoder().encode(JSON.stringify({ tool_name: "Bash", tool_input: input, tool_use_id: id, cwd: process.cwd() })), stdout: "pipe", stderr: "pipe", env: process.env });
+      [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      code = await child.exited;
+    } catch { /* the hook could not start */ }
     if (code === 2) stopped = stderr.trim();
-    else if (stdout.trim()) { const decision = (JSON.parse(stdout) as { hookSpecificOutput?: { updatedInput?: Record<string, unknown> } }).hookSpecificOutput; if (decision?.updatedInput) input = decision.updatedInput; }
+    else if (code === 0 && stdout.trim()) { const decision = (JSON.parse(stdout) as { hookSpecificOutput?: { permissionDecision?: string; updatedInput?: Record<string, unknown> } }).hookSpecificOutput; allowed = decision?.permissionDecision === "allow"; if (decision?.updatedInput) input = decision.updatedInput; }
   }
+  if (stopped === undefined && !allowed && !promptsOff && flag("--permission-mode") !== "plan") stopped = "Permission to use Bash has been denied.";
   out({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "Bash", input: { command } }], usage } });
   out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: stopped !== undefined, content: stopped ?? `ran: ${String(input.command)}` }] } });
   out({ type: "assistant", message: { content: [{ type: "text", text: stopped ? "stopped" : "ran it" }], usage } });

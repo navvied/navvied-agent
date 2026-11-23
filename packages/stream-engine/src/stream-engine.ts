@@ -40,6 +40,9 @@ export interface StreamEngineOptions {
 
 type Child = ReturnType<typeof Bun.spawn>;
 
+/** The call the engine makes of its own guard before it starts a program, to see that the guard starts and answers on this computer. */
+export const GUARD_PROBE = "navvied-guard-probe";
+
 /** The tools of the program that only look, so a mode that asks about everything else does not ask about them. */
 const READ_ONLY = new Set(["Read", "Glob", "Grep", "LS", "NotebookRead", "WebFetch", "WebSearch", "TodoWrite", "BashOutput"]);
 
@@ -80,6 +83,8 @@ export class StreamEngine implements AgentEngine {
   /** What the person said "do not ask again" to. */
   readonly #allowed = new Set<string>();
   readonly #ask = new AskServer((call, gone) => this.#decide(call, gone));
+  /** The guard has been seen to start and answer: until then the program is not started. */
+  #guardOk = false;
 
   constructor(opts: StreamEngineOptions) {
     this.#o = opts;
@@ -153,7 +158,33 @@ export class StreamEngine implements AgentEngine {
     this.#mode = mode;
     this.#effort = effort;
 
-    if (!this.#child && !this.#start()) return;
+    // A program is not started until its guard has been seen to work on this computer: a guard that cannot start is, to the program, an error
+    // that does not stop the tool, so nothing would stand in the way. That is checked once; messages that come meanwhile wait their turn.
+    if (!this.#child && this.#o.guard && !this.#guardOk) {
+      this.#busy = true;
+      this.#checked = this.#checked.then(async () => {
+        if (!this.#guardOk) {
+          const why = await this.#checkGuard();
+          if (why) {
+            this.#emit({ ev: "error", msg: `navvied's guard could not be started for this program, so nothing was run: ${why}` });
+            this.#emit({ ev: "done", stop: "error" });
+            this.#busy = false;
+            this.#settle();
+            return;
+          }
+          this.#guardOk = true;
+        }
+        this.#sendPrompt(cmd);
+      });
+      return;
+    }
+    this.#sendPrompt(cmd);
+  }
+
+  #checked: Promise<void> = Promise.resolve();
+
+  #sendPrompt(cmd: PromptCommand): void {
+    if (!this.#child && !this.#start()) { this.#busy = false; this.#settle(); return; }
     const uuid = crypto.randomUUID();
     this.#tr.expect(uuid, cmd.qid);
     if (cmd.qid) { this.#prompts.set(uuid, { qid: cmd.qid, text: cmd.text, images: cmd.images?.length ?? 0 }); this.#emit({ ev: "queued", qid: cmd.qid, text: cmd.text, ...(cmd.images?.length ? { images: cmd.images.length } : {}) }); }
@@ -213,12 +244,30 @@ export class StreamEngine implements AgentEngine {
   }
 
   /**
+   * Runs the guard once the way the program will (through a shell, with the engine's address in the environment) with a call of no consequence,
+   * and says why not if it cannot start, ends with an error, or does not answer in time. Nothing is allowed by it: the engine answers that call "say nothing".
+   */
+  async #checkGuard(): Promise<string | undefined> {
+    const shell = process.platform === "win32" ? (Bun.which("bash") ? ["bash", "-c"] : ["cmd", "/d", "/s", "/c"]) : ["sh", "-c"];
+    let child: ReturnType<typeof Bun.spawn>;
+    try {
+      child = Bun.spawn([...shell, this.#o.guard!], { cwd: this.#o.cwd, env: { ...process.env, ...this.#o.env, ...this.#ask.listen() }, stdin: new TextEncoder().encode(JSON.stringify({ tool_name: GUARD_PROBE, tool_input: {}, cwd: this.#o.cwd })), stdout: "pipe", stderr: "pipe" });
+    } catch (e) { return e instanceof Error ? e.message : String(e); }
+    const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } }, 20_000);
+    const [out, err, code] = await Promise.all([new Response(child.stdout as ReadableStream).text(), new Response(child.stderr as ReadableStream).text(), child.exited]);
+    clearTimeout(timer);
+    if (code === 0 && !out.trim()) return undefined;
+    return (err.trim().split("\n").pop() || out.trim().split("\n").pop() || `it ended with code ${code}`).slice(0, 300);
+  }
+
+  /**
    * What a program's hook asks before each tool it runs: judged by the same rules as the built-in engine's (`judge`), and where the person is
    * to be asked, asked in the same card with the same answers. A tool that is let through is said so out loud, which is what lets the program
    * run it without asking itself; in Plan and Bypass the program's own mode stays in charge and nothing is said.
    */
   async #decide(call: AskedCall, gone: AbortSignal): Promise<AskReply> {
     const asked = typeof call.tool_name === "string" ? call.tool_name : "";
+    if (asked === GUARD_PROBE) return { decision: "pass" };
     const name = asked === "MultiEdit" || asked === "NotebookEdit" ? "Edit" : asked;
     const args = typeof call.tool_input === "object" && call.tool_input !== null && !Array.isArray(call.tool_input) ? call.tool_input as Record<string, unknown> : {};
     const cwd = typeof call.cwd === "string" && call.cwd ? call.cwd : this.#o.cwd;
