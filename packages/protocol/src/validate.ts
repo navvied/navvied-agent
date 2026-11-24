@@ -146,6 +146,22 @@ function validateOne(raw: unknown): Result<Command> {
     case "machine": return ok({ cmd: "machine" });
     case "local.models": return ok({ cmd: "local.models" });
     case "local.stop": return ok({ cmd: "local.stop" });
+    case "accounts": return ok({ cmd: "accounts" });
+    case "account.login": case "account.login.cancel": case "account.logout": return ok({ cmd: raw.cmd });
+    case "account.signin":
+      if (!isName(raw.id)) return fail("account.signin.id must be the id of a program");
+      if (raw.device !== undefined && typeof raw.device !== "boolean") return fail("account.signin.device must be true or false");
+      return ok({ cmd: "account.signin", id: raw.id, ...(raw.device === true ? { device: true } : {}) });
+    case "account.signin.code":
+      if (!isName(raw.id)) return fail("account.signin.code.id must be the id of a program");
+      if (typeof raw.code !== "string" || !raw.code.trim() || raw.code.length > 512 || /[\r\n\0]/.test(raw.code)) return fail("account.signin.code.code must be one line of at most 512 characters");
+      return ok({ cmd: "account.signin.code", id: raw.id, code: raw.code.trim() });
+    case "account.signin.cancel": case "account.signout":
+      if (!isName(raw.id)) return fail(`${raw.cmd}.id must be the id of a program`);
+      return ok({ cmd: raw.cmd, id: raw.id });
+    case "account.install":
+      if (!isName(raw.id)) return fail("account.install.id must be the id of a program");
+      return ok({ cmd: "account.install", id: raw.id });
     case "local.ollama": return ok({ cmd: "local.ollama" });
     case "local.ollama.pull": case "local.ollama.cancel":
       if (typeof raw.model !== "string" || !/^[A-Za-z0-9][\w.\-/:]{0,119}$/.test(raw.model) || raw.model.includes("..")) return fail(`${raw.cmd}.model must be the name Ollama knows the model by, such as name:size`);

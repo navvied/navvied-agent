@@ -19,14 +19,15 @@ import { ToolUsage, listSets, listTools, toolId } from "../tools-info.ts";
 import { TerminalState, listBackends } from "../terminal.ts";
 import { DraftStore } from "../drafts.ts";
 import { checkCredentialFile, findCredentialFile } from "../adc.ts";
+import { accounts } from "../accounts.ts";
 import { localModels } from "../local-models.ts";
 import { readMachine, realProbe, type Probe } from "../machine.ts";
 import { askModels, detectApi, newEndpointId, reportEndpoints, type EndpointRecord } from "../endpoints.ts";
 import { API_STYLES, MODEL_HUB, PROVIDERS, authHeaders } from "../presets.ts";
 import { ONLY_ON_A_COMPUTER, baseOf, entryName, headersOf, listModels, mergeSaved, modelEntryOf, reportOf, type ListedRoute } from "../providers.ts";
-import { accountPath, chatFilesDir, chatJournalDir, chatSearchIndexPath, chatSessionsDir, configPath, foldersPath, localDir, journalDir, loadConfig, saveEndpoint, saveModel, saveProvider, pluginStatePath, terminalStatePath, toolUsagePath, draftsPath, checkpointsDir, scheduledDir, schedulesPath, searchIndexPath, sessionsDir } from "../config.ts";
+import { accountPath, hostedModelsPath, chatFilesDir, chatJournalDir, chatSearchIndexPath, chatSessionsDir, configPath, foldersPath, localDir, journalDir, loadConfig, saveEndpoint, removeModel, saveModel, saveProvider, pluginStatePath, terminalStatePath, toolUsagePath, draftsPath, checkpointsDir, scheduledDir, schedulesPath, searchIndexPath, sessionsDir } from "../config.ts";
 import { SearchIndex } from "../search-index.ts";
-import { readAccount, type Account } from "../account.ts";
+import { DEFAULT_SERVER, readAccount, type Account } from "../account.ts";
 import { deleteConversation, getConversation, listComputers, listConversations, type AccountComputer } from "../account-client.ts";
 import { talkToComputer } from "../relay-client.ts";
 import { relayUrlFor } from "../computer.ts";
@@ -58,6 +59,9 @@ export interface HubOptions {
   transferMs?: number;
   /** Bring the hosted conversations of the signed-in account onto this computer when it starts (default true). */
   import?: boolean;
+  /** What joining the account and leaving it does for this computer besides keeping the account (the terminal joins the account's computers). */
+  onSignedIn?: (account: Account) => Promise<void>;
+  onSignOut?: (account: Account) => Promise<void>;
   /** The computer models are planned for, when it is not the one this runs on (a test gives its own). */
   probe?: () => Probe;
   /** Look for a model again every second while there is none (a server wants this; the interactive app sets one up itself). Default true. */
@@ -757,6 +761,19 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     }
     say(main, { ev: "providers", items });
   };
+  const accountsPage = accounts({
+    io,
+    inCloud: () => { const f = loadConfig(configPath(io.env, main.options.config)); return !!main.options.sandboxed || (f.ok && !!f.value?.webProxy); },
+    account: signedIn,
+    tell: (e) => say(main, e),
+    models: { save: (name, entry) => { saveModel(configPath(io.env, main.options.config), name, entry); }, remove: (name) => { removeModel(configPath(io.env, main.options.config), name); } },
+    session: {
+      paths: () => ({ account: accountPath(io.env, options.config), models: hostedModelsPath(io.env), ...(hubOptions.onSignedIn ? { onSignedIn: hubOptions.onSignedIn } : {}), ...(hubOptions.onSignOut ? { onSignOut: hubOptions.onSignOut } : {}) }),
+      server: () => io.env.NAVVIED_SERVER ?? DEFAULT_SERVER,
+      label: () => computerName(),
+      changed: () => { pushModels(); },
+    },
+  });
   const local = localModels({
     io,
     ...(hubOptions.probe ? { probe: hubOptions.probe } : {}),
@@ -828,6 +845,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
       if (parsed.value.cmd === "plugins") { tellPlugins(); return; }
       if (parsed.value.cmd === "providers") { tellProviders(); return; }
       if (local.command(parsed.value)) return;
+      if (accountsPage.command(parsed.value)) return;
       if (parsed.value.cmd === "endpoints" || parsed.value.cmd === "endpoint.save" || parsed.value.cmd === "endpoint.remove" || parsed.value.cmd === "endpoint.models") {
         const cmd = parsed.value;
         const path = configPath(io.env, main.options.config);

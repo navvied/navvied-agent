@@ -166,7 +166,8 @@ export async function chatCommand(initial: string | undefined, options: Options,
     if (readAccount(accountPath(io.env, options.config)) && !existsSync(hostedModelsPath(io.env))) await refreshAccount(3000);
     else void refreshAccount();
   }
-  const hub = createHub(options, io, { watch: false });
+  // Signing in or out from a page does what `/login` does: this computer joins the account's computers, or leaves them (both are defined below, and used only later).
+  const hub = createHub(options, io, { watch: false, onSignedIn: (a) => joinAccount(a), onSignOut: (a) => disconnectThisComputer(io.fetch, a, devices, (id) => relay().forget(id)) });
   menus = hubMenus({
     io, hub, say, marker, busy: () => busy, switching: (handover) => { switching = true; switchingHandover = handover; summarised = false; },
     computers: async () => { const account = readAccount(accountPath(io.env, options.config)); return account ? (await listComputers(io.fetch, account)).filter((c) => c.name !== computerName()).map((c) => ({ id: c.id, name: c.name })) : []; },

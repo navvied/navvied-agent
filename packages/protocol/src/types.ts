@@ -156,6 +156,19 @@ export interface LocalFileCommand { cmd: "local.pull" | "local.pause" | "local.c
 /** Run a model that is on this computer with the program's own model server (its context defaults to the largest that fits, up to 32768), or stop the one that runs. */
 /** A short list of models to start with: small coding models that handle tools and fit this computer, best first (answered with `local.found` flagged `recommended`). */
 export interface LocalRecommendedCommand { cmd: "local.recommended"; window?: number }
+/** The accounts of this computer: the navvied account and the programs signed in to with a plan (answered with `accounts`). Nothing is signed in by asking. */
+export interface AccountsCommand { cmd: "accounts" }
+/** Install one of the programs with its official installer (progress is `account.install`, and `accounts` is said again at the end). */
+/** Sign in to the navvied account by approving a code in the browser (the password never comes here): `account.login` starts it, `account.login.cancel` stops waiting, `account.logout` signs this computer out. */
+export interface AccountLoginCommand { cmd: "account.login" | "account.login.cancel" | "account.logout" }
+/**
+ * Sign in to one of the programs with its own browser sign-in, which opens on this computer: `account.signin` starts it (`device`: a code to enter on another device instead),
+ * `account.signin.code` gives the program a code its page showed, `account.signin.cancel` stops waiting. `account.signout` takes navvied's saved sign-in for the program away.
+ */
+export interface AccountSigninCommand { cmd: "account.signin"; id: string; device?: boolean }
+export interface AccountSigninCodeCommand { cmd: "account.signin.code"; id: string; code: string }
+export interface AccountSigninIdCommand { cmd: "account.signin.cancel" | "account.signout"; id: string }
+export interface AccountInstallCommand { cmd: "account.install"; id: string }
 export interface LocalRunCommand { cmd: "local.run"; repo: string; file: string; window?: number }
 export interface LocalStopCommand { cmd: "local.stop" }
 export interface LocalModelsCommand { cmd: "local.models" }
@@ -177,7 +190,7 @@ export interface PinCommand { cmd: "pin"; id: string; pinned: boolean }
 export interface RestoreCommand { cmd: "restore"; id: string; preview?: boolean }
 
 /** Every command may say which kind of conversation it is for. */
-export type Command = (ProvidersCommand | LocalRunCommand | LocalStopCommand | LocalFileCommand | LocalModelsCommand | LocalRecommendedCommand | LocalOllamaCommand | LocalOllamaPullCommand | LocalRuntimeCommand | LocalSearchCommand | MachineCommand | EndpointsCommand | EndpointSaveCommand | EndpointRemoveCommand | EndpointModelsCommand | ProviderModelsCommand | ProviderUseCommand | ProviderSaveCommand | ProviderRemoveCommand | PromptCommand | CancelCommand | ApproveCommand | CompactCommand | ModelCommand | EffortCommand | LoadCommand | SessionsCommand | SearchCommand | CheckpointsCommand | RestoreCommand | JobStopCommand | NewCommand | RenameCommand | RemoveCommand | PinCommand | ImportCommand | TransferCommand | ForkCommand | ArchiveCommand | MarkCommand | ReceiveCommand | SchedulesCommand | ScheduleAddCommand | ScheduleUpdateCommand | ScheduleRemoveCommand | ScheduleRunCommand | PluginsCommand | PluginToggleCommand | DraftCommand | DraftsCommand | ToolsCommand | ToolToggleCommand | TerminalUseCommand | ArtifactsCommand | ArtifactReadCommand) & { kind?: SessionKind };
+export type Command = (ProvidersCommand | LocalRunCommand | LocalStopCommand | LocalFileCommand | LocalModelsCommand | AccountsCommand | AccountSigninCommand | AccountSigninCodeCommand | AccountSigninIdCommand | AccountLoginCommand | AccountInstallCommand | LocalRecommendedCommand | LocalOllamaCommand | LocalOllamaPullCommand | LocalRuntimeCommand | LocalSearchCommand | MachineCommand | EndpointsCommand | EndpointSaveCommand | EndpointRemoveCommand | EndpointModelsCommand | ProviderModelsCommand | ProviderUseCommand | ProviderSaveCommand | ProviderRemoveCommand | PromptCommand | CancelCommand | ApproveCommand | CompactCommand | ModelCommand | EffortCommand | LoadCommand | SessionsCommand | SearchCommand | CheckpointsCommand | RestoreCommand | JobStopCommand | NewCommand | RenameCommand | RemoveCommand | PinCommand | ImportCommand | TransferCommand | ForkCommand | ArchiveCommand | MarkCommand | ReceiveCommand | SchedulesCommand | ScheduleAddCommand | ScheduleUpdateCommand | ScheduleRemoveCommand | ScheduleRunCommand | PluginsCommand | PluginToggleCommand | DraftCommand | DraftsCommand | ToolsCommand | ToolToggleCommand | TerminalUseCommand | ArtifactsCommand | ArtifactReadCommand) & { kind?: SessionKind };
 /** What this computer is, as far as it could be read: a card or a number that could not be read is not there, never a guess. */
 export interface MachineInfo {
   os: "linux" | "wsl" | "macos" | "windows" | "unknown";
@@ -189,6 +202,8 @@ export interface MachineInfo {
 }
 /** One model file the hub offers: `fit` says where it runs on this computer (`gpu`: all in the card, `ram`: it needs the computer\'s memory, `none`: neither has room), absent when the file\'s header could not be read. */
 export interface LocalFile { repo: string; /** The page of the model on the hub: where a licence is read and accepted by the person, never for them. */ page: string; file: string; quant: string; sizeMb: number; parts: number; gated: boolean; /** Whether the chat template of the model handles tools (a model that does not can only talk in the agent): left out when it is not known. */ tools?: boolean; fit?: "gpu" | "ram" | "none"; needMb?: number; gpuLayers?: number; window?: number }
+/** One account as the page shows it: `installed`, `version` and `signedIn` are what the program itself says (`signedIn` only when it is installed); `email` and `plan` only when it says them. */
+export interface AccountInfo { /** `navvied`, or the id of a program of the list the engine keeps. */ id: string; installed?: boolean; version?: string; signedIn?: boolean; email?: string; plan?: string }
 export interface EndpointSaved { id: string; name: string; baseUrl: string; api: "chat" | "responses" | "messages" | "ollama"; /** Whether a key is saved: it is never sent back. */ key: boolean; models: EndpointModel[] }
 export interface ProviderSaved { id: string; key: boolean; /** The address the person set instead of the provider's own. */ base?: string; /** A provider that signs in with a credential file of the computer: whether one was found now (its path and contents are never said). */ credential?: boolean; region?: string; fields?: Record<string, string> }
 export type CommandName = Command["cmd"];
@@ -338,6 +353,14 @@ type EngineEventBody =
   | { ev: "local.ollama"; state: "missing" | "ready"; baseUrl?: string; version?: string; models?: { name: string; /** Whether Ollama says the model takes tools (its `capabilities`): left out when it does not say. */ tools?: boolean }[] }
   /** One model being fetched through Ollama: `downloading` (`bytes` of `total`, summed over its layers), `verifying`, `done` (it is in Ollama's list), `failed` (`error`, in words) or `idle` (stopped). */
   | { ev: "local.ollama.model"; model: string; state: "downloading" | "verifying" | "done" | "failed" | "idle"; bytes?: number; total?: number; error?: string }
+  /** The answer to `accounts`. */
+  | { ev: "accounts"; items: AccountInfo[] }
+  /** The sign-in of the navvied account by a link: `waiting` (`url` to open, the `code` it must show, `expires` as a time in milliseconds), then `done` (`email`), `denied`, `expired`, `failed` (`error` in words) or `stopped`. `accounts` follows `done`. */
+  | { ev: "account.login"; state: "waiting" | "done" | "denied" | "expired" | "failed" | "stopped"; url?: string; code?: string; expires?: number; email?: string; error?: string }
+  /** The sign-in of a program: `waiting` (`url` to open, and for a device sign-in the `code` to enter there), then `done`, `failed` (`error` in words) or `stopped`. `accounts` follows `done`. */
+  | { ev: "account.signin"; id: string; state: "waiting" | "done" | "failed" | "stopped"; url?: string; code?: string; error?: string }
+  /** The installation of a program: `installing`, then `done` or `failed` (`error` in words). */
+  | { ev: "account.install"; id: string; state: "installing" | "done" | "failed"; error?: string }
   | { ev: "local.server"; state: "starting" | "running" | "stopped" | "failed"; repo?: string; file?: string; window?: number; layers?: number; error?: string }
   | { ev: "local.runtime"; server: "running" | "stopped"; state: "none" | "installing" | "verifying" | "failed" | "ready"; version: string; backend?: string; file?: string; bytes?: number; total?: number; error?: string }
   /** The models the server of an endpoint lists (the answer to `endpoint.models`), with the context size when the server says it (an empty window of a model means the engine finds it). */

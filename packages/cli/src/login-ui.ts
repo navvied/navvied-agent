@@ -1,15 +1,10 @@
-import { AccountError, createAccount, fetchModels, pollDevice, signIn, signOut, startDevice } from "./account-client.ts";
-import { clearAccount, forgetHostedModels, writeAccount, writeHostedModels, type Account, type HostedModels } from "./account.ts";
+import { AccountError, createAccount, fetchModels, signIn, startDevice } from "./account-client.ts";
+import { awaitApproval, leaveAccount, pause, type AccountPaths } from "./account-session.ts";
+import { writeAccount, writeHostedModels, type Account, type HostedModels } from "./account.ts";
 import type { Choice, Frame, IO } from "./io.ts";
 import { paint } from "./render.ts";
 
-export interface LoginPaths {
-  account: string;
-  models: string;
-  /** Called once an account is saved on this computer (it joins the account), and just before it is signed out (it leaves). A failure never stops either. */
-  onSignedIn?(account: Account): Promise<void>;
-  onSignOut?(account: Account): Promise<void>;
-}
+export type LoginPaths = AccountPaths;
 export type LoginOutcome =
   | { kind: "signed-in"; email: string; models: string[] }
   | { kind: "signed-out" }
@@ -44,7 +39,6 @@ async function newPassword(io: IO, frame: Frame): Promise<string | "back" | unde
   }
 }
 
-const pause = (ms: number, signal: AbortSignal): Promise<void> => new Promise((done) => { const t = setTimeout(done, ms); signal.addEventListener("abort", () => { clearTimeout(t); done(); }, { once: true }); });
 
 /** Signing in through the browser: a page opens, the person approves it there, and this screen waits. Nothing to type. */
 async function throughBrowser(io: IO, paths: LoginPaths, server: string, wait: typeof pause): Promise<LoginOutcome | { kind: "retry"; notice: string } | undefined> {
@@ -62,24 +56,9 @@ async function throughBrowser(io: IO, paths: LoginPaths, server: string, wait: t
     body: ["A page is open in your browser. Check that it shows this code, then press Approve:", "", `   ${paint(io.color, "bold", request.userCode)}`, "", `Page did not open? Press O to open it again, or C to copy the link:`, request.verificationUrl],
     status: "Waiting for you to approve in the browser",
   };
-  const result = await io.work?.<{ state: "approved"; account: Account; listing: HostedModels } | { state: "denied" | "expired" } | AccountError>("Approve in your browser", frame, async (context) => {
+  const result = await io.work?.<{ state: "approved"; account: Account; listing: HostedModels } | { state: "denied" | "expired" | "stopped" } | AccountError>("Approve in your browser", frame, (context) => {
     say = context.log;
-    const until = Date.now() + request.expiresIn * 1000;
-    try {
-      while (!context.signal.aborted && Date.now() < until) {
-        await wait(request.interval * 1000, context.signal);
-        if (context.signal.aborted) break;
-        const polled = await pollDevice(io.fetch, server, request.deviceCode);
-        if (polled.state === "pending") continue;
-        if (polled.state !== "approved") return { state: polled.state };
-        const listing = await fetchModels(io.fetch, polled.account);
-        writeAccount(paths.account, polled.account);
-        writeHostedModels(paths.models, listing);
-        await paths.onSignedIn?.(polled.account).catch(() => undefined);
-        return { state: "approved" as const, account: polled.account, listing };
-      }
-      return { state: "expired" as const };
-    } catch (e) { return e instanceof AccountError ? e : new AccountError("Something went wrong. Try again in a moment."); }
+    return awaitApproval(io.fetch, server, request, paths, context.signal, wait);
   });
   if (result === undefined || result === "back") return undefined;
   if (result instanceof AccountError) return { kind: "retry", notice: result.message };
@@ -150,10 +129,7 @@ async function signedIn(io: IO, account: Account, paths: LoginPaths): Promise<Lo
 export async function signOutScreen(io: IO, account: Account, paths: LoginPaths): Promise<LoginOutcome> {
   const sure = await io.choose?.("Sign out of navvied?", [{ label: "Yes, sign out" }, { label: "No, stay signed in" }], 1, { heading: heading(io, "Sign out", `${account.email} on this computer`) });
   if (sure !== 0) return { kind: "cancelled" };
-  await paths.onSignOut?.(account).catch(() => undefined);
-  await signOut(io.fetch, account);
-  clearAccount(paths.account);
-  forgetHostedModels(paths.models);
+  await leaveAccount(io.fetch, account, paths);
   return { kind: "signed-out" };
 }
 

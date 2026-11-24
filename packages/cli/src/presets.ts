@@ -8,6 +8,7 @@ import { fetchGuestModels } from "./account-client.ts";
 import type { Choice, IO, Watch, WorkContext } from "./io.ts";
 import { paint } from "./render.ts";
 import { looksLikeKey, type System } from "./system.ts";
+import { CLAUDE_INSTALL, ProgramSignIn, installPlan, type InstallPlan, claudeStatus as programClaudeStatus, codexStatus as programCodexStatus, programVersion, type ClaudeStatus, type CodexStatus } from "./programs.ts";
 
 /** The only file that names outside services: it is what lets a newcomer pick theirs from a list. */
 export interface LocalServer { name: string; baseUrl: string; models: string[]; /** Ollama, which has its own API that can set the model's memory. */ ollama?: boolean }
@@ -164,30 +165,16 @@ const hosted = (svc: Service, label: string, hint: string): Preset => ({
   },
 });
 
-const versionOf = async (s: Screen, path: string): Promise<string | undefined> => {
-  const r = await s.sys.run([path, "--version"], { timeoutMs: 4000 }).catch(() => undefined);
-  return r ? /\d+\.\d+\.\d+/.exec(r.output)?.[0] : undefined;
-};
+const versionOf = (s: Screen, path: string): Promise<string | undefined> => programVersion(s.sys, path);
 
-interface ClaudeStatus { loggedIn: boolean; method?: string; account?: string }
-
-async function claudeStatus(s: Screen, path: string): Promise<ClaudeStatus> {
-  const r = await s.sys.run([path, "auth", "status", "--json"], { timeoutMs: 8000 }).catch(() => undefined);
-  const json = r?.output.slice(r.output.indexOf("{"));
-  try {
-    const data = JSON.parse(json ?? "") as Record<string, unknown>;
-    const account = ["email", "accountEmail", "account"].map((k) => data[k]).find((v): v is string => typeof v === "string");
-    return { loggedIn: data.loggedIn === true, ...(typeof data.authMethod === "string" ? { method: data.authMethod } : {}), ...(account ? { account } : {}) };
-  } catch { return { loggedIn: false }; }
-}
+const claudeStatus = (s: Screen, path: string): Promise<ClaudeStatus> => programClaudeStatus(s.sys, path);
 
 const describeMethod = (method: string | undefined): string => (!method ? "your account" : /console|api/i.test(method) ? "an Anthropic Console account" : /claude|subscription|oauth/i.test(method) ? "your Claude subscription" : method);
 
-const INSTALL = { unix: "curl -fsSL https://claude.ai/install.sh | bash", windows: "irm https://claude.ai/install.ps1 | iex" };
+const INSTALL = CLAUDE_INSTALL;
 
 async function installClaude(s: Screen): Promise<"installed" | "back"> {
-  const windows = process.platform === "win32";
-  const command = windows ? INSTALL.windows : INSTALL.unix;
+  const plan = installPlan("claude-code", process.platform, s.io.env, s.sys.which) as InstallPlan;
   const at = await s.pick("Claude Code is not installed on this computer", [
     { label: "Install it for me", hint: "navvied runs Claude's own installer. You will see the command first." },
     { label: "I will install it myself", hint: "Shows the command to run in a terminal." },
@@ -197,10 +184,10 @@ async function installClaude(s: Screen): Promise<"installed" | "back"> {
     s.say(`Run this in a terminal, then come back here:\n${INSTALL.unix}   (macOS and Linux)\n${INSTALL.windows}   (Windows)`);
     return "back";
   }
-  s.say(`${command}\nIt downloads and runs Claude's official installer from claude.ai. Nothing else on your computer is changed.`);
+  s.say(`${plan.shown}\n${plan.note}`);
   if ((await s.pick("Run this command?", [{ label: "Yes, install Claude Code" }, { label: "No, go back" }])) !== 0) return "back";
-  const done = await s.work("Installing Claude Code", { body: [command], status: "Installing…" }, ({ log, signal }) =>
-    s.sys.run(windows ? ["powershell", "-NoProfile", "-Command", command] : ["sh", "-c", command], { signal, onLine: log, timeoutMs: 600_000 }));
+  const done = await s.work("Installing Claude Code", { body: [plan.shown], status: "Installing…" }, ({ log, signal }) =>
+    s.sys.run(plan.argv, { signal, onLine: log, timeoutMs: 600_000 }));
   if (done === "back") return "back";
   if (done.code !== 0 || !s.sys.which("claude")) {
     s.say("The installer did not finish, or claude was not found afterwards. Open a new terminal and try again, or install it yourself.");
@@ -213,53 +200,44 @@ async function installClaude(s: Screen): Promise<"installed" | "back"> {
 const FINISHED = 99;
 
 async function signInClaude(s: Screen, path: string, consoleLogin: boolean): Promise<boolean | "back"> {
-  const controller = new AbortController();
-  let url: string | undefined;
-  let type: ((line: string) => void) | undefined;
-  let finished = false;
-  const login = s.sys.run([path, "auth", "login", consoleLogin ? "--console" : "--claudeai"], {
-    signal: controller.signal,
-    timeoutMs: 600_000,
-    onLine: (line) => { url ??= /https:\/\/\S+/.exec(line)?.[0]; },
-    input: (write) => { type = write; },
-  });
-  void login.then(() => { finished = true; });
-  const signedIn = async (): Promise<boolean> => (await claudeStatus(s, path)).loggedIn;
+  const run = new ProgramSignIn("claude-code", s.sys, path, { console: consoleLogin });
+  const signedIn = run.signedIn;
 
   const submitCode = async (): Promise<boolean | "back"> => {
     for (;;) {
       const code = await s.askOrBack("Paste the code from the browser", "", ["It looks like a short line of letters and numbers. Copy it on the page, then paste it here."]);
       if (code === "back") return "back";
-      type?.(code);
+      run.type(code);
       const until = Date.now() + (Number(s.io.env.NAVVIED_CODE_WAIT_MS) || 10_000);
-      while (Date.now() < until && !finished) {
+      while (Date.now() < until && !run.finished) {
         await sleep(Math.min(500, Math.max(10, until - Date.now())), controller.signal);
         if (await signedIn()) return true;
       }
       if (await signedIn()) return true;
-      if (finished) return false;
+      if (run.finished) return false;
       s.say("Claude Code did not accept that code. It may have expired. Copy the code again, or go back and open the sign-in page again.");
     }
   };
+  const controller = new AbortController();
 
   try {
-    await Promise.race([login, sleep(80, controller.signal)]);
+    await Promise.race([run.done, sleep(80, controller.signal)]);
     for (;;) {
       if (await signedIn()) return true;
-      if (finished) return false;
+      if (run.finished) return false;
       s.say("Waiting for you to sign in…  This screen moves on by itself when you are done.");
       const at = await s.pick("Finish signing in in your browser", [
         { label: "I have a code from the browser", hint: "Some sign-in pages show a code. Paste it here and navvied gives it to Claude Code." },
         { label: "Open the sign-in page again", hint: "Opens the same page in your browser." },
         { label: "Show the address", hint: "To open it yourself, on this computer or another one." },
-      ], 0, { everyMs: 1500, next: async () => ((await signedIn()) || finished ? { auto: FINISHED } : undefined) },
+      ], 0, { everyMs: 1500, next: async () => ((await signedIn()) || run.finished ? { auto: FINISHED } : undefined) },
       ["Your browser opened a Claude sign-in page.", "Sign in and press Allow.", "If the page shows a code instead, choose the first option below."]);
       if (at === "back") return "back";
       if (at === 0) { const done = await submitCode(); if (done !== "back") return done; }
-      else if (at === 1) { if (url) s.sys.open(url); else s.say("The sign-in page address is not known yet. Try again in a moment."); }
-      else if (at === 2) s.say(url ?? "The sign-in page address is not known yet. Try again in a moment.");
+      else if (at === 1) { if (run.url) s.sys.open(run.url); else s.say("The sign-in page address is not known yet. Try again in a moment."); }
+      else if (at === 2) s.say(run.url ?? "The sign-in page address is not known yet. Try again in a moment.");
     }
-  } finally { controller.abort(); }
+  } finally { run.stop(); controller.abort(); }
 }
 
 const CLAUDE_MODELS = [
@@ -276,21 +254,40 @@ const CLAUDE_NATIVE: Record<string, string> = { default: "claude-sonnet-5-5", op
 /** Whether the sign-in the program made can be read by navvied itself (a Mac keeps it in the keychain, which asks the person once). */
 const loginReadable = (s: Screen, provider: "claude" | "chatgpt"): boolean => loginStoreFor(provider, undefined, s.io.env).read() !== undefined;
 
+/**
+ * The model that signing in to a program gives navvied, as the setup writes it. navvied runs the work itself (its own tools, skills, rules and memory) and uses only the
+ * model of the sign-in when its login can be read; the program is kept for when it cannot. `chosen` is one of the Claude models of the list.
+ */
+export function programEntry(id: string, path: string, readable: boolean, chosen = "default"): { name: string; entry: ModelEntry } {
+  if (id === "codex") {
+    return readable
+      ? { name: "codex", entry: { api: "responses", baseUrl: "https://chatgpt.com/backend-api/codex", model: "gpt-5.5", signIn: { provider: "chatgpt" }, vision: true, window: 200_000, display: { name: "ChatGPT" } } }
+      : { name: "codex", entry: { command: path, adapter: "codex", window: 200_000, efforts: ["low", "medium", "high", "xhigh"] } };
+  }
+  const model = CLAUDE_MODELS.find((m) => m.id === chosen) ?? CLAUDE_MODELS[0]!;
+  return readable
+    ? { name: "claude", entry: { api: "messages", baseUrl: "https://api.anthropic.com/v1", model: CLAUDE_NATIVE[model.id] ?? "claude-sonnet-5-5", signIn: { provider: "claude" }, vision: true, pdf: true, window: 200_000, display: { name: model.id === "default" ? "Claude" : `Claude ${model.name}` } } }
+    : { name: "claude", entry: { command: path, window: 200_000, ...(model.id === "default" ? {} : { model: model.id }), models: CLAUDE_MODELS, efforts: ["low", "medium", "high", "xhigh", "max"] } };
+}
+
 async function claudeModel(s: Screen, path: string): Promise<Result | "back"> {
   const at = await s.pick("Which Claude model?", CLAUDE_MODELS.map((m) => ({ label: m.name, hint: m.blurb })), 0);
   if (at === "back") return "back";
   const chosen = CLAUDE_MODELS[at]!;
   // navvied runs the work itself (its own tools, skills, rules and memory) and uses only the model of the sign-in. The program is kept for when the sign-in cannot be read.
-  if (loginReadable(s, "claude")) {
-    return { name: "claude", entry: { api: "messages", baseUrl: "https://api.anthropic.com/v1", model: CLAUDE_NATIVE[chosen.id] ?? "claude-sonnet-5-5", signIn: { provider: "claude" }, vision: true, pdf: true, window: 200_000, display: { name: chosen.id === "default" ? "Claude" : `Claude ${chosen.name}` } } };
-  }
-  return { name: "claude", entry: { command: path, window: 200_000, ...(chosen.id === "default" ? {} : { model: chosen.id }), models: CLAUDE_MODELS, efforts: ["low", "medium", "high", "xhigh", "max"] } };
+  return programEntry("claude-code", path, loginReadable(s, "claude"), chosen.id);
 }
 
 /** The programs a person can sign in to and use with their plan, for a page that shows what is installed. */
 export const SIGN_IN_PROGRAMS: readonly { id: string; label: string; command: string }[] = [
   { id: "claude", label: "Claude, with your subscription", command: "claude" },
   { id: "codex", label: "Codex, with your ChatGPT plan", command: "codex" },
+];
+
+/** The programs of the accounts page: the id the page knows each by, and the command it is found by on the path. */
+export const ACCOUNT_PROGRAMS: readonly { id: string; command: string }[] = [
+  { id: "claude-code", command: "claude" },
+  { id: "codex", command: "codex" },
 ];
 
 const claudeSubscription: Preset = {
@@ -332,25 +329,14 @@ const claudeSubscription: Preset = {
 
 const stripColour = (line: string): string => line.replace(/\u001b\[[0-9;]*m/g, "");
 
-interface CodexStatus { loggedIn: boolean; method?: string }
-
-async function codexStatus(s: Screen, path: string): Promise<CodexStatus> {
-  const r = await s.sys.run([path, "login", "status"], { timeoutMs: 8000 }).catch(() => undefined);
-  const text = stripColour(r?.output ?? "");
-  if (!r || r.code !== 0 || /not logged in/i.test(text)) return { loggedIn: false };
-  return { loggedIn: true, method: /chatgpt/i.test(text) ? "your ChatGPT account" : /api key/i.test(text) ? "an API key" : "your account" };
-}
+const codexStatus = (s: Screen, path: string): Promise<CodexStatus> => programCodexStatus(s.sys, path);
 
 async function installCodex(s: Screen): Promise<"installed" | "back"> {
-  const windows = process.platform === "win32";
-  const home = s.io.env.HOME ?? s.io.env.USERPROFILE ?? "~";
-  const argv = windows ? ["npm", "install", "-g", "@openai/codex"] : ["npm", "install", "-g", "--prefix", `${home}/.local`, "@openai/codex"];
-  const shown = windows ? argv.join(" ") : `npm install -g --prefix ~/.local @openai/codex`;
-  const npm = s.sys.which("npm");
-  if (!npm) {
+  const plan = installPlan("codex", process.platform, s.io.env, s.sys.which);
+  if ("error" in plan) {
     s.say("navvied needs npm to install Codex for you, and npm was not found on this computer.\nYou can install Node.js from nodejs.org, or use Homebrew:  brew install codex");
     const at = await s.pick("Codex is not installed on this computer", [{ label: "I will install it myself", hint: "Shows the commands to run in a terminal." }]);
-    if (at !== "back") s.say(`Run this in a terminal, then come back here:\n${shown}   (needs Node.js)\nbrew install codex   (macOS)`);
+    if (at !== "back") s.say(`Run this in a terminal, then come back here:\nnpm install -g @openai/codex   (needs Node.js)\nbrew install codex   (macOS)`);
     return "back";
   }
   const at = await s.pick("Codex is not installed on this computer", [
@@ -358,10 +344,10 @@ async function installCodex(s: Screen): Promise<"installed" | "back"> {
     { label: "I will install it myself", hint: "Shows the commands to run in a terminal." },
   ]);
   if (at === "back") return "back";
-  if (at === 1) { s.say(`Run this in a terminal, then come back here:\n${shown}   (needs Node.js)\nbrew install codex   (macOS)`); return "back"; }
-  s.say(`${shown}\n${windows ? "It downloads Codex from npm into npm's own folder." : "It downloads Codex from npm into your own folder (~/.local), so it needs no administrator password."} Nothing else on your computer is changed.`);
+  if (at === 1) { s.say(`Run this in a terminal, then come back here:\n${plan.shown}   (needs Node.js)\nbrew install codex   (macOS)`); return "back"; }
+  s.say(`${plan.shown}\n${plan.note}`);
   if ((await s.pick("Run this command?", [{ label: "Yes, install Codex" }, { label: "No, go back" }])) !== 0) return "back";
-  const done = await s.work("Installing Codex", { body: [shown], status: "Installing…" }, ({ log, signal }) => s.sys.run([npm, ...argv.slice(1)], { signal, onLine: log, timeoutMs: 600_000 }));
+  const done = await s.work("Installing Codex", { body: [plan.shown], status: "Installing…" }, ({ log, signal }) => s.sys.run(plan.argv, { signal, onLine: log, timeoutMs: 600_000 }));
   if (done === "back") return "back";
   if (done.code !== 0 || !s.sys.which("codex")) {
     s.say("The installer did not finish, or codex was not found afterwards. Open a new terminal and try again, or install it yourself.");
@@ -370,75 +356,58 @@ async function installCodex(s: Screen): Promise<"installed" | "back"> {
   return "installed";
 }
 
-const BROWSER_URL = /https:\/\/\S+/;
-const DEVICE_CODE = /\b[A-Z0-9]{4}-[A-Z0-9]{4,6}\b/;
 const DEVICE_WAIT_MS = 10_000;
 
 /** Signs in through the browser on this computer. Resolves true when Codex reports a login, false when it gave up. */
 async function codexBrowserSignIn(s: Screen, path: string): Promise<boolean | "back" | "device"> {
+  const run = new ProgramSignIn("codex", s.sys, path);
+  const signedIn = run.signedIn;
   const controller = new AbortController();
-  let url: string | undefined;
-  let finished = false;
-  const login = s.sys.run([path, "login"], { signal: controller.signal, timeoutMs: 600_000, onLine: (line) => { url ??= BROWSER_URL.exec(stripColour(line))?.[0]; } });
-  void login.then(() => { finished = true; });
-  const signedIn = async (): Promise<boolean> => (await codexStatus(s, path)).loggedIn;
   try {
-    await Promise.race([login, sleep(80, controller.signal)]);
+    await Promise.race([run.done, sleep(80, controller.signal)]);
     for (;;) {
       if (await signedIn()) return true;
-      if (finished) return false;
+      if (run.finished) return false;
       s.say("Waiting for you to sign in…  This screen moves on by itself when you are done.");
       const at = await s.pick("Finish signing in in your browser", [
         { label: "Open the sign-in page again", hint: "Opens the same page in your browser." },
         { label: "Show the address", hint: "To open it yourself." },
         { label: "Sign in from another device instead", hint: "Shows a code to enter on your phone or another computer." },
-      ], 0, { everyMs: 1500, next: async () => ((await signedIn()) || finished ? { auto: FINISHED } : undefined) },
+      ], 0, { everyMs: 1500, next: async () => ((await signedIn()) || run.finished ? { auto: FINISHED } : undefined) },
       ["Your browser opened a ChatGPT sign-in page.", "Sign in and press Continue.", "Come back here. Nothing to paste."]);
       if (at === "back") return "back";
-      if (at === 0) { if (url) s.sys.open(url); else s.say("The sign-in page address is not known yet. Try again in a moment."); }
-      else if (at === 1) s.say(url ?? "The sign-in page address is not known yet. Try again in a moment.");
+      if (at === 0) { if (run.url) s.sys.open(run.url); else s.say("The sign-in page address is not known yet. Try again in a moment."); }
+      else if (at === 1) s.say(run.url ?? "The sign-in page address is not known yet. Try again in a moment.");
       else if (at === 2) return "device";
     }
-  } finally { controller.abort(); }
+  } finally { run.stop(); controller.abort(); }
 }
 
 /** Signs in with a code entered on another device. */
 async function codexDeviceSignIn(s: Screen, path: string): Promise<boolean | "back"> {
+  const run = new ProgramSignIn("codex", s.sys, path, { device: true });
   const controller = new AbortController();
-  let url: string | undefined;
-  let code: string | undefined;
-  let finished = false;
-  const login = s.sys.run([path, "login", "--device-auth"], {
-    signal: controller.signal,
-    timeoutMs: 20 * 60_000,
-    onLine: (line) => {
-      const plain = stripColour(line);
-      url ??= BROWSER_URL.exec(plain)?.[0];
-      if (url && !code && !plain.includes(url)) code = DEVICE_CODE.exec(plain)?.[0];
-    },
-  });
-  void login.then(() => { finished = true; });
   try {
     const until = Date.now() + DEVICE_WAIT_MS;
-    while ((!url || !code) && !finished && Date.now() < until) await sleep(100, controller.signal);
-    if (!url || !code) {
+    while ((!run.url || !run.code) && !run.finished && Date.now() < until) await sleep(100, controller.signal);
+    if (!run.url || !run.code) {
       s.say("Codex did not give a code to enter. Check your internet connection and try again.");
       return "back";
     }
     const accent = (t: string): string => paint(s.io.color, "cyan", paint(s.io.color, "bold", t));
     const outcome = await s.work("Sign in from another device", {
-      body: ["1  On any device, open this address:", `   ${accent(url)}`, "", "2  Enter this one-time code:", `   ${accent(code)}   (expires in 15 minutes)`, "", "3  Sign in there. This screen moves on by itself when you are done."],
+      body: ["1  On any device, open this address:", `   ${accent(run.url)}`, "", "2  Enter this one-time code:", `   ${accent(run.code)}   (expires in 15 minutes)`, "", "3  Sign in there. This screen moves on by itself when you are done."],
       status: "Waiting for you to sign in…",
     }, async ({ signal }) => {
       while (!signal.aborted) {
-        if ((await codexStatus(s, path)).loggedIn) return true;
-        if (finished) return false;
+        if (await run.signedIn()) return true;
+        if (run.finished) return false;
         await sleep(1500, signal);
       }
       return false;
     });
     return outcome;
-  } finally { controller.abort(); }
+  } finally { run.stop(); controller.abort(); }
 }
 
 const codexSubscription: Preset = {
@@ -455,9 +424,7 @@ const codexSubscription: Preset = {
       }
       const [version, status] = await Promise.all([versionOf(s, path), codexStatus(s, path)]);
       const program = `Codex${version ? ` ${version}` : ""}`;
-      const entry: Result = loginReadable(s, "chatgpt")
-        ? { name: "codex", entry: { api: "responses", baseUrl: "https://chatgpt.com/backend-api/codex", model: "gpt-5.5", signIn: { provider: "chatgpt" }, vision: true, window: 200_000, display: { name: "ChatGPT" } } }
-        : { name: "codex", entry: { command: path, adapter: "codex", window: 200_000, efforts: ["low", "medium", "high", "xhigh"] } };
+      const entry: Result = programEntry("codex", path, loginReadable(s, "chatgpt"));
       if (status.loggedIn && !switching) {
         const at = await s.pick("Codex is ready", [{ label: "Use it", hint: `${program}, signed in with ${status.method}.` }, { label: "Sign in with a different account" }]);
         if (at === "back") return "back";

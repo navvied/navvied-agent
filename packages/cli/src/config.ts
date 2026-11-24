@@ -459,6 +459,21 @@ export function saveModel(path: string, name: string, entry: ModelEntry): Result
   return { ok: true, value: config };
 }
 
+/** Takes one model out of the configuration file; what pointed at it is let go. */
+export function removeModel(path: string, name: string): Result<ConfigFile> {
+  const existing = loadConfig(path);
+  if (!existing.ok) return existing;
+  const config: ConfigFile = existing.value ?? { models: {} };
+  delete config.models[name];
+  if (config.default === name) delete config.default;
+  config.fallback = config.fallback?.filter((n) => n !== name);
+  if (!config.fallback?.length) delete config.fallback;
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return { ok: true, value: config };
+}
+
 /** Keeps an endpoint, or takes it away (`undefined`) with every model made from it; the models of an endpoint are entries of the configuration that hold only the endpoint's id. */
 export function saveEndpoint(path: string, id: string, record: EndpointRecord | undefined): Result<ConfigFile> {
   const existing = loadConfig(path);
