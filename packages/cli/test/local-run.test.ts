@@ -219,7 +219,7 @@ describe.skipIf(win)("the model server of this computer", () => {
     c.send({ cmd: "local.run", repo: REPO, file: FILE });
     c.send({ cmd: "local.stop" });
     await until(() => c.of("error").length === 2);
-    expect(c.of("error").every((e) => e.msg?.includes("never in Navvied Cloud"))).toBe(true);
+    expect(c.of("error").every((e) => e.msg?.includes("not in Navvied Cloud"))).toBe(true);
     expect(existsSync(serverNote(c.local))).toBe(false);
   });
 });

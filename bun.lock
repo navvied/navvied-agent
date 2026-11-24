@@ -11,7 +11,7 @@
     },
     "packages/cli": {
       "name": "@navvied/cli",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "bin": {
         "navvied": "src/main.ts",
       },
@@ -23,18 +23,18 @@
     },
     "packages/desktop": {
       "name": "@navvied/desktop",
-      "version": "0.3.3",
+      "version": "0.3.4",
     },
     "packages/engine": {
       "name": "@navvied/engine",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "dependencies": {
         "@navvied/protocol": "workspace:*",
       },
     },
     "packages/eval": {
       "name": "@navvied/eval",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "bin": {
         "navvied-eval": "src/main.ts",
       },
@@ -44,11 +44,11 @@
     },
     "packages/protocol": {
       "name": "@navvied/protocol",
-      "version": "0.3.3",
+      "version": "0.3.4",
     },
     "packages/stream-engine": {
       "name": "@navvied/stream-engine",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "dependencies": {
         "@navvied/engine": "workspace:*",
         "@navvied/protocol": "workspace:*",

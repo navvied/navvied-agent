@@ -197,7 +197,7 @@ describe("fetching a model", () => {
       for (const cmd of ["local.pull", "local.pause", "local.cancel", "local.remove"]) c.send({ cmd, repo: REPO, file: MODEL });
       c.send({ cmd: "local.models" });
       await until(() => c.got.filter((e) => e.ev === "error").length === 5);
-      expect(c.got.filter((e) => e.ev === "error").every((e) => e.msg?.includes("never in Navvied Cloud"))).toBe(true);
+      expect(c.got.filter((e) => e.ev === "error").every((e) => e.msg?.includes("not in Navvied Cloud"))).toBe(true);
       expect(h.asked).toEqual([]);
     }
   });

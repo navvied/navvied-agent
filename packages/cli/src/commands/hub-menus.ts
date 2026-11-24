@@ -8,6 +8,9 @@ import type { EngineEvent, ScheduleInfo, SessionInfo } from "@navvied/protocol";
 import type { Hub } from "./hub.ts";
 import type { IO } from "../io.ts";
 import { paint } from "../render.ts";
+import { HubLink } from "../providers/link.ts";
+import { Kit } from "../providers/kit.ts";
+import { providersScreen } from "../providers/index.ts";
 
 type Say = (text: string) => void;
 type Row = { label: string; hint?: string };
@@ -22,6 +25,8 @@ export interface MenuContext {
   busy: () => boolean;
   /** The other computers of the account (empty when signed out or the list cannot be had). */
   computers: () => Promise<{ id: string; name: string }[]>;
+  /** A model is about to be switched to: the screen says so when the hub confirms it. */
+  switching: (handover: boolean) => void;
 }
 
 const ago = (ms: number): string => { const m = Math.max(0, Math.round((Date.now() - ms) / 60_000)); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
@@ -31,12 +36,9 @@ const bytes = (n: number): string => (n < 1024 ? `${n} B` : n < 1_048_576 ? `${(
 export function hubMenus(c: MenuContext) {
   const { io, hub } = c;
   const send = (cmd: object): void => hub.command(JSON.stringify(cmd), () => undefined);
-  const waiting = new Map<string, ((e: EngineEvent) => void)[]>();
+  const link = new HubLink(send);
   /** Sends a command and runs `then` on the next event of that name. */
-  const ask = <E extends EngineEvent["ev"]>(ev: E, cmd: object, then: (e: Extract<EngineEvent, { ev: E }>) => void): void => {
-    waiting.set(ev, [...(waiting.get(ev) ?? []), then as (e: EngineEvent) => void]);
-    send(cmd);
-  };
+  const ask = <E extends EngineEvent["ev"]>(ev: E, cmd: object, then: (e: Extract<EngineEvent, { ev: E }>) => void): void => link.ask(ev, cmd, then);
   const choose = async (title: string, heading: string, rows: Row[]): Promise<number | undefined> => {
     if (!io.choose) { c.say(`${heading}\n${rows.map((r, i) => `${i + 1}. ${r.label}${r.hint ? `  ${r.hint}` : ""}`).join("\n")}`); return undefined; }
     const answer = await io.choose(title, rows, 0, { heading: [paint(io.color, "cyan", paint(io.color, "bold", heading)), paint(io.color, "dim", "Pick with ↑ ↓ and Enter. Esc goes back.")] });
@@ -105,14 +107,19 @@ export function hubMenus(c: MenuContext) {
 
   return {
     /** What the hub said, for a menu that was waiting for it. Returns true when the event was a menu's answer. */
-    onEvent(e: EngineEvent): void {
+    onEvent(e: EngineEvent): boolean {
       if (e.ev === "caps") caps = { ...(e.folders ? { folders: e.folders } : {}) };
       if (e.ev === "importable") { const before = cloudWaiting; cloudWaiting = e.count; if (e.count > 0 && e.count !== before) c.say(`${paint(io.color, "cyan", "●")} ${e.count} conversation${e.count === 1 ? "" : "s"} from the cloud can be brought to this computer: /import`); }
       if (e.ev === "imported") c.say(e.count ? `${paint(io.color, "cyan", "✓")} Brought ${e.count} conversation${e.count === 1 ? "" : "s"} to this computer. /resume lists them.` : "Nothing was waiting in the cloud.");
       if (e.ev === "moved") c.say(e.ok ? `${paint(io.color, "cyan", "✓")} ${e.copy ? "Copied." : "Moved."}` : `${paint(io.color, "yellow", "!")} ${e.msg ?? "It could not be moved."}`);
       if (e.ev === "forked" && !e.ok) c.say(`${paint(io.color, "yellow", "!")} ${e.msg ?? "It could not be forked."}`);
-      const list = waiting.get(e.ev);
-      if (list?.length) { waiting.delete(e.ev); for (const fn of list) fn(e); }
+      return link.onEvent(e);
+    },
+
+    /** `/providers`: API keys, endpoints of one's own and models that run on this computer. */
+    async providers(): Promise<void> {
+      const switched = await providersScreen(new Kit(io, link, c.say, c.switching));
+      if (switched === "back") c.marker();
     },
 
     conversations,

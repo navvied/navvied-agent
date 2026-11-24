@@ -153,7 +153,8 @@ describe.skipIf(!posix)("stopping a job", () => {
     const { jobs, ctx } = rig();
     const mark = join(dir, "clean-exit");
     await tool("Bash").run({ command: node(`process.on('SIGTERM', () => { require('fs').writeFileSync(${JSON.stringify(mark)}, 'saved'); process.exit(0); }); console.log('up'); setTimeout(() => {}, 30000)`), run_in_background: true }, ctx);
-    await tool("BashOutput").run({ job_id: "job1", wait: 5, until: "up" }, ctx);
+    // Its handler is set before it prints, so the stop is sent only once the line is there (a loaded machine can take seconds to start it).
+    expect(await tool("BashOutput").run({ job_id: "job1", wait: 60, until: "up" }, ctx)).toContain("up");
     expect(await tool("KillShell").run({ job_id: "job1" }, ctx)).toBe("job1 is stopping.");
     for (let i = 0; i < 40 && !existsSync(mark); i++) await Bun.sleep(100);
     expect(readFileSync(mark, "utf8")).toBe("saved");
@@ -163,7 +164,8 @@ describe.skipIf(!posix)("stopping a job", () => {
   test("one that ignores the request is forced after a few seconds, and the job is then reported stopped", async () => {
     const { jobs, ctx, events } = rig();
     await tool("Bash").run({ command: node("process.on('SIGTERM', () => {}); console.log('stubborn'); setTimeout(() => {}, 60000)"), run_in_background: true }, ctx);
-    await tool("BashOutput").run({ job_id: "job1", wait: 5, until: "stubborn" }, ctx);
+    // As above: a stop sent before its handler is set would end it at once, and the force would never be tested.
+    expect(await tool("BashOutput").run({ job_id: "job1", wait: 60, until: "stubborn" }, ctx)).toContain("stubborn");
     const t0 = Date.now();
     await tool("KillShell").run({ job_id: "job1" }, ctx);
     for (let i = 0; i < 100 && !events.some((e) => e.ev === "job" && e.status === "stopped"); i++) await Bun.sleep(100);

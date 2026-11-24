@@ -97,7 +97,7 @@ describe("a search through the hub", () => {
       const c = computer({ cloud: how });
       c.send({ cmd: "local.search", query: "tiny" });
       await until(() => c.got.some((e) => e.ev === "error"));
-      expect(c.got.find((e) => e.ev === "error")!.msg).toContain("never in Navvied Cloud");
+      expect(c.got.find((e) => e.ev === "error")!.msg).toContain("not in Navvied Cloud");
       expect(c.asked).toEqual([]);
     }
   });

@@ -2,6 +2,9 @@ import type { ProviderSaved } from "@navvied/protocol";
 import type { AdcPlaces } from "./adc.ts";
 import type { ModelEntry } from "./config.ts";
 
+/** What a cloud session says to anything that belongs to a computer: a key, an endpoint, a model that runs here. One sentence, the same on every screen. */
+export const ONLY_ON_A_COMPUTER = "This is only available on a computer, not in Navvied Cloud.";
+
 /** One region of a provider: a key made in one region works only there, so the region picks the address. */
 export interface ProviderRegion { id: string; label: string; base: string; keyUrl?: string }
 

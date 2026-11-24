@@ -23,7 +23,7 @@ import { localModels } from "../local-models.ts";
 import { readMachine, realProbe, type Probe } from "../machine.ts";
 import { askModels, detectApi, newEndpointId, reportEndpoints, type EndpointRecord } from "../endpoints.ts";
 import { API_STYLES, MODEL_HUB, PROVIDERS, authHeaders } from "../presets.ts";
-import { baseOf, entryName, headersOf, listModels, mergeSaved, modelEntryOf, reportOf, type ListedRoute } from "../providers.ts";
+import { ONLY_ON_A_COMPUTER, baseOf, entryName, headersOf, listModels, mergeSaved, modelEntryOf, reportOf, type ListedRoute } from "../providers.ts";
 import { accountPath, chatFilesDir, chatJournalDir, chatSearchIndexPath, chatSessionsDir, configPath, foldersPath, localDir, journalDir, loadConfig, saveEndpoint, saveModel, saveProvider, pluginStatePath, terminalStatePath, toolUsagePath, draftsPath, checkpointsDir, scheduledDir, schedulesPath, searchIndexPath, sessionsDir } from "../config.ts";
 import { SearchIndex } from "../search-index.ts";
 import { readAccount, type Account } from "../account.ts";
@@ -835,7 +835,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
         const fail = (msg: string): void => { say(lane, { ev: "error", msg }); };
         if (!file.ok) { fail(file.error); return; }
         if (cmd.cmd === "endpoints") { tellEndpoints(); return; }
-        if (main.options.sandboxed || file.value?.webProxy) { fail("A key is kept only on a computer, never in Navvied Cloud."); return; }
+        if (main.options.sandboxed || file.value?.webProxy) { fail(ONLY_ON_A_COMPUTER); return; }
         const known = file.value?.endpoints ?? {};
         const headersFor = (key: string | undefined) => (api: EndpointRecord["api"]): Record<string, string> => authHeaders(api, key);
         /** What the server speaks: the one asked for, or, for `auto`, the one it answers in. */
@@ -883,7 +883,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
         const fail = (msg: string): void => { say(lane, { ev: "error", msg }); };
         const entry = PROVIDERS.find((p) => p.id === cmd.id);
         if (!file.ok) { fail(file.error); return; }
-        if (main.options.sandboxed || file.value?.webProxy) { fail("A key is kept only on a computer, never in Navvied Cloud."); return; }
+        if (main.options.sandboxed || file.value?.webProxy) { fail(ONLY_ON_A_COMPUTER); return; }
         if (!entry) { fail("That provider is not known."); return; }
         const before = file.value?.providers?.[entry.id];
         if (cmd.cmd === "provider.save" || cmd.cmd === "provider.remove") {

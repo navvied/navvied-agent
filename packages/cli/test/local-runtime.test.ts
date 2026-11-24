@@ -79,7 +79,7 @@ describe("the runtime through the hub", () => {
       const c = computer({ cloud: how });
       for (const cmd of ["local.runtime", "local.runtime.install", "local.runtime.cancel", "local.runtime.remove", "local.recommended"]) c.send({ cmd });
       await until(() => c.got.filter((e) => e.ev === "error").length === 5);
-      expect(c.got.filter((e) => e.ev === "error").every((e) => e.msg?.includes("never in Navvied Cloud"))).toBe(true);
+      expect(c.got.filter((e) => e.ev === "error").every((e) => e.msg?.includes("not in Navvied Cloud"))).toBe(true);
       expect(c.asked).toEqual([]);
     }
   });

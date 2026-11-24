@@ -141,7 +141,7 @@ describe("a computer keeps what a person gives a provider, and says only what is
       const before = readFileSync(cloud.file, "utf8");
       cloud.send({ cmd: "provider.save", id: "deepseek", key: "sk-in-the-cloud" });
       await until(() => cloud.said("error").length === 1);
-      expect(cloud.said("error")[0]!.msg).toContain("never in Navvied Cloud");
+      expect(cloud.said("error")[0]!.msg).toContain("not in Navvied Cloud");
       expect(readFileSync(cloud.file, "utf8")).toBe(before);
     }
     expect(existsSync(c.file) && readFileSync(c.file, "utf8")).not.toContain('"providers"');
@@ -336,7 +336,7 @@ describe("a provider that signs in with a credential file of the computer", () =
     const cloud = computer("flag", undefined, { [adcEntry.adc!.env]: credentialFile() });
     cloud.send({ cmd: "provider.use", id: adcEntry.id, model: "m" });
     await until(() => cloud.said("error").length === 1);
-    expect(cloud.said("error")[0]!.msg).toContain("never in Navvied Cloud");
+    expect(cloud.said("error")[0]!.msg).toContain("not in Navvied Cloud");
   });
 });
 

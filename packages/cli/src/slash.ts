@@ -19,6 +19,7 @@ export const SLASH_COMMANDS: readonly CommandInfo[] = [
   { name: "schedule", desc: "See the tasks that run by themselves; run, turn off or remove one (add with: navvied schedule add)" },
   { name: "folder", desc: "Choose the folder the next conversation works in" },
   { name: "tools", desc: "See what the agent can do here, and switch each tool on or off" },
+  { name: "providers", desc: "Add a model: an API key, a server of your own, or a model that runs on this computer" },
   { name: "plugins", desc: "See the skills, tool servers and hooks, and switch each on or off" },
   { name: "artifacts", desc: "See the files conversations wrote, and show one" },
   { name: "import", desc: "Bring the conversations waiting in the cloud to this computer" },

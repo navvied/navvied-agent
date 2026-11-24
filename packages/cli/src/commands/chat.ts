@@ -110,6 +110,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
     // Another conversation is now the open one: this screen is not waiting for the old one's reply.
     if (e.ev === "session" || e.ev === "loaded") { busy = false; approval = undefined; }
     if (e.ev === "taken") busy = true;
+    if (menus?.onEvent(e)) return;
     view.handle(e);
     if (e.ev === "caps") {
       const before = capsNow;
@@ -134,7 +135,6 @@ export async function chatCommand(initial: string | undefined, options: Options,
     if (e.ev === "plan_proposal") proposed = true;
     if (e.ev === "checkpoints") { listed = e.items; if (checkpointsAsked) { checkpointsAsked = false; void chooseCheckpoint(e.items); } }
     if (e.ev === "found" && searchAsked === e.query) { searchAsked = undefined; void chooseHit(e.query, e.items); }
-    menus?.onEvent(e);
     if (e.ev === "sessions" && listAsked) { listAsked = false; void menus?.conversations(e.items); }
     if (e.ev === "session") current = hub.created() ?? current;
     if (e.ev === "loaded") current = hub.created() ?? current;
@@ -168,7 +168,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
   }
   const hub = createHub(options, io, { watch: false });
   menus = hubMenus({
-    io, hub, say, marker, busy: () => busy,
+    io, hub, say, marker, busy: () => busy, switching: (handover) => { switching = true; switchingHandover = handover; summarised = false; },
     computers: async () => { const account = readAccount(accountPath(io.env, options.config)); return account ? (await listComputers(io.fetch, account)).filter((c) => c.name !== computerName()).map((c) => ({ id: c.id, name: c.name })) : []; },
   });
   // Tasks the person scheduled run while the app is open, and any that came due while it was closed start once, now.
@@ -319,6 +319,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
       case "schedule": menus?.schedule(); return;
       case "folder": void menus?.folder(); return;
       case "plugins": menus?.plugins(); return;
+      case "providers": void menus?.providers(); return;
       case "tools": menus?.tools(); return;
       case "artifacts": menus?.artifacts(); return;
       case "import": menus?.import(); return;

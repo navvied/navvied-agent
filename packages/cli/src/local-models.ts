@@ -10,6 +10,7 @@ import type { IO } from "./io.ts";
 import { readMachine, realProbe, type Machine, type Probe } from "./machine.ts";
 import { askOllama, ollamaRoot, pullOllama, type OllamaPullState } from "./ollama-pull.ts";
 import { recommendedModels, searchModels, type Candidate } from "./model-hub.ts";
+import { ONLY_ON_A_COMPUTER } from "./providers.ts";
 import { MODEL_HUB, RECOMMENDED_MODELS, RUNTIME, RUNTIME_DRIVERS } from "./presets.ts";
 import { cleanParts, installedModels, pathOf, pullModel, removeModel, type PullState } from "./model-files.ts";
 import { installRuntime, removeRuntime, runtimeState, type Backend, type RuntimeState } from "./runtime.ts";
@@ -28,7 +29,7 @@ export interface LocalDeps {
   models: { add(name: string, entry: ModelEntry): void; refresh(): void };
 }
 
-const REFUSED = "A model is run only on a computer, never in Navvied Cloud.";
+const REFUSED = ONLY_ON_A_COMPUTER;
 
 /** What the commands that are about running models on this computer do: the machine, the search, the runtime. */
 export function localModels(d: LocalDeps): { command(cmd: Command): boolean; stop(): Promise<void>; running(): string | undefined } {

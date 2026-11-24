@@ -203,7 +203,7 @@ describe("an endpoint on a computer", () => {
       c.send({ cmd: "endpoint.models", baseUrl: "http://127.0.0.1:1/v1", api: "chat" });
       c.send({ cmd: "endpoint.remove", id: "custom-s" });
       await until(() => c.said("error").length === 3);
-      expect(c.said("error").every((e) => e.msg!.includes("never in Navvied Cloud"))).toBe(true);
+      expect(c.said("error").every((e) => e.msg!.includes("not in Navvied Cloud"))).toBe(true);
       expect(readFileSync(c.file, "utf8")).toBe(before);
     }
   });
