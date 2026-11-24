@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { validateCommand } from "@navvied/protocol";
 import type { EngineEvent } from "@navvied/protocol";
 import { accounts, readAccounts } from "../src/accounts.ts";
+import { CLAUDE_INSTALL, installPlan } from "../src/programs.ts";
 import { createHub } from "../src/commands/hub.ts";
 import { accountPath, configPath } from "../src/config.ts";
 import { fakeIO, fakeSystem, remove, tempDir, until } from "./helpers.ts";
@@ -25,6 +26,10 @@ const system = (o: { claude?: boolean; codex?: boolean; claudeSigned?: boolean; 
     [`${CODEX} login status`]: async () => (o.codexSigned ? { code: 0, output: "Logged in using ChatGPT" } : { code: 1, output: "Not logged in" }),
   },
 });
+
+/** The installer of Claude as this computer runs it: the sh line, or the PowerShell line on Windows. */
+const CLAUDE_ARGV = process.platform === "win32" ? ["powershell", "-NoProfile", "-Command", CLAUDE_INSTALL.windows] : ["sh", "-c", CLAUDE_INSTALL.unix];
+const CLAUDE_RUN = CLAUDE_ARGV.join(" ");
 
 const fakeAccount = { server: "https://example.test", token: "t-secret", email: "owner@example.com" };
 
@@ -79,12 +84,12 @@ function page(sys: ReturnType<typeof fakeSystem>, o: { cloud?: boolean } = {}) {
 describe("installing a program", () => {
   test("Claude Code: the official installer is run, and the accounts are said again with the program there", async () => {
     const sys = system();
-    sys.runs["sh -c curl -fsSL https://claude.ai/install.sh | bash"] = async () => { sys.installed.claude = CLAUDE; return { code: 0, output: "" }; };
+    sys.runs[CLAUDE_RUN] = async () => { sys.installed.claude = CLAUDE; return { code: 0, output: "" }; };
     const p = page(sys);
     expect(p.send({ cmd: "account.install", id: "claude-code" })).toBe(true);
     await until(() => p.of("accounts").length === 1);
     expect(p.of("account.install").map((e) => e.state)).toEqual(["installing", "done"]);
-    expect(sys.ran[0]).toEqual(["sh", "-c", "curl -fsSL https://claude.ai/install.sh | bash"]);
+    expect(sys.ran[0]).toEqual(CLAUDE_ARGV);
     expect((p.of("accounts")[0]!.items as { id: string; installed?: boolean }[]).find((i) => i.id === "claude-code")!.installed).toBe(true);
   });
 
@@ -107,13 +112,21 @@ describe("installing a program", () => {
   test("an installer that fails, or leaves no program, is said in words; two asks at once run it once", async () => {
     const sys = system();
     let runs = 0;
-    sys.runs["sh -c curl"] = async () => { runs++; await new Promise((r) => setTimeout(r, 30)); return { code: 1, output: "" }; };
+    sys.runs[CLAUDE_RUN] = async () => { runs++; await new Promise((r) => setTimeout(r, 30)); return { code: 1, output: "" }; };
     const p = page(sys);
     p.send({ cmd: "account.install", id: "claude-code" });
     p.send({ cmd: "account.install", id: "claude-code" });
     await until(() => p.of("account.install").some((e) => e.state === "failed"));
     expect(runs).toBe(1);
     expect(String(p.of("account.install").find((e) => e.state === "failed")!.error)).toContain("did not finish");
+  });
+});
+
+describe("the installer of Claude on each system", () => {
+  test("Windows runs PowerShell's own installer, everything else runs sh", () => {
+    const none = () => undefined;
+    expect(installPlan("claude-code", "win32", {}, none)).toMatchObject({ argv: ["powershell", "-NoProfile", "-Command", "irm https://claude.ai/install.ps1 | iex"] });
+    for (const platform of ["linux", "darwin"] as const) expect(installPlan("claude-code", platform, {}, none)).toMatchObject({ argv: ["sh", "-c", "curl -fsSL https://claude.ai/install.sh | bash"] });
   });
 });
 
