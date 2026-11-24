@@ -11,6 +11,8 @@ export interface Options {
   session?: string;
   /** What the conversation is for (default `agent`). A `chat` works in a scratch folder of its own. */
   kind?: SessionKind;
+  /** Open Providers as soon as the app is up (`navvied init`). */
+  providers?: boolean;
   /** The program runs inside a sandbox (a hosted session), so a chat may run commands too. */
   sandboxed?: boolean;
   /** `run`: print every protocol event as a JSON line instead of readable text. */

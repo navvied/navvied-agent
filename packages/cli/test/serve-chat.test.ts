@@ -204,36 +204,40 @@ describe("interactive session", () => {
     expect(f.out()).toContain("all done here");
   });
 
-  test("with no model set up, the app still opens and the first message starts the setup", async () => {
+  test("with no model set up, the app still opens and the first message points to Providers", async () => {
     const f = fakeIO({ env: { HOME: tempDir() }, interactive: true, stdin: "hello\n" });
     expect(await main(["chat"], f.io)).toBe(0);
     expect(f.err()).toContain("No model connected yet");
     expect(f.err()).toContain("No model is connected yet.");
-    expect(f.err()).toContain("Which one do you use?");
-    expect(f.err()).toContain("setup cancelled");
+    expect(f.err()).toContain("Providers need a terminal");
   });
 
-  test("a message typed before a model is connected is shown again, under the new welcome, once the model is connected", async () => {
+  test("with menus, a first run opens Providers by itself; once a model is in use the welcome is drawn again and the next message goes to it", async () => {
     const calls: string[] = [];
     const dock = (() => ({ refresh() {}, clear() { calls.push("clear"); }, release() {} })) as unknown as NonNullable<Parameters<typeof fakeIO>[0]>["dock"];
-    const f = fakeIO({ env: { HOME: tempDir() }, interactive: true, stdin: "write a poem\n3\n", dock,
-      system: fakeSystem({ installed: {} }) });
+    const state = tempDir();
+    const f = fakeIO({ env: { HOME: state, XDG_STATE_HOME: state }, interactive: true, stdin: "hello\n", dock });
+    // What the person presses, in order: Custom Endpoints, Add endpoint, the name, the address, one model by hand, Save, then back out.
+    const picks: (string | undefined)[] = ["Custom Endpoints", "Add endpoint", "Name", "Endpoint URL", "Add model", "Model", undefined, "Save", undefined, undefined];
+    const typed = ["box", mock.url, "mock-model"];
+    const titles: string[] = [];
+    f.io.choose = async (title: string, items: { label: string }[]) => {
+      titles.push(title);
+      const want = picks.shift();
+      return want === undefined ? undefined : items.findIndex((i) => i.label === want);
+    };
+    f.io.text = async () => typed.shift();
     await main(["chat"], f.io);
-    expect(f.err()).toContain("npm was not found on this computer");
-    expect(calls).toEqual([]);
-    const g = fakeIO({ env: { HOME: tempDir() }, interactive: true, stdin: "write a poem\n8\n1\n", dock, system: fakeSystem({ installed: { goose: process.execPath }, runs: { [`${process.execPath} --version`]: () => ({ code: 0, output: "1.0.0" }) } }) });
-    await main(["chat"], g.io);
+    expect(titles[0]).toBe("Providers");
     expect(calls).toEqual(["clear"]);
-    const out = g.err();
-    expect(out.lastIndexOf("Your coding assistant")).toBeLessThan(out.lastIndexOf("write a poem"));
+    expect(f.out() + f.err()).toContain("all done here");
   });
 
-  test("/connect runs the setup from inside the app", async () => {
-    const f = fakeIO({ env: { HOME: tempDir() }, interactive: true, stdin: "/connect\n" });
+  test("/connect and /providers open Providers from inside the app", async () => {
+    const f = fakeIO({ env: { HOME: tempDir() }, interactive: true, stdin: "/connect\n/providers\n" });
     expect(await main(["chat"], f.io)).toBe(0);
-    expect(f.err()).toContain("Which one do you use?");
+    expect(f.err().match(/Providers need a terminal/g)).toHaveLength(2);
     expect(f.err()).not.toContain("No model is connected yet.");
-    expect(f.err()).toContain("Not connected. Run navvied init to try again.");
   });
 
   test("a blank line is ignored, not sent as a message", async () => {

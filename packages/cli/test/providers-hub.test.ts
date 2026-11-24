@@ -103,7 +103,7 @@ describe("the Providers list", () => {
     const c = computer(lists(["alpha"]));
     const t = scripted(["API keys", "DeepSeek", "DeepSeek key", "Save", "alpha"], ["sk-x"]);
     expect(await providersScreen(t.kit(c.link))).toBe("switched");
-    expect(t.shown[0]!.items.map((i) => i.label)).toEqual(["API keys", "Custom Endpoints", "Local Models"]);
+    expect(t.shown[0]!.items.map((i) => i.label)).toEqual(["Accounts", "API keys", "Custom Endpoints", "Local Models"]);
   });
   test("going back from a part returns to the list, and back again leaves", async () => {
     const c = computer(lists([]));

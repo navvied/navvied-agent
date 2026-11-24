@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { autoUpdate } from "../src/commands/auto-update.ts";
-import { findLocalServers, reachable } from "../src/commands/init.ts";
+import { findLocalServers, reachable } from "../src/model-setup.ts";
 import { assetName, detectMachine, isInstalledProgram, progressLine, releaseBase, updateCommand, updateProgram, type UpdateProgress } from "../src/commands/update.ts";
 import { loadConfig } from "../src/config.ts";
 import { main } from "../src/main.ts";

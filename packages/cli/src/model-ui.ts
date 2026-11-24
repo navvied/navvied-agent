@@ -29,7 +29,7 @@ export function modelRows(caps: Caps | undefined, currentName: string, file: Con
     if (inList(name)) continue;
     rows.push({ label: e.model ?? name, hint: `${describeEntry(e)} Starts a new conversation.`, action: { kind: "restart", name } });
   }
-  rows.push({ label: "Connect another model", hint: "Sign in to a service, or add one on this computer.", action: { kind: "connect" } });
+  rows.push({ label: "Add model", action: { kind: "connect" } });
   return rows;
 }
 

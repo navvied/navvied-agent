@@ -117,9 +117,8 @@ export function hubMenus(c: MenuContext) {
     },
 
     /** `/providers`: API keys, endpoints of one's own and models that run on this computer. */
-    async providers(): Promise<void> {
-      const switched = await providersScreen(new Kit(io, link, c.say, c.switching));
-      if (switched === "back") c.marker();
+    providers(): Promise<"back" | "switched"> {
+      return providersScreen(new Kit(io, link, c.say, c.switching));
     },
 
     conversations,

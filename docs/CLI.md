@@ -2,7 +2,7 @@
 
 ```
 navvied                        interactive session; the first run sets up a model
-navvied init                   set up a model (finds local servers for you)
+navvied init                   add a model: opens Providers
 navvied doctor                 check that everything is in order
 navvied update                 update this program now (it also updates itself in the background)
 navvied run "<task>"           do one task, print the result, exit
@@ -203,12 +203,11 @@ Turn it off with `"autoUpdate": false` in the configuration file, or by setting 
 
 ## Connecting a model
 
-`/model` in the app (or `navvied init` from a shell) opens the setup. Everything is chosen with the arrow keys, Enter, Left (back) and Esc (cancel); nothing has to be typed.
+There is one place to add a model: `/providers`. The first run, `/model`'s last row, "Add model", and `navvied init` from a shell all open it. `/model` only chooses between what is already connected. Everything is chosen with the arrow keys, Enter, Left (back) and Esc (cancel); typing is only for a key, a field, an address or a search.
 
-* **An API key** is taken from the clipboard when it looks like that service's key, or from the usual environment variable. If neither is there, the page where keys are made opens in the browser and the list moves on by itself when a key is copied. Pasting it by hand stays available.
-* **A model on this computer** and **another service** list the servers found on the usual ports, then the models each reports. An address is typed only for a server that was not found.
-* **A subscription** is used through the service's own command-line program: navvied detects it, asks it whether you are signed in, starts its browser sign-in, and can install it after showing the command. navvied never sees the password or the token.
-* **Another agent program** lists the programs it finds on the computer.
+* **Accounts**: the navvied account (Sign in shows an address and a code to approve on navvied.com; Sign out), and the two programs you sign in to with a plan, each connected through its own official program: Install it, Sign in (the program's own browser sign-in opens on this computer), Sign out. navvied never sees the password or the token.
+* **API keys**: every service in the list, with the key page, the region and the other fields it needs.
+* **Custom Endpoints** and **Local Models**: see `/providers` in the table below.
 
 ## Permission modes
 
@@ -347,7 +346,7 @@ Everything the web page and the phone do with a computer's hub is a command to t
 | `/folder` | Choose the folder the next conversation works in, from the ones this computer offers (the start folder, the ones used lately, and `"folders"` in `config.json`). |
 | `/import` | Brings the conversations waiting in the cloud (from hosted sessions) to this computer; a line at the start says how many wait. |
 | `/move <computer id>`, `/copy <computer id>` | Sends the open conversation to another computer of your account (through the relay, sealed; nothing goes to the cloud). |
-| `/providers` | The three ways to bring a model of your own, with the same words as the page. **API keys**: pick a service; its page has the region, the key (never shown), the other fields it asks for and another address; Save keeps them and then lists the service's models to choose from. A key the service refuses is not kept. **Custom Endpoints**: a server of your own (name, address, API style, key, the models to use), tried with Find models. **Local Models**: install or remove the runtime, see what this computer can run, Ollama when it is there (its models, and fetching one by name), a short list of models to start with or a search of Hugging Face (each says whether it fits), download with pause and resume, run and stop one, remove it. Keys and endpoints stay on this computer; none of it is available in Navvied Cloud. |
+| `/providers` | Where a model is added: **Accounts** (the navvied account, and the two programs you sign in to with a plan), **API keys** (every service: region, key, fields, another address; Save keeps them and lists the service's models), **Custom Endpoints** (a server of your own, tried with Find models), **Local Models** (install or remove the runtime, Ollama, a short list or a search of Hugging Face with a fit for each result, download with pause and resume, run and stop). Keys and endpoints stay on this computer; none of it is available in Navvied Cloud. |
 | `/plugins` | The skills, tool servers and hooks, each on or off; Enter switches one (the files and `config.json` are not touched). |
 | `/tools` | What the agent can do on this computer, in sets (files, terminal, web, helpers, notes), each on or off, with how often it was used; and where commands run: this computer, a Docker or Podman container, or another computer over SSH. Takes effect from the next new conversation. |
 | `/artifacts` | The files conversations wrote; pick one to show it (text; a picture says where it is). |

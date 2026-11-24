@@ -12,26 +12,6 @@ const script = (dir: string, name: string, body: string): void => { writeFileSyn
 const posix = process.platform !== "win32";
 
 describe.skipIf(!posix)("the computer, as the setup screens see it", () => {
-  test("the clipboard is read with the program this system has, and an empty or huge one is nothing", async () => {
-    const dir = tmp();
-    script(dir, "pbpaste", 'printf "  copied text\\n"');
-    expect(await realSystem({ PATH: dir }, "darwin").clipboard()).toBe("copied text");
-    script(dir, "pbpaste", "printf ''");
-    expect(await realSystem({ PATH: dir }, "darwin").clipboard()).toBeUndefined();
-    script(dir, "pbpaste", "head -c 9000 /dev/zero | tr '\\\\0' x");
-    expect(await realSystem({ PATH: dir }, "darwin").clipboard()).toBeUndefined();
-  });
-
-  test("on Linux the first reader that exists and works is used; with none, there is no clipboard", async () => {
-    const dir = tmp();
-    expect(await realSystem({ PATH: dir }, "linux").clipboard()).toBeUndefined();
-    script(dir, "xclip", "exit 1");
-    script(dir, "xsel", 'printf "from xsel"');
-    expect(await realSystem({ PATH: dir }, "linux").clipboard()).toBe("from xsel");
-    script(dir, "wl-paste", 'printf "from wayland"');
-    expect(await realSystem({ PATH: dir }, "linux").clipboard()).toBe("from wayland");
-  });
-
   test("a program is found in its install places as well as on the PATH", () => {
     const home = tmp(), dir = tmp();
     script(join(home, "."), "unused", "true");

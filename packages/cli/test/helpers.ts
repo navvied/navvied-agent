@@ -27,8 +27,6 @@ export class InputQueue implements AsyncIterable<string> {
 }
 
 export interface FakeSystem extends System {
-  /** What the clipboard holds; change it to simulate a copy. */
-  clip: string | undefined;
   opened: string[];
   /** What was put on the clipboard, in order. */
   copied: string[];
@@ -39,12 +37,11 @@ export interface FakeSystem extends System {
   ran: string[][];
 }
 
-export function fakeSystem(over: Partial<Pick<FakeSystem, "clip" | "installed" | "runs">> = {}): FakeSystem {
+export function fakeSystem(over: Partial<Pick<FakeSystem, "installed" | "runs">> = {}): FakeSystem {
   const sys: FakeSystem = {
-    clip: over.clip, opened: [], copied: [], installed: over.installed ?? {}, runs: over.runs ?? {}, ran: [],
-    clipboard: async () => sys.clip,
+    opened: [], copied: [], installed: over.installed ?? {}, runs: over.runs ?? {}, ran: [],
     open: (url) => { sys.opened.push(url); },
-    copy: async (text) => { sys.copied.push(text); sys.clip = text; return true; },
+    copy: async (text) => { sys.copied.push(text); return true; },
     which: (command) => sys.installed[command],
     run: async (argv, options = {}) => {
       sys.ran.push(argv);

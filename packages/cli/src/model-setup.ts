@@ -7,9 +7,36 @@ import { dirname } from "node:path";
 import type { Result } from "@navvied/protocol";
 import { loadConfig, parseModelEntry, type ConfigFile, type ModelEntry } from "./config.ts";
 import { describeEntry } from "./create.ts";
-import { findLocalServers } from "./commands/init.ts";
-import { SIGN_IN_PROGRAMS, authHeaders, memoryFor } from "./presets.ts";
+import { SIGN_IN_PROGRAMS, authHeaders, localName, memoryFor, type LocalServer } from "./presets.ts";
 import type { IO } from "./io.ts";
+
+const LOCAL_PORTS = [11434, 1234, 8080, 8000];
+
+/** Look for model servers on this machine that speak the chat-completions API. */
+export async function findLocalServers(fetchFn: typeof fetch): Promise<LocalServer[]> {
+  const probes = LOCAL_PORTS.map(async (port): Promise<LocalServer | undefined> => {
+    const baseUrl = `http://127.0.0.1:${port}/v1`;
+    try {
+      const res = await fetchFn(`${baseUrl}/models`, { signal: AbortSignal.timeout(700) });
+      if (!res.ok) return undefined;
+      const body = (await res.json()) as { data?: { id?: unknown }[] };
+      const models = (body.data ?? []).map((m) => m.id).filter((id): id is string => typeof id === "string");
+      return { name: localName(baseUrl), baseUrl, models, ...(port === 11434 ? { ollama: true } : {}) };
+    } catch { return undefined; }
+  });
+  return (await Promise.all(probes)).filter((s): s is LocalServer => s !== undefined);
+}
+
+/** Whether a model's server answers its list of models, with the key it has. */
+export async function reachable(entry: ModelEntry, env: Record<string, string | undefined>, fetchFn: typeof fetch): Promise<boolean> {
+  if (!entry.baseUrl) return false;
+  const key = (entry.apiKeyEnv ? env[entry.apiKeyEnv] : undefined) ?? entry.apiKey;
+  const root = entry.baseUrl.replace(/\/+$/, "");
+  try {
+    const res = await fetchFn(entry.api === "ollama" ? `${root}/api/tags` : `${root}/models`, { headers: authHeaders(entry.api, key), signal: AbortSignal.timeout(5000) });
+    return res.ok;
+  } catch { return false; }
+}
 
 export interface SetupView {
   servers: { name: string; baseUrl: string; models: string[]; ollama: boolean }[];

@@ -19,7 +19,7 @@ const USAGE = rows([
   ["navvied serve --stdio", "run as a protocol server on stdin/stdout"],
   ["navvied serve --http", "serve the agent over a WebSocket. --port and --host set the address, --web <folder> replaces the built-in web page, --ready-line tells a program that starts this one, --exit-when-stdin-closes stops it when that program does."],
   ["navvied web", "open the web page, already connected to the agent on this computer (--site <address>)"],
-  ["navvied init", "set up a model (finds local servers for you)"],
+  ["navvied init", "add a model: opens Providers"],
   ["navvied models", "list configured models"],
   ["navvied doctor", "check that everything is in order"],
   ["navvied update [version]", "update this program"],

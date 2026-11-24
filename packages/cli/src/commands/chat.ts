@@ -32,7 +32,6 @@ import type { Dock, IO } from "../io.ts";
 import { expandMentions, extractAttachments, previewChips } from "../mentions.ts";
 import { Renderer, ago, paint } from "../render.ts";
 import { ACCENTS, THEMES, currentTheme, isThemeName, parseAccent, resolveTheme, setTheme } from "../theme.ts";
-import { setupModel } from "./init.ts";
 import { EXIT } from "./run.ts";
 
 /** The file-op verbs already name the file in the title, so repeating the path below it would only be noise. */
@@ -100,6 +99,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
   const working = (): void => { if (io.interactive) io.prompt(promptMark, "Working. Type to add instructions, or press Esc to stop."); };
 
   let menus: ReturnType<typeof hubMenus> | undefined;
+  let modelReady: (() => void) | undefined;
   const emit = (e: EngineEvent): void => {
     // A conversation that was put aside while it was being answered goes on without this screen: it only says when it is done, or waits for an answer.
     if ((e as { bg?: string }).bg !== undefined) {
@@ -117,7 +117,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
       capsNow = e;
       modes = e.modes;
       // An engine that is made says its abilities first; once it is in place it is the one this screen talks to (a conversation handed to another model has a new one).
-      queueMicrotask(() => { current = hub.created() ?? current; });
+      queueMicrotask(() => { current = hub.created() ?? current; if (current) modelReady?.(); });
       const was = before?.models?.find((m) => m.current), now = e.models?.find((m) => m.current);
       if (switching && now && now.id !== was?.id) {
         switching = false;
@@ -213,7 +213,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
       : [paint(io.color, "dim", "No model connected")];
     const keys: [string, string][] = updated ? [] : current
       ? [["/", "commands"], ["@", "files"], ...(modes.length > 1 ? [["Shift+Tab", "mode"] as [string, string]] : [])]
-      : [["/model", "connect a model"], ["/", "commands"]];
+      : [["/providers", "add a model"], ["/", "commands"]];
     const right = updated ? paint(io.color, "green", "✓ Update installed") + paint(io.color, "dim", "   restart to apply") : keys.map(([k, l]) => `${paint(io.color, "cyan", paint(io.color, "bold", k))} ${paint(io.color, "dim", l)}`).join("   ");
     const leftText = left.join("   ");
     const room = cols - 2 - plain(leftText.replace(/\u001b\[[0-9;]*m/g, "")) - plain(right.replace(/\u001b\[[0-9;]*m/g, ""));
@@ -320,17 +320,17 @@ export async function chatCommand(initial: string | undefined, options: Options,
       case "schedule": menus?.schedule(); return;
       case "folder": void menus?.folder(); return;
       case "plugins": menus?.plugins(); return;
-      case "providers": void menus?.providers(); return;
+      case "providers": void connect(); return;
       case "tools": menus?.tools(); return;
       case "artifacts": menus?.artifacts(); return;
       case "import": menus?.import(); return;
       case "move": case "copy": menus?.transfer(name as "move" | "copy", arg, current?.engine.sessionId ?? null); return;
       case "search":
         if (!arg.trim()) say("usage: /search <words>   finds earlier conversations by what was said in them");
-        else if (!current) say("connect a model first");
+        else if (!current) say("add a model first: /providers");
         else { searchAsked = arg.trim(); hub.command(JSON.stringify({ cmd: "search", query: arg.trim() }), () => undefined); return; }
         break;
-      case "resume": if (!current) say("connect a model first"); else { listAsked = true; hub.command(JSON.stringify({ cmd: "sessions" }), () => undefined); } return;
+      case "resume": if (!current) say("add a model first: /providers"); else { listAsked = true; hub.command(JSON.stringify({ cmd: "sessions" }), () => undefined); } return;
       case "theme": case "accent": look(name, arg); break;
       case "web": void openPage(); return;
       case "effort": void chooseEffort(); return;
@@ -529,28 +529,15 @@ export async function chatCommand(initial: string | undefined, options: Options,
     else requestQuit();
   });
 
-  const runSetup = async (): Promise<boolean> => {
-    const next = async (): Promise<string | undefined> => { const r = await Promise.race([input.next(), quitSignal]); return r === QUIT || r.done ? undefined : r.value; };
-    return (await setupModel(options, io, next, false)) === EXIT.ok && start();
-  };
-
+  /** Adding a model is one place: Providers. When it ends with a model in use that was not before, the welcome is drawn again, and a message that waited for one is sent. */
   const connect = async (pending?: string): Promise<void> => {
-    if (pending !== undefined) say(`${paint(io.color, "yellow", "No model is connected yet.")} Let's set one up first, then I'll send your message.\n`);
-    if (await runSetup()) {
-      if (dock) {
-        dock.clear();
-        welcome();
-        if (pending !== undefined) io.stderr.write(`${promptMark}${pending}\n`);
-      }
-      if (pending !== undefined) send(pending); else marker();
-    }
-    else if (!quit) {
-      if (io.choose) {
-        const again = await io.choose("Not connected yet", [{ label: "Try again" }, { label: "Not now" }], 0, { notice: ["Setup was closed before a model was chosen."] });
-        if (again === 0) return connect(pending);
-      } else say("Not connected. Run navvied init to try again.");
-      marker();
-    }
+    if (pending !== undefined) say(`${paint(io.color, "yellow", "No model is connected yet.")} Add one first, then I'll send your message.\n`);
+    const had = Boolean(current);
+    const result = await menus!.providers();
+    if (result === "switched" && !current) await new Promise<void>((done) => { modelReady = done; });
+    if (!had && current && dock) { dock.clear(); welcome(); }
+    if (current && pending !== undefined) { if (dock) io.stderr.write(`${promptMark}${pending}\n`); send(pending); return; }
+    marker();
   };
 
   const offKeys = io.keys?.((key) => {
@@ -597,7 +584,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
   const echo = (line: string): string | undefined => (line.startsWith("/") || !current ? `${promptMark}${paint(io.color, "dim", line)}\n` : undefined);
   const input = io.lines({ suggest: makeSuggest(SLASH_COMMANDS, current?.cwd ?? cwd), chips: (text) => previewChips(text, current?.cwd ?? cwd), ...(presenter ? { echo } : {}) })[Symbol.asyncIterator]();
   if (initial) { if (current) send(initial); else await connect(initial); }
-  else if (!current && io.choose) await connect();
+  else if ((!current || options.providers) && io.choose) await connect();
   else marker();
   while (!quit) {
     const next = await Promise.race([input.next(), quitSignal]); // a Ctrl+C must not wait for the next keystroke

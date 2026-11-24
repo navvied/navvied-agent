@@ -6,7 +6,6 @@ import { GUEST_PREFIX } from "../src/account.ts";
 import { accountPath, configPath, guestModelsPath, loadConfig } from "../src/config.ts";
 import { createHub } from "../src/commands/hub.ts";
 import { ensureGuestModels } from "../src/guest-models.ts";
-import { PRESETS, type Screen } from "../src/presets.ts";
 import { fakeIO, remove, tempDir, until } from "./helpers.ts";
 
 const dirs: string[] = [];
@@ -78,28 +77,6 @@ describe("the free models of navvied.com, for a computer that is not signed in",
     const ids = got.find((e) => e.ev === "caps")!.models!.map((m) => m.id);
     expect(ids).toEqual(expect.arrayContaining(["mine", "other", `${GUEST_PREFIX}sage`]));
     await hub.stop();
-  });
-
-  test("a first run offers the free models as a choice: the person picks one and only then is it the model; with none on offer it says so", async () => {
-    const free = PRESETS.find((p) => p.label === "The free models of navvied.com")!;
-    const { env } = setup();
-    const said: string[] = [];
-    const screen = (fetch: typeof globalThis.fetch, pick: number): Screen => ({
-      io: { env, fetch } as never, sys: {} as never, local: [],
-      pick: async () => pick, secret: async () => "back", ask: async () => "", askOrBack: async () => "back",
-      say: (t) => { said.push(t); },
-      work: async (_t, _p, task) => task({ signal: new AbortController().signal, log: () => undefined }),
-    });
-    const answer = async () => Response.json(LIST);
-    const made = await free.configure(screen(answer as never, 0));
-    expect(made).not.toBe("back");
-    const { name, entry } = made as { name: string; entry: { baseUrl?: string; apiKey?: string; display?: { name?: string } } };
-    expect(name).toBe(`${GUEST_PREFIX}sage`);
-    expect(entry).toMatchObject({ baseUrl: "https://navvied.com/v1", display: { name: "Sage" } });
-    expect(entry.apiKey).toBeUndefined();
-    const none = await free.configure(screen((async () => Response.json({ ...LIST, data: LIST.data.map((m) => ({ ...m, locked: true })) })) as never, 0));
-    expect(none).toBe("back");
-    expect(said.at(-1)).toContain("did not offer free models");
   });
 });
 

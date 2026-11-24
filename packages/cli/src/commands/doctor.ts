@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import type { Options } from "../args.ts";
 import { configPath, loadConfig, resolveModel, sessionsDir } from "../config.ts";
 import type { IO } from "../io.ts";
-import { reachable } from "./init.ts";
+import { reachable } from "../model-setup.ts";
 import { EXIT } from "./run.ts";
 
 export async function doctorCommand(options: Options, io: IO): Promise<number> {

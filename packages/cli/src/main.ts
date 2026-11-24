@@ -6,7 +6,6 @@ import { doctorCommand } from "./commands/doctor.ts";
 import { acpCommand } from "./commands/acp.ts";
 import { guardCommand } from "./commands/guard.ts";
 import { scheduleCommand } from "./commands/schedule.ts";
-import { initCommand } from "./commands/init.ts";
 import { webCommand } from "./commands/web.ts";
 import { updateCommand } from "./commands/update.ts";
 import { modelsCommand } from "./commands/models.ts";
@@ -34,7 +33,7 @@ export async function main(argv: readonly string[], io: IO = processIO()): Promi
     case "guard": return guardCommand(options, env);
     case "schedule": return scheduleCommand(prompt, options, env);
     case "models": return modelsCommand(options, env);
-    case "init": return initCommand(options, env);
+    case "init": await ensureGuestModels(env, options); return chatCommand(prompt, { ...options, providers: true }, env);
     case "update": return updateCommand(prompt, env);
     case "doctor": return doctorCommand(options, env);
     case "checkpoints": return checkpointsCommand(options, env);

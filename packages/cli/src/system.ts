@@ -12,10 +12,8 @@ export interface RunOptions {
   timeoutMs?: number;
 }
 
-/** The parts of the computer the setup screens use: clipboard, browser, programs. Injected, so tests touch none of it. */
+/** The parts of the computer the setup screens use: the clipboard to write to, the browser, programs. Injected, so tests touch none of it. */
 export interface System {
-  /** What is on the clipboard now, or undefined when it is empty or cannot be read. */
-  clipboard(): Promise<string | undefined>;
   /** Open an address in the person's browser. */
   open(url: string): void;
   /** Put a text on the clipboard. False when this computer has no way to (no program for it). */
@@ -24,12 +22,6 @@ export interface System {
   which(command: string): string | undefined;
   run(argv: string[], options?: RunOptions): Promise<{ code: number; output: string }>;
 }
-
-const CLIPBOARD_READERS: Record<string, string[][]> = {
-  darwin: [["pbpaste"]],
-  win32: [["powershell", "-NoProfile", "-Command", "Get-Clipboard"]],
-  linux: [["wl-paste", "-n"], ["xclip", "-selection", "clipboard", "-o"], ["xsel", "-b", "-o"]],
-};
 
 const CLIPBOARD_WRITERS: Record<string, string[][]> = {
   darwin: [["pbcopy"]],
@@ -43,8 +35,6 @@ const OPENERS: Record<string, string[]> = {
   win32: ["rundll32", "url.dll,FileProtocolHandler"],
   linux: ["xdg-open"],
 };
-
-const MAX_CLIPBOARD = 4096;
 
 const running = new Set<ChildProcess>();
 let guarded = false;
@@ -100,14 +90,6 @@ export function realSystem(env: Record<string, string | undefined>, platform: No
   return {
     which,
     run,
-    async clipboard() {
-      for (const argv of CLIPBOARD_READERS[platform] ?? []) {
-        if (!which(argv[0]!)) continue;
-        const r = await run([which(argv[0]!)!, ...argv.slice(1)], { timeoutMs: 1500 }).catch(() => undefined);
-        if (r && r.code === 0) { const text = r.output.trim(); return text && text.length <= MAX_CLIPBOARD ? text : undefined; }
-      }
-      return undefined;
-    },
     async copy(text) {
       for (const argv of CLIPBOARD_WRITERS[platform] ?? []) {
         const path = which(argv[0]!);
@@ -128,9 +110,4 @@ export function realSystem(env: Record<string, string | undefined>, platform: No
       try { Bun.spawn([which(opener[0]!)!, ...opener.slice(1), url], { stdout: "ignore", stderr: "ignore", stdin: "ignore" }).unref(); } catch { /* no browser: the address is shown on screen as well */ }
     },
   };
-}
-
-/** The key looks like one from `service`: right start, one line, no spaces. */
-export function looksLikeKey(text: string | undefined, prefix: string): text is string {
-  return text !== undefined && text.startsWith(prefix) && text.length >= prefix.length + 16 && !/\s/.test(text);
 }

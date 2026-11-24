@@ -1,9 +1,11 @@
+import { accountsScreen } from "./accounts.ts";
 import { keysScreen } from "./keys.ts";
 import { endpointsScreen } from "./endpoints.ts";
 import { localScreen } from "./local.ts";
 import type { Kit, Result } from "./kit.ts";
 
 const PARTS = [
+  { label: "Accounts", run: accountsScreen },
   { label: "API keys", run: keysScreen },
   { label: "Custom Endpoints", run: endpointsScreen },
   { label: "Local Models", run: localScreen },

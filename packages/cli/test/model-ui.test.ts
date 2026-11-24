@@ -20,12 +20,12 @@ describe("the list of models", () => {
       ["qwen2.5:3b", "On this computer.", { kind: "switch", id: "local", handover: false }],
       ["prog1", "Through a program you are signed in to. Starts a new conversation.", { kind: "restart", name: "prog1" }],
       ["prog2", "Through a program you are signed in to. Starts a new conversation.", { kind: "restart", name: "prog2" }],
-      ["Connect another model", "Sign in to a service, or add one on this computer.", { kind: "connect" }],
+      ["Add model", undefined, { kind: "connect" }],
     ]);
   });
   test("with nothing to switch inside, the model in use is listed alone with the others", () => {
     const rows = modelRows(undefined, "raphael", { models: { raphael: file.models.raphael!, local: file.models.local! } });
-    expect(rows.map((r) => r.label)).toEqual(["raphael", "qwen2.5:3b", "Connect another model"]);
+    expect(rows.map((r) => r.label)).toEqual(["raphael", "qwen2.5:3b", "Add model"]);
     expect(rows[0]!.action).toEqual({ kind: "current" });
     expect(rows[1]!.action).toEqual({ kind: "restart", name: "local" });
   });
@@ -38,7 +38,7 @@ describe("the list of models", () => {
     expect(rows[1]!.hint).toBe("Not available yet.");
   });
   test("only a connect row when nothing is configured", () => {
-    expect(modelRows(undefined, "x", null).map((r) => r.label)).toEqual(["x", "Connect another model"]);
+    expect(modelRows(undefined, "x", null).map((r) => r.label)).toEqual(["x", "Add model"]);
   });
 });
 
