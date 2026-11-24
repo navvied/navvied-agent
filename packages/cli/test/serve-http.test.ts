@@ -220,7 +220,7 @@ describe("serve --http", () => {
     b.send(JSON.stringify({ cmd: "load", id: listed.items[0]!.id }));
     await until(() => ga.some((e) => e.ev === "loaded") && gb.some((e) => e.ev === "loaded"));
     const opened1 = ga.find((e) => e.ev === "loaded") as unknown as { items: { k: string; text: string }[] };
-    expect(opened1.items[0]).toEqual({ k: "user", text: "remember the alpha topic" });
+    expect(opened1.items[0]).toMatchObject({ k: "user", text: "remember the alpha topic" });
     a.close(); b.close();
   });
 
@@ -241,7 +241,8 @@ describe("serve --http", () => {
     a.send(JSON.stringify({ cmd: "load", id: listed.items[0]!.id }));
     await until(() => ga.some((e) => e.ev === "loaded") && gb.some((e) => e.ev === "loaded"));
     const opened1 = ga.find((e) => e.ev === "loaded") as unknown as { items: { k: string; text: string }[] };
-    expect(opened1.items[0]).toEqual({ k: "user", text: "hello from the program" });
+    expect(opened1.items[0]).toMatchObject({ k: "user", text: "hello from the program" });
+    expect(typeof (opened1.items[0] as { qid?: unknown }).qid).toBe("string");
     expect(opened1.items.some((i) => i.k === "assistant")).toBe(true);
     a.close(); b.close();
   });

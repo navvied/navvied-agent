@@ -64,11 +64,11 @@ describe.skipIf(!posix)("the folder and the exports stay for the next command", 
   test("cd stays, and the answer says so once: when the folder changed", async () => {
     const { ctx, done } = rig();
     mkdirSync(join(dir, "sub/deeper"), { recursive: true });
-    expect(await bash.run({ command: "cd sub && pwd" }, ctx)).toBe(`${join(dir, "sub")}\n[now in sub]`);
+    expect(await bash.run({ command: "cd sub && pwd" }, ctx)).toBe(`${join(dir, "sub")}\n[navvied: next commands start in sub]`);
     expect(await bash.run({ command: "pwd" }, ctx)).toBe(join(dir, "sub"));
-    expect(await bash.run({ command: "cd deeper" }, ctx)).toBe("[now in sub/deeper]");
+    expect(await bash.run({ command: "cd deeper" }, ctx)).toBe("[navvied: next commands start in sub/deeper]");
     expect(await bash.run({ command: "pwd" }, ctx)).toBe(join(dir, "sub/deeper"));
-    expect(await bash.run({ command: "cd ../.." }, ctx)).toBe("[now in the working folder]");
+    expect(await bash.run({ command: "cd ../.." }, ctx)).toBe("[navvied: next commands start in the working folder]");
     expect(await bash.run({ command: "pwd" }, ctx)).toBe(dir);
     done();
   });
@@ -77,7 +77,7 @@ describe.skipIf(!posix)("the folder and the exports stay for the next command", 
     const { ctx, done } = rig();
     mkdirSync(join(dir, "inside"), { recursive: true });
     await bash.run({ command: "cd inside" }, ctx);
-    expect(await bash.run({ command: "cd / && pwd" }, ctx)).toBe("/\n[stays in inside: a cd outside it lasts one command]");
+    expect(await bash.run({ command: "cd / && pwd" }, ctx)).toBe("/\n[navvied: next commands still start in inside, a cd outside the project lasts one command]");
     expect(await bash.run({ command: "pwd" }, ctx)).toBe(join(dir, "inside"));
     done();
   });
@@ -110,7 +110,7 @@ describe.skipIf(!posix)("the folder and the exports stay for the next command", 
   test("a command that ends with exit still leaves the folder and the exports, and its code is said", async () => {
     const { ctx, done } = rig();
     mkdirSync(join(dir, "gone"), { recursive: true });
-    expect(await bash.run({ command: "cd gone; export LEFT=1; exit 3" }, ctx)).toBe("[now in gone]\n[exit 3]");
+    expect(await bash.run({ command: "cd gone; export LEFT=1; exit 3" }, ctx)).toBe("[navvied: next commands start in gone]\n[exit 3]");
     expect(await bash.run({ command: "echo $LEFT; pwd" }, ctx)).toBe(`1\n${join(dir, "gone")}`);
     done();
   });

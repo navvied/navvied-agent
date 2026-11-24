@@ -3,6 +3,9 @@ import { dirname } from "node:path";
 import type { Tool } from "../types.ts";
 import { place, str } from "./util.ts";
 
+/** The lines of a text: a last newline ends the last line, it does not start another one ("a\nb\n" is two lines; an empty text has none). */
+export const lineCount = (text: string): number => (text ? text.split("\n").length - (text.endsWith("\n") ? 1 : 0) : 0);
+
 export const write: Tool = {
   name: "Write",
   readOnly: false,
@@ -19,6 +22,6 @@ export const write: Tool = {
     const existed = existsSync(path);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, content);
-    return `${existed ? "Overwrote" : "Created"} ${path} (${content.split("\n").length} lines).`;
+    return `${existed ? "Overwrote" : "Created"} ${path} (${lineCount(content)} line${lineCount(content) === 1 ? "" : "s"}).`;
   },
 };

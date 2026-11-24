@@ -49,8 +49,8 @@ describe("serve --stdio, as a hosted session runs it", () => {
     await done;
     const files = readdirSync(journalDir(env)).filter((n) => n.endsWith(".json"));
     expect(files).toHaveLength(1);
-    const saved = JSON.parse(readFileSync(join(journalDir(env), files[0]!), "utf8")) as { items: { k: string; text: string }[] };
-    expect(saved.items[0]).toEqual({ k: "user", text: "remember the alpha topic" });
+    const saved = JSON.parse(readFileSync(join(journalDir(env), files[0]!), "utf8")) as { items: { k: string; text: string; qid?: string }[] };
+    expect(saved.items[0]).toEqual({ k: "user", text: "remember the alpha topic", qid: "q1" });
     expect(saved.items.some((i) => i.k === "assistant")).toBe(true);
   });
   test("one session holds an agent and a chat: each is written down apart, and a chat in a sandbox is offered commands", async () => {

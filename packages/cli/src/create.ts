@@ -1,17 +1,17 @@
 import { leanSoul, referenceFor, soulFor, type Brain } from "./soul.ts";
 import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { ChatCompletionsProvider, type Recall, loadAgents, Rules, hasRules, parseRules, type RuleSet, commandHooks, memoryText, connectMcp, loadSkills, projectDirs, type ModelSwitch, Checkpoints, Engine, FileSessionStore, MessagesApiProvider, OllamaProvider, ResponsesApiProvider, SMALL_WINDOW, defaultTools, instructionFiles, loadInstructions, type AgentEngine, type ChatCompletionsConfig, type Credentials, type Provider, FallbackProvider, type FallbackLink, type RetryOptions } from "@navvied/engine";
+import { ChatCompletionsProvider, type Recall, type ToolContext, loadAgents, Rules, hasRules, parseRules, type RuleSet, commandHooks, memoryText, connectMcp, loadSkills, projectDirs, type ModelSwitch, Checkpoints, Engine, FileSessionStore, MessagesApiProvider, OllamaProvider, ResponsesApiProvider, SMALL_WINDOW, defaultTools, instructionFiles, loadInstructions, type AgentEngine, type ChatCompletionsConfig, type Credentials, type Provider, FallbackProvider, type FallbackLink, type RetryOptions } from "@navvied/engine";
 import { randomUUID } from "node:crypto";
 import { CodexEngine, StreamEngine } from "@navvied/stream-engine";
 import type { Effort, EngineEvent, ModelInfo, Result } from "@navvied/protocol";
 import type { Options } from "./args.ts";
 import { activeTools } from "./tools-info.ts";
 import { TerminalState, backendFor } from "./terminal.ts";
-import { attachmentsDir, chatFilesDir, chatSessionsDir, checkpointsDir, configPath, loadConfig, pluginStatePath, terminalStatePath, resolveModel, sessionsDir, type ConfigFile, type ModelEntry, type ResolvedModel } from "./config.ts";
+import { accountPath, attachmentsDir, chatFilesDir, chatSessionsDir, checkpointsDir, configPath, loadConfig, pluginStatePath, terminalStatePath, resolveModel, sessionsDir, type ConfigFile, type ModelEntry, type ResolvedModel } from "./config.ts";
 import type { IO } from "./io.ts";
 import { memoryPathsFor } from "./memory-ui.ts";
-import { catalogOf } from "./account.ts";
+import { DEFAULT_SERVER, catalogOf, readAccount } from "./account.ts";
 import { INSTRUCTION_FILE_NAMES, PROVIDERS, knownEffort } from "./presets.ts";
 import { adcCredentials } from "./adc.ts";
 import { LiveProvider } from "./live-provider.ts";
@@ -20,6 +20,16 @@ import { credentialsFor } from "./logins.ts";
 import { PluginState, activeHooks, activeSkills, mcpId } from "./plugins.ts";
 
 /** `where` says in plain words how the model is reached, for the welcome screen. */
+/** Search: the person's own server when there is one; otherwise the keyless ladder, whose last public rung is navvied's own search, asked with this computer's account when it has one. Not in a session that reaches the web through the service. */
+export function searchFor(env: Record<string, string | undefined>, options: { config?: string; sandboxed?: boolean }, proxied: boolean): NonNullable<ToolContext["search"]> {
+  const order = env.NAVVIED_SEARCH_ORDER?.split(",").map((x) => x.trim()).filter(Boolean);
+  return {
+    ...(env.NAVVIED_SEARCH_URL ? { url: env.NAVVIED_SEARCH_URL } : {}),
+    ...(order?.length ? { order } : {}),
+    ...(proxied || options.sandboxed ? {} : { navvied: () => { const account = readAccount(accountPath(env, options.config)); return { server: account?.server ?? env.NAVVIED_SERVER ?? DEFAULT_SERVER, ...(account ? { token: account.token } : {}) }; } }),
+  };
+}
+
 export interface Created { engine: AgentEngine; /** The name of the model in the configuration. */ entry: string; modelName: string; where: string; cwd: string; tools?: string[]; notes: string[]; /** The model is reached through a program the person is signed in to, which keeps its own sessions. */ program?: true }
 
 /** What signs the requests of a model that has no key: the saved sign-in of a program account, or a credential file's access token. */
@@ -198,7 +208,7 @@ export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) =>
           ...(activeHooks(new PluginState(pluginStatePath(io.env)), file.value?.hooks) ? { hooks: commandHooks(activeHooks(new PluginState(pluginStatePath(io.env)), file.value?.hooks)!, cwd, () => sessionId) } : {}),
           skills: () => activeSkills(new PluginState(pluginStatePath(io.env)), { user: join(dirname(path), "skills"), project: projectDirs(cwd).map((d) => join(d, ".navvied", "skills")) }),
         }),
-        ...(io.env.NAVVIED_SEARCH_URL ? { search: { url: io.env.NAVVIED_SEARCH_URL } } : {}),
+        search: searchFor(io.env, options, !!file.value?.webProxy),
         ...(file.value?.webProxy ? { webProxy: file.value.webProxy } : {}),
         ...(io.env.NAVVIED_ALLOW_PRIVATE_NETWORK === "1" ? { allowPrivateNetwork: true } : {}),
         ...(kind === "chat" ? {} : { instructions: () => loadInstructions(cwd, dirname(path), memoryText(memory), INSTRUCTION_FILE_NAMES) }),

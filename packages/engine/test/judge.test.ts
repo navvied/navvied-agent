@@ -46,4 +46,9 @@ describe("what each mode means, the same for every engine", () => {
     expect(call("auto", "WebFetch", args, unknown).kind).toBe("go");
     expect(call("bypass", "WebFetch", args, unknown).kind).toBe("go");
   });
+
+  test("a shell that reaches a cloud metadata address is asked about in every mode that asks about what cannot be undone (Auto too), and in no other", () => {
+    const command = "curl http://169.254.169.254/latest/meta-data/iam/security-credentials/";
+    expect(kinds("Bash", { command })).toBe("ask ask go ask go");
+  });
 });

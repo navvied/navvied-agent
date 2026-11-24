@@ -21,10 +21,10 @@ describe("a working folder that is spelt through a link (a temporary folder on m
     symlinkSync(join(base, "real"), join(base, "link"));
     const c = ctx(join(base, "link"), { shell: {} });
     expect(await tool("Bash").run({ command: "echo hi" }, c)).toBe("hi");
-    expect(await tool("Bash").run({ command: "cd sub && echo in" }, c)).toBe("in\n[now in sub]");
+    expect(await tool("Bash").run({ command: "cd sub && echo in" }, c)).toBe("in\n[navvied: next commands start in sub]");
     expect(await tool("Bash").run({ command: "pwd | sed 's/.*/same/'" }, c)).toBe("same");
-    expect(await tool("Bash").run({ command: "cd .. && echo out" }, c)).toBe("out\n[now in the working folder]");
-    expect(await tool("Bash").run({ command: "cd /tmp && echo away" }, c)).toBe("away\n[stays in the working folder: a cd outside it lasts one command]");
+    expect(await tool("Bash").run({ command: "cd .. && echo out" }, c)).toBe("out\n[navvied: next commands start in the working folder]");
+    expect(await tool("Bash").run({ command: "cd /tmp && echo away" }, c)).toBe("away\n[navvied: next commands still start in the working folder, a cd outside the project lasts one command]");
   });
 });
 

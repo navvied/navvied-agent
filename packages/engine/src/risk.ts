@@ -63,8 +63,16 @@ function ofCommand(part: string): Risk | undefined {
   return undefined;
 }
 
+/**
+ * The addresses where a cloud machine's provider answers with what the machine may do and its keys (AWS and most others, AWS over IPv6, Google, Alibaba), spelt as a
+ * name, as dotted digits, as one number in decimal or hex, or with octal parts. A command that reaches one of them from here would hand the keys to whoever
+ * wrote the command, which is also what a page that was read can ask for; the fetch tool refuses them, so a shell must not be the way round.
+ */
+const METADATA = /(?<![\w.])(?:169\.254\.169\.254|0*251\.0*376\.0*251\.0*376|0xa9\.?0xfe\.?0xa9\.?0xfe|0xa9fea9fe|2852039166|169\.16689662|169\.254\.43518|100\.100\.100\.200|metadata\.google\.internal|metadata\.goog|instance-data(?:\.ec2\.internal)?)(?![\w-]|\.\w)|\[?fd00:ec2::254\]?/i;
+
 /** Something downloaded and handed straight to a shell, or a destructive statement for a database. */
 function ofWhole(command: string): Risk | undefined {
+  if (METADATA.test(command)) return risk("cloud-metadata", "This reaches the address where a cloud machine's provider hands out its keys and passwords.", "reaching a cloud metadata address");
   if (/\b(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba|z|da|k)?sh\b/.test(command)) return risk("pipe-to-shell", "This runs a program that was just downloaded, without looking at it first.", "running downloaded programs");
   if (/\b(drop\s+(table|database|schema)|truncate\s+table)\b/i.test(command)) return risk("sql-drop", "This deletes a table or a database.", "deleting tables or databases");
   if (/(>>?|\btee(\s+-a)?)\s*(~|\$HOME|\/home\/[^/\s]+|\/Users\/[^/\s]+)?\/?\.(bashrc|zshrc|profile|bash_profile|zprofile|ssh\/|gitconfig|npmrc|netrc|gnupg\/)/.test(command)) return risk("protected-path", "This changes a file that sets up your shell, your keys or your git identity.", "changes to setup files");

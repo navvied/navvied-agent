@@ -84,7 +84,7 @@ export interface ToolContext {
   /** The person's earlier conversations, for the Recall tool. */
   recall?: Recall;
   /** A search server to use instead of the public search page. */
-  search?: { url?: string };
+  search?: { url?: string; /** The keyless search sites to try, in this order (see web-search-backends.ts); the default is all of them. */ order?: string[]; /** Where navvied's own search is (for a computer whose network blocks the public pages), and this computer's account token when it has one. */ navvied?: () => { server: string; token?: string } | undefined };
   /** Where a session with no network of its own reaches the web: WebFetch and WebSearch ask it, with the token, instead of going out. */
   webProxy?: WebProxy;
   /** The skills in effect now. */

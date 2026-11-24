@@ -64,6 +64,8 @@ describe("Bash output, old form and new", () => {
     expect(parseBashOutput("[exit 1: no matches, not a failure]")).toEqual({ lines: [], notes: ["[exit 1: no matches, not a failure]"], exitCode: 1 });
   });
   test("navvied's own notes (where it now runs, a background job) are taken apart from what the command printed, in either form", () => {
+    expect(parseBashOutput("one\n[navvied: next commands start in src]\n[exit 0]")).toEqual({ lines: ["one"], notes: ["[navvied: next commands start in src]"], exitCode: 0 });
+    expect(parseBashOutput("one\n[navvied: next commands still start in src, a cd outside the project lasts one command]")).toEqual({ lines: ["one"], notes: ["[navvied: next commands still start in src, a cd outside the project lasts one command]"] });
     expect(parseBashOutput("one\n[now in src]\n[exit 0]")).toEqual({ lines: ["one"], notes: ["[now in src]"], exitCode: 0 });
     expect(parseBashOutput("one\n[stays in .]")).toEqual({ lines: ["one"], notes: ["[stays in .]"] });
     expect(parseBashOutput("[still running as job1 after 3s without output: npm run dev]")).toEqual({ lines: [], notes: ["[still running as job1 after 3s without output: npm run dev]"] });

@@ -1,3 +1,5 @@
+import { USER_AGENT } from "./user-agent.ts";
+import { unreachedSentence, whyUnreached } from "./web-errors.ts";
 import type { Tool, ToolContext } from "../types.ts";
 import { pdfPages } from "./documents.ts";
 import { isPrivateHost } from "./hosts.ts";
@@ -51,8 +53,11 @@ async function get(first: URL, ctx: ToolContext): Promise<Got | string> {
     const no = await refusal(url, ctx.allowPrivateNetwork);
     if (no) return `Error: ${no}`;
     let res: Response;
-    try { res = await web.fetch(url, { signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(TIMEOUT_MS)]), redirect: "manual", headers: { "user-agent": "navvied-agent", accept: ACCEPT } }); }
-    catch (e) { return e instanceof Error && /timed? ?out|abort/i.test(e.name + e.message) ? `Error: no answer in ${TIMEOUT_MS / 1000} s. Try again, or another address.` : `Error: ${e instanceof Error ? e.message : String(e)}`; }
+    try { res = await web.fetch(url, { signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(TIMEOUT_MS)]), redirect: "manual", headers: { "user-agent": USER_AGENT, accept: ACCEPT } }); }
+    catch (e) {
+      const why = whyUnreached(e);
+      return why === "timeout" ? `Error: no answer in ${TIMEOUT_MS / 1000} s. Try again, or another address.` : `Error: ${unreachedSentence(why, "That site")}${why === "tls" ? " Do not try another way around it; say so to the user." : ` ${e instanceof Error ? e.message : String(e)}`}`;
+    }
     if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
       let next: URL;
       try { next = new URL(res.headers.get("location")!, url); } catch { return "Error: the site sent the page somewhere that is not an address."; }

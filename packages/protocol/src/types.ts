@@ -233,7 +233,7 @@ export interface ScheduleInfo { id: string; title: string; prompt: string; cron:
 export interface SearchHit { id: string; title: string; snippet: string; updated: number; where?: "cloud"; project?: string }
 
 /** One step of a loaded conversation: what the person said, what the model answered, or the name of a tool it used. */
-export interface HistoryItem { k: "user" | "assistant" | "tool"; text: string }
+export interface HistoryItem { k: "user" | "assistant" | "tool"; text: string; /** Only on what the person said, and only when it was said in this program: the id the message was sent with, so a window that has the message already (its own bubble, or the live event) recognises it. */ qid?: string }
 
 /** One model a person can switch to. A page shows `name`, never a real model id. */
 export interface ModelInfo {

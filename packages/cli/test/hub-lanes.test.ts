@@ -95,7 +95,7 @@ describe("a chat and an agent on one computer", () => {
     const loaded = got.find((e) => e.ev === "loaded") as unknown as { kind?: string; id: string; items: { k: string; text: string }[] };
     expect(loaded.kind).toBe("chat");
     expect(loaded.id).toBe(id);
-    expect(loaded.items[0]).toEqual({ k: "user", text: "tell me about the alpha topic" });
+    expect(loaded.items[0]).toMatchObject({ k: "user", text: "tell me about the alpha topic" });
     expect(got.some((e) => e.kind === undefined && e.ev === "loaded")).toBe(false);
     send({ cmd: "prompt", text: "and more", qid: "c2", kind: "chat" });
     await until(() => got.some((e) => e.ev === "done" && e.kind === "chat"));

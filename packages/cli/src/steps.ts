@@ -118,7 +118,8 @@ export const startLine = (output: string): number => Number(/ at line (\d+)/.exe
 export const failed = (output: string): boolean => output.startsWith("Error:");
 
 /** A line the Bash tool adds about itself, not the command's own output: where it now runs, or a background job's status. */
-const NOTE_LINE = /^\[(now in .+|stays in .+|still running as job\d+ after .+|job\d+ finished[^\]]*)\]$/;
+/** (`now in` and `stays in` are how conversations kept before the note said who wrote it read.) */
+const NOTE_LINE = /^\[(navvied: .+|now in .+|stays in .+|still running as job\d+ after .+|job\d+ finished[^\]]*)\]$/;
 /** The line a Bash call ends with, when it says how it went: the old form (`[exit N]`, every code) or the new one (`[exit N: reason]`, only when N is not 0). */
 const EXIT_LINE = /^\[exit (\d+)(?::\s*(.+))?\]$/;
 

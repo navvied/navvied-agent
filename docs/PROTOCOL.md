@@ -29,7 +29,7 @@ Every event carries `seq` (strictly increasing) and `eid` (unique).
 
 | `ev` | Fields | Meaning |
 |---|---|---|
-| `loaded` | `id`, `items?` | A saved session is now the one in use (also announced to every window, so all show the same conversation). `items` is the conversation in short form: `{k: "user"\|"assistant"\|"tool", text}` (a tool is its name), the last 200, each text cut at 4000 characters. A window clears its screen and shows them. |
+| `loaded` | `id`, `items?` | A saved session is now the one in use (also announced to every window, so all show the same conversation). `items` is the conversation in short form: `{k: "user"\|"assistant"\|"tool", text, qid?}` (a tool is its name; `qid` is on what the person said in this program, the id the message was sent with, so a window that already has it recognises it), the last 200, each text cut at 4000 characters. A window clears its screen and shows them. |
 | `found` | `query`, `items[{id,title,snippet,updated}]` | The answer to `search`: conversations that mention the words, best first, one passage each (`snippet`, the words in [brackets]). Open one with `load`. Only the window that asked should open a menu from it. |
 | `sessions` | `items[{id,title,updated,messages,source?,project?}]` | The saved sessions, newest first (at most 50). `title` is what the person asked first, on one line (60 characters); `updated` is in ms since the epoch. Only a window that asked should open a menu from it. |
 | `session` | `id` | The session id (first event). |

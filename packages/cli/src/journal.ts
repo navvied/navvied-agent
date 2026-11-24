@@ -31,7 +31,7 @@ export class Journal {
   record(e: EngineEvent): void {
     if (e.ev === "session" || e.ev === "loaded") { this.#flush(); this.#switch(e.id, e.ev === "loaded" ? e.items : undefined); return; }
     if (!this.#id) return;
-    if (e.ev === "user") { this.#settle(); this.#push({ k: "user", text: e.text }); this.#save(); }
+    if (e.ev === "user") { this.#settle(); this.#push({ k: "user", text: e.text, ...(SAFE_ID.test(e.qid) ? { qid: e.qid } : {}) }); this.#save(); }
     else if (e.ev === "text") this.#said += e.text;
     else if (e.ev === "tool" && e.status === "running" && !this.#tools.has(e.id)) { this.#tools.add(e.id); this.#settle(); this.#push({ k: "tool", text: e.name }); }
     else if (e.ev === "done") { this.#settle(); this.#save(); this.#tools.clear(); }
@@ -104,7 +104,7 @@ export class Journal {
   }
 
   #push(item: HistoryItem): void {
-    this.#items.push({ k: item.k, text: item.text.length > CUT ? `${item.text.slice(0, CUT - 1)}…` : item.text });
+    this.#items.push({ k: item.k, text: item.text.length > CUT ? `${item.text.slice(0, CUT - 1)}…` : item.text, ...(item.qid ? { qid: item.qid } : {}) });
     if (this.#items.length > MOST_ITEMS) this.#items.splice(0, this.#items.length - MOST_ITEMS);
     this.#dirty = true;
   }
@@ -132,5 +132,18 @@ export class Journal {
 }
 
 /** A conversation as the engine's own store keeps it, made from what was watched: what was asked and answered. The tools used are not kept, only what was said. */
+/** The ids the journal kept for what the person said, put on the same messages of a conversation that came from somewhere that does not keep them (the engine's own record), matched in order by their words. */
+export function withQids(items: readonly HistoryItem[], kept: readonly HistoryItem[] | undefined): HistoryItem[] {
+  const ids = (kept ?? []).filter((i) => i.k === "user" && i.qid);
+  let at = 0;
+  return items.map((i) => {
+    if (i.k !== "user" || i.qid) return i;
+    const found = ids.findIndex((k, n) => n >= at && k.text === i.text);
+    if (found < 0) return i;
+    at = found + 1;
+    return { ...i, qid: ids[found]!.qid! };
+  });
+}
+
 export const messagesOf = (items: readonly HistoryItem[]): Message[] =>
   items.flatMap((i): Message[] => (i.k === "user" ? [{ role: "user", content: i.text }] : i.k === "assistant" ? [{ role: "assistant", content: i.text }] : []));

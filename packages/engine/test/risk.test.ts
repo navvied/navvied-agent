@@ -4,6 +4,28 @@ import { onlyLooks, riskOf } from "../src/index.ts";
 const bash = (command: string) => riskOf("Bash", { command }, "/work/project");
 const kind = (command: string): string | undefined => bash(command)?.key.replace("risk:", "");
 
+describe("the cloud metadata address, which the fetch tool refuses, is not reachable from a shell either", () => {
+  test("curl, wget and a script reach it by name, by digits and by number alike", () => {
+    for (const command of [
+      "curl http://169.254.169.254/latest/meta-data/",
+      "curl -s -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+      "wget -qO- http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+      `python3 -c "import urllib.request; print(urllib.request.urlopen('http://169.254.169.254/latest/meta-data/').read())"`,
+      "node -e \"fetch('http://100.100.100.200/latest/meta-data/')\"",
+      "curl -g 'http://[fd00:ec2::254]/latest/meta-data/'",
+      "curl http://2852039166/latest/meta-data/",
+      "curl http://0xa9fea9fe/latest/meta-data/",
+      "curl http://0251.0376.0251.0376/latest/meta-data/",
+      "cd /tmp && sh -c 'curl http://169.254.169.254/'",
+      "echo hi && curl http://169.254.169.254",
+      "CURL=1 curl HTTP://METADATA.GOOGLE.INTERNAL/",
+    ]) expect(kind(command), command).toBe("cloud-metadata");
+  });
+  test("an address that only looks like it, and everything else, is not asked about", () => {
+    for (const command of ["curl http://169.254.169.2540/", "curl https://example.com/169.254.169.254x", "ping 10.169.254.169.254.example", "curl http://127.0.0.1:8080/", "echo metadata.google.internal.example.com"]) expect(kind(command), command).toBeUndefined();
+  });
+});
+
 describe("what is asked about even when the person said not to ask again", () => {
   test("git commands that throw work away or rewrite history", () => {
     expect(kind("git push -f origin main")).toBe("git-force-push");

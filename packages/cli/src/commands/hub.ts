@@ -34,7 +34,7 @@ import { talkToComputer } from "../relay-client.ts";
 import { relayUrlFor } from "../computer.ts";
 import { SessionMetaFile } from "../session-meta.ts";
 import { computerName } from "../computer.ts";
-import { Journal, messagesOf, titleOf } from "../journal.ts";
+import { Journal, messagesOf, titleOf, withQids } from "../journal.ts";
 import type { IO } from "../io.ts";
 import { VERSION } from "../help.ts";
 import { basename, dirname, join, resolve } from "node:path";
@@ -254,7 +254,9 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   /** Every window is told at once which models there are now: a saved endpoint's models are in the list, a removed one's are gone, with no restart. */
   const pushModels = (): void => { for (const lane of lanes.values()) if (lane.engineCaps) say(lane, lane.engineCaps); };
   /** What a lane says, to every window: stamped with the kind when it is not an agent, and kept for a window that comes later. */
-  const say = (lane: Lane, e: EngineEvent): void => {
+  const say = (lane: Lane, event: EngineEvent): void => {
+    // A conversation opened by the engine comes without the ids its messages were sent with; the journal has them, and a window that already shows a message needs its id.
+    const e: EngineEvent = event.ev === "loaded" && event.items ? { ...event, items: withQids(event.items, lane.journal.items(event.id)) } : event;
     // A conversation that came to a program from another model goes on under the id the program gives it, with what was said before.
     if (e.ev === "session" && lane.carry) { lane.journal.write(e.id, lane.carry); lane.carry = undefined; }
     lane.journal.record(e);

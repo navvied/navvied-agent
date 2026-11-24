@@ -27,7 +27,7 @@ const SILENCE_SECONDS = 45;
 export const bash: Tool = {
   name: "Bash",
   readOnly: false,
-  description: `Run a ${shell.name} command.${remembers ? " cd and export stay for later calls; cwd is for one call." : " Each call starts fresh."} Long output is shortened; a command silent for its timeout goes on as a job.`,
+  description: `Run a ${shell.name} command.${remembers ? " cd (inside the project) and export stay for later calls; cwd is for one call." : " Each call starts fresh."} Long output is shortened; a command silent for its timeout goes on as a job.`,
   parameters: {
     type: "object",
     properties: {
@@ -89,15 +89,15 @@ export const bash: Tool = {
   },
 };
 
-/** Where the command ended, said only when the remembered folder changed; a folder outside the working folder is not kept. */
+/** Where the next command starts, said only when the remembered folder changed; a folder outside the working folder is not kept. It says that navvied wrote it: a model took the bare note for output of the user's shell. */
 function whereNow(state: ShellState, working: string): string {
   const end = endedIn(state);
   if (!end) return "";
   const top = realPath(working), now = realPath(end), before = realPath(state.dir ?? working);
-  if (!inside(top, now)) return `[stays in ${relative(top, before) || "the working folder"}: a cd outside it lasts one command]`;
+  if (!inside(top, now)) return `[navvied: next commands still start in ${relative(top, before) || "the working folder"}, a cd outside the project lasts one command]`;
   if (now === before) return "";
   state.dir = now === top ? undefined : end;
-  return `[now in ${relative(top, now) || "the working folder"}]`;
+  return `[navvied: next commands start in ${relative(top, now) || "the working folder"}]`;
 }
 
 /** A call as the model writes it, for a message that shows what to send instead. */

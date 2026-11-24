@@ -73,6 +73,11 @@ describe("Write and Edit", () => {
     const d = workdir();
     const w = tool("Write");
     expect(await w.run({ file_path: "deep/er/f.txt", content: "a\nb" }, ctx(d))).toMatch(/Created .*f\.txt \(2 lines\)/);
+    // A last newline ends the last line; it does not start another one.
+    expect(await w.run({ file_path: "n.txt", content: "a\nb\nc\nd\ne\n" }, ctx(d))).toMatch(/\(5 lines\)/);
+    expect(await w.run({ file_path: "one.txt", content: "a\n" }, ctx(d))).toMatch(/\(1 line\)/);
+    expect(await w.run({ file_path: "none.txt", content: "" }, ctx(d))).toMatch(/\(0 lines\)/);
+    expect(await w.run({ file_path: "blank.txt", content: "a\n\n" }, ctx(d))).toMatch(/\(2 lines\)/);
     expect(await w.run({ file_path: "deep/er/f.txt", content: "c" }, ctx(d))).toMatch(/Overwrote/);
     expect(readFileSync(join(d, "deep/er/f.txt"), "utf8")).toBe("c");
   });
