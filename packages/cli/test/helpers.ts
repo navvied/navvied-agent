@@ -157,6 +157,9 @@ export function startMockModel() {
   return { url: `http://127.0.0.1:${server.port}/v1`, requests, streaming: () => open, release: () => { letGo(); closeGate(); }, stop: () => server.stop(true) };
 }
 
+/** Ends a hub whose answers the test no longer needs: they are cancelled, not waited for (`stop()` lets running turns finish, which a slow answer makes take seconds). */
+export async function endHub(hub: { cancel(): void; stop(): Promise<void> }): Promise<void> { hub.cancel(); await hub.stop(); }
+
 export const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 export async function until(pred: () => boolean, ms = 20_000): Promise<void> {
   const end = Date.now() + ms;

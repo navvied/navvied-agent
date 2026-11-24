@@ -9,7 +9,9 @@ import { extname, join, normalize, resolve, sep } from "node:path";
 import type { Options } from "../args.ts";
 import { relayUrlFor } from "../computer.ts";
 import { DeviceStore } from "../devices.ts";
-import { devicesPath } from "../config.ts";
+import { accountPath, devicesPath, runsInCloud } from "../config.ts";
+import { DEFAULT_SERVER, readAccount } from "../account.ts";
+import { RELAY_PATH, SESSION_PATH, isSitePath, relayTarget, sessionTarget, siteProxy, tunnel, type Tunnel } from "../site-proxy.ts";
 import { createPairing, type Decision } from "../pairing.ts";
 import { configPath, loadConfig } from "../config.ts";
 import { discover, listModels, saveModel, useModel } from "../model-setup.ts";
@@ -257,7 +259,9 @@ export async function startHttpServer(options: Options, io: IO, deps: HttpDeps =
     return reply("not found\n", 404, "text/plain", cors(req));
   };
 
-  const server = Bun.serve<{ since: number; isApp: boolean; detach?: () => void }>({
+  const siteDeps = { fetch: io.fetch, account: () => readAccount(accountPath(io.env, options.config)), site: io.env.NAVVIED_SERVER ?? DEFAULT_SERVER, inCloud: () => runsInCloud(options, io.env), // Read again each time: the program that joins the account may be another one than this server, and may do it after this one started.
+    here: () => new DeviceStore(devicesPath(io.env)).list().find((d) => d.account !== undefined)?.account };
+  const server = Bun.serve<{ since: number; isApp: boolean; detach?: () => void; cloud?: { target: string; headers: Record<string, string> }; tunnel?: Tunnel }>({
     port: options.port ?? 8787,
     hostname: host,
     maxRequestBodySize: MAX_FRAME,
@@ -270,6 +274,16 @@ export async function startHttpServer(options: Options, io: IO, deps: HttpDeps =
         const since = Number(url.searchParams.get("since"));
         const chosen = protocolKey(req);
         return srv.upgrade(req, { data: { since: Number.isFinite(since) && since > 0 ? since : 0, isApp: isApp(url, req) }, ...(chosen ? { headers: { "sec-websocket-protocol": chosen } } : {}) }) ? undefined : reply("expected a WebSocket\n", 426, "text/plain");
+      }
+      if (url.pathname === SESSION_PATH || url.pathname === RELAY_PATH) {
+        if (!originOk(req)) return reply("forbidden\n", 403, "text/plain");
+        if (!authorised(url, req)) return reply("unauthorised\n", 401, "text/plain");
+        const to = url.pathname === RELAY_PATH
+          ? relayTarget({ inCloud: siteDeps.inCloud, site: relaySite, relayUrl: () => io.env.NAVVIED_RELAY_URL ?? relayUrlFor(siteDeps.account()?.server ?? relaySite) })
+          : sessionTarget(siteDeps, url);
+        if (!to.ok) return reply(JSON.stringify({ error: to.error }), to.status, "application/json");
+        const chosen = protocolKey(req);
+        return srv.upgrade(req, { data: { since: 0, isApp: false, cloud: to }, ...(chosen ? { headers: { "sec-websocket-protocol": chosen } } : {}) }) ? undefined : reply("expected a WebSocket\n", 426, "text/plain");
       }
       if (req.method === "OPTIONS") {
         const origin = req.headers.get("origin");
@@ -336,6 +350,11 @@ export async function startHttpServer(options: Options, io: IO, deps: HttpDeps =
         if (choice !== "once" && choice !== "always" && choice !== "no") return json({ error: "choice must be once, always or no" }, 400, req);
         return json({ ok: relay.answer(String((body as { id?: unknown }).id ?? ""), choice) }, 200, req);
       }
+      if (isSitePath(url.pathname)) {
+        if (!originOk(req)) return reply("forbidden\n", 403, "text/plain");
+        if (!authorised(url, req)) return reply("unauthorised\n", 401, "text/plain");
+        return (await siteProxy(siteDeps, req, url))!;
+      }
       if (url.pathname.startsWith("/api/setup")) {
         if (!originOk(req)) return reply("forbidden\n", 403, "text/plain");
         if (!authorised(url, req)) return reply("unauthorised\n", 401, "text/plain", cors(req));
@@ -356,12 +375,15 @@ export async function startHttpServer(options: Options, io: IO, deps: HttpDeps =
       // Only the app's own connection hears the relay side-channel: a paired website or device's socket (the same
       // kind `pairing.accepts` lets open this connection for ordinary use) must never see another one's pairing
       // code, the same reason the HTTP routes above check `isApp`, not `authorised`.
-      open(ws) { ws.data.detach = hub.attach(ws, ws.data.since); if (ws.data.isApp) ws.subscribe("relay"); },
+      open(ws) {
+        if (ws.data.cloud) { ws.data.tunnel = tunnel(ws.data.cloud, { send: (d) => ws.send(d), close: (code, reason) => ws.close(code, reason) }); return; }
+        ws.data.detach = hub.attach(ws, ws.data.since); if (ws.data.isApp) ws.subscribe("relay"); },
       message(ws, frame) {
+        if (ws.data.tunnel) { ws.data.tunnel.message(frame); return; }
         if (typeof frame !== "string") { ws.send(JSON.stringify({ ev: "error", msg: "bad command: send text frames" })); return; }
         hub.command(frame, (text) => ws.send(text));
       },
-      close(ws) { ws.data.detach?.(); if (ws.data.isApp) ws.unsubscribe("relay"); },
+      close(ws) { ws.data.tunnel?.close(); ws.data.detach?.(); if (ws.data.isApp) ws.unsubscribe("relay"); },
     },
   });
   // A pending relay question reaches a connected shell at once, over the socket it already has open for notices

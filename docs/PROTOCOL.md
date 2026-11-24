@@ -74,6 +74,21 @@ Every event carries `seq` (strictly increasing) and `eid` (unique).
 * A page served from another site (for example a hosted front-end that talks to a server on the visitor's own computer) is refused by default. `--allow-origin https://site.example` (repeatable; plain origins only, no path, no wildcard) lets that site's pages open the socket and call `/api/info`: the server answers the CORS preflight, including `Access-Control-Allow-Private-Network` for browsers that ask before a public page reaches a local address. The token is still required for everything.
 * Every reply carries an `x-navvied: <version>` header (exposed to allowed cross-origin pages), so a page can tell this server from any other address.
 
+## The site's account paths on this computer
+
+A page of navvied.com that runs on this computer's own address asks the same paths it asks of the site, and this computer answers them. Each call needs the page's own token, like every other route. This computer adds the account's token when it asks the server; the page never sees it, and nothing of the page's (cookies, its token, its origin) is passed on. Anything not listed is not found. A cloud session answers none of them (404).
+
+* `GET /api/account/me`: the server's own record of the signed-in person; `{ "user": null }` when nobody is signed in (answered here, with no server call).
+* Open paths, also answered when nobody is signed in: `GET /api/account/providers`, `GET /api/hosted/status`.
+* `GET /api/hosted/session/alive`
+* The cloud conversation itself: a WebSocket at `/api/hosted/session`, with the page's own token (`?token=` or the `navvied-key.` sub-protocol). Only `conversation=<id>` and `takeover=1` of its query go on; every message goes both ways as it is, and when either side ends the other does too. Refused before anything is sent when nobody is signed in or the id is not valid.
+* The relay: a WebSocket at `/relay/ws`, with the page's own token the same way. The page speaks the relay's protocol itself, end to end with another computer's pairing secret, so only the frames are passed on, both ways, with the site as the origin and no account token. Refused in a cloud session.
+* `GET /api/account/computers`: the server's list, with the entry that is this computer marked `"here": true` (when it has joined the account); `PATCH|DELETE /api/account/computers/<id>`
+* `GET /api/account/conversations`, `GET|PATCH|DELETE /api/account/conversations/<id>`, `POST /api/account/conversations/<id>/fork`
+* `GET /api/admin/hosted`, `GET /api/admin/audit`, `PUT /api/admin/models/<id>`, `PUT /api/admin/groups/<id>`, `PUT /api/admin/cloud`, `PUT /api/admin/limits`, `POST /api/admin/groups/<id>/test`
+
+The server decides who may do what: an admin's paths answer only for an admin. A path called with another method is refused with 405; a body is at most 1 MB; a redirect of the server is never followed. Without an account, every path but the open ones answers 401.
+
 ## Connecting a model over HTTP
 
 A page can set up a model without a terminal. All of these need the key (`Authorization: Bearer`, or the `navvied-key.` subprotocol for a socket), answer JSON, and are open to the sites the server allows. A key sent to them is written to the private configuration file (mode 0600) and is never sent back.

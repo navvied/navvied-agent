@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHub } from "../src/commands/hub.ts";
-import { fakeIO, remove, startMockModel, tempDir, until } from "./helpers.ts";
+import { endHub, fakeIO, remove, startMockModel, tempDir, until } from "./helpers.ts";
 
 let mock: ReturnType<typeof startMockModel>;
 const dirs: string[] = [];
@@ -20,7 +20,7 @@ function open() {
   const sessionIds = (): string[] => got.filter((e) => e.ev === "session" && !e.bg).map((e) => e.id!);
   const lastSessions = (): NonNullable<Ev["items"]> => (got.filter((e) => e.ev === "sessions").at(-1)?.items ?? []);
   const lastBackground = (): NonNullable<Ev["items"]> => (got.filter((e) => e.ev === "background").at(-1)?.items ?? []);
-  return { hub, got, send, sessionIds, lastSessions, lastBackground };
+  return { hub, end: () => endHub(hub), got, send, sessionIds, lastSessions, lastBackground };
 }
 
 describe("several conversations at once on one computer", () => {
@@ -79,7 +79,7 @@ describe("several conversations at once on one computer", () => {
     }
     await until(() => r.got.some((e) => e.ev === "error" && e.msg === "Too many conversations are running. Wait for one to finish."));
     expect(r.lastBackground()).toHaveLength(4);
-    await r.hub.stop();
+    await r.end();
   });
 
   test("a window that arrives is told what is going on in the background, and a conversation that is going on cannot be deleted", async () => {
@@ -98,7 +98,7 @@ describe("several conversations at once on one computer", () => {
     expect(bg).toBeGreaterThanOrEqual(0);
     expect(bg).toBeLessThan(synced);
     expect(late[bg]!.items).toEqual([{ id: first, state: "working" }]);
-    await r.hub.stop();
+    await r.end();
   });
 });
 
@@ -113,6 +113,6 @@ describe("the list of conversations follows what is said", () => {
     await until(() => r.got.some((e) => e.ev === "done"), 10_000);
     await until(() => r.got.filter((e) => e.ev === "sessions").length > lists);
     expect(r.lastSessions().find((s) => s.id === id)).toMatchObject({ title: "slow four", messages: expect.any(Number) });
-    await r.hub.stop();
+    await r.end();
   });
 });

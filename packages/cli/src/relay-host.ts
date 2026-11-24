@@ -129,6 +129,7 @@ class Link {
     if (msg.t === "ready") {
       this.ready = true;
       this.#delay = this.host.backoff[0];
+      void this.host.hub.refreshModels();
       // Pages that were already waiting when this computer joined are told about now, as if they had just arrived.
       for (const id of Array.isArray((msg as { clients?: unknown }).clients) ? ((msg as { clients: unknown[] }).clients.filter((c): c is number => typeof c === "number")) : []) this.#addPeer(id);
       return;

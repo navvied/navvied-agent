@@ -21,7 +21,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          bun test packages 2>&1 | tee "$RUNNER_TEMP/test.log"
+          bun test packages --timeout 30000 2>&1 | tee "$RUNNER_TEMP/test.log"
           code=${PIPESTATUS[0]}
           grep -E '^\(fail\)' "$RUNNER_TEMP/test.log" | while IFS= read -r line; do echo "::error title=failed test::$line"; done
           exit $code

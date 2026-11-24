@@ -234,6 +234,12 @@ function withAccount(file: ConfigFile | null, path: string, env: Env): ConfigFil
   return { ...(file ?? {}), models: { ...hostedEntries(account, listing), ...(file?.models ?? {}) }, ...(fallback ? { default: fallback } : {}) };
 }
 
+/** Whether this program runs inside Navvied Cloud (a sandboxed session, or one that reaches the web through the service's proxy): there the computer's own account and its pages do not apply. */
+export function runsInCloud(options: { sandboxed?: boolean; config?: string }, env: Env): boolean {
+  const f = loadConfigFile(configPath(env, options.config));
+  return !!options.sandboxed || (f.ok && !!f.value?.webProxy);
+}
+
 export function loadConfig(path: string, env?: Env): Result<ConfigFile | null> {
   const loaded = loadConfigFile(path);
   return env && loaded.ok ? { ok: true, value: withAccount(loaded.value, path, env) } : loaded;

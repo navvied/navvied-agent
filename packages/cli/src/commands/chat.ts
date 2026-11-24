@@ -4,8 +4,8 @@ import { PERM_MODES, encodeQr, parseEvent, qrText, type CheckpointInfo, type Eng
 import type { Options } from "../args.ts";
 import { MODE_LABEL, renderBanner } from "../banner.ts";
 import { accountPath, configPath, devicesPath, hostedModelsPath, isConfigured, loadConfig, rememberBashPattern, updateConfig, updateStampPath } from "../config.ts";
-import { DEFAULT_SERVER, readAccount, writeHostedModels, type Account } from "../account.ts";
-import { AccountError, fetchModels } from "../account-client.ts";
+import { DEFAULT_SERVER, readAccount, type Account } from "../account.ts";
+import { refreshHosted } from "../hosted-refresh.ts";
 import { connectThisComputer, disconnectThisComputer, relayUrlFor } from "../computer.ts";
 import { login, signOutScreen } from "../login-ui.ts";
 import { autoUpdate } from "./auto-update.ts";
@@ -153,19 +153,10 @@ export async function chatCommand(initial: string | undefined, options: Options,
     if (e.ev === "done") { busy = false; approval = undefined; switching = false; if (proposed && mode === "plan" && presenter && io.choose) void answerPlan(); else marker(); }
   };
 
-  /** When this computer is signed in, ask the server what the account may use, so the models stay current. A computer that is offline keeps what it knew. */
-  const refreshAccount = async (limitMs?: number): Promise<void> => {
-    const account = readAccount(accountPath(io.env, options.config));
-    if (!account) return;
-    try { writeHostedModels(hostedModelsPath(io.env), await fetchModels(io.fetch, account, limitMs ? AbortSignal.timeout(limitMs) : undefined)); }
-    catch (e) { if (e instanceof AccountError && e.message.startsWith("You were signed out")) say(`${paint(io.color, "yellow", "!")} ${e.message}`); }
-  };
   // A computer that is signed in but has never listed the models (just updated, or the list was deleted) waits a moment for them,
-  // so it does not start by saying that no model is connected.
-  if (io.interactive) {
-    if (readAccount(accountPath(io.env, options.config)) && !existsSync(hostedModelsPath(io.env))) await refreshAccount(3000);
-    else void refreshAccount();
-  }
+  // so it does not start by saying that no model is connected. Every later refresh belongs to the hub (at its start and at every reconnect of the relay).
+  const account = io.interactive ? readAccount(accountPath(io.env, options.config)) : undefined;
+  if (account && !existsSync(hostedModelsPath(io.env))) await refreshHosted(io.fetch, account, hostedModelsPath(io.env), 3000);
   // Signing in or out from a page does what `/login` does: this computer joins the account's computers, or leaves them (both are defined below, and used only later).
   const hub = createHub(options, io, { watch: false, onSignedIn: (a) => joinAccount(a), onSignOut: (a) => disconnectThisComputer(io.fetch, a, devices, (id) => relay().forget(id)) });
   menus = hubMenus({

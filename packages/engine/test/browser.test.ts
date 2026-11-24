@@ -7,6 +7,7 @@ import { devToolsEndpoint, openWithRetry } from "../src/tools/browser.ts";
 import { web } from "../src/tools/web-guard.ts";
 import { stopAllJobs } from "../src/index.ts";
 import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
+import { until } from "./helpers.ts";
 
 const chrome = findChrome();
 /** A port that nothing listens on (one that was let go a moment ago, asked for when it is needed: a port freed at the start of the file is given to the next server this file starts), so a connection to it is refused at once. */
@@ -209,6 +210,8 @@ describe.skipIf(!chrome)("a public page cannot send the browser to a private add
       if (u.pathname === "/redirect") return new Response(null, { status: 302, headers: { location: `${inside}/secret-redirect` } });
       if (u.pathname === "/jump") return page(`<p>Jumping</p><script>location.href = "${inside}/secret-navigation"</script>`);
       if (u.pathname === "/subresources") return page(`<p>Pictures</p><img src="${inside}/secret-image"><script>fetch("${inside}/secret-fetch").catch(() => {})</script><img src="http://169.254.169.254/latest/meta-data/">`);
+      // The same page without the cloud metadata address: where private addresses are allowed that request is really sent, and an address that goes nowhere holds the page's load for as long as the browser waits.
+      if (u.pathname === "/private-ok") return page(`<p>Pictures</p><img src="${inside}/secret-image"><script>fetch("${inside}/secret-fetch").catch(() => {})</script>`);
       if (u.pathname === "/unlisted") return page(`<p>Unlisted</p><img src="http://unlisted.test:${port}/secret-unlisted">`);
       if (u.pathname === "/fine") return page(`<p>All public</p><img src="http://public.test:${port}/public-image">`);
       return new Response("", { status: 204 });
@@ -257,8 +260,7 @@ describe.skipIf(!chrome)("a public page cannot send the browser to a private add
   }, 30_000);
 
   test("a host that allows private addresses is still allowed to: the same page reaches them", async () => {
-    await run({ action: "open", url: site("/subresources") }, true);
-    expect(seen("/secret-image")).toBe(true);
-    expect(seen("/secret-fetch")).toBe(true);
+    await run({ action: "open", url: site("/private-ok") }, true);
+    await until(() => seen("/secret-image") && seen("/secret-fetch"));
   }, 30_000);
 });

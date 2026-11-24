@@ -25,7 +25,8 @@ import { readMachine, realProbe, type Probe } from "../machine.ts";
 import { askModels, detectApi, newEndpointId, reportEndpoints, type EndpointRecord } from "../endpoints.ts";
 import { API_STYLES, MODEL_HUB, PROVIDERS, authHeaders } from "../presets.ts";
 import { ONLY_ON_A_COMPUTER, baseOf, entryName, headersOf, listModels, mergeSaved, modelEntryOf, reportOf, type ListedRoute } from "../providers.ts";
-import { accountPath, hostedModelsPath, chatFilesDir, chatJournalDir, chatSearchIndexPath, chatSessionsDir, configPath, foldersPath, localDir, journalDir, loadConfig, saveEndpoint, removeModel, saveModel, saveProvider, pluginStatePath, terminalStatePath, toolUsagePath, draftsPath, checkpointsDir, scheduledDir, schedulesPath, searchIndexPath, sessionsDir } from "../config.ts";
+import { refreshHosted } from "../hosted-refresh.ts";
+import { accountPath, hostedModelsPath, chatFilesDir, chatJournalDir, chatSearchIndexPath, chatSessionsDir, configPath, foldersPath, localDir, journalDir, loadConfig, runsInCloud, saveEndpoint, removeModel, saveModel, saveProvider, pluginStatePath, terminalStatePath, toolUsagePath, draftsPath, checkpointsDir, scheduledDir, schedulesPath, searchIndexPath, sessionsDir } from "../config.ts";
 import { SearchIndex } from "../search-index.ts";
 import { DEFAULT_SERVER, readAccount, type Account } from "../account.ts";
 import { deleteConversation, getConversation, listComputers, listConversations, type AccountComputer } from "../account-client.ts";
@@ -80,6 +81,8 @@ export interface Hub {
   created(): Created | undefined;
   /** Why there is no engine. */
   error(): string;
+  /** Ask the server for the account's hosted models again, and tell every window when they changed. Nothing happens when this computer is not signed in. */
+  refreshModels(): Promise<void>;
   /** Stop what every open conversation is doing. */
   cancel(): void;
   /** Start a new engine from the current configuration. Clients and history stay; the old engine is closed. */
@@ -718,6 +721,17 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   jobTimer?.unref?.();
   if (hubOptions.schedule) queueMicrotask(tickJobs);
 
+  /** The server's list is the one source: windows are told at once when it differs from what this computer knew. Asked at the start and at every reconnect of the relay. */
+  const refreshModels = async (): Promise<void> => {
+    const account = options.sandboxed ? undefined : signedIn();
+    if (!account) return;
+    const file = hostedModelsPath(io.env);
+    const got = await refreshHosted(io.fetch, account, file);
+    if (got.signedOut) say(main, { ev: "notice", msg: got.signedOut });
+    if (got.changed && signedIn()?.token === account.token) pushModels();
+  };
+  void refreshModels();
+
   /** The folder a task works in: named by an id this hub gave, or the current one. */
   const jobFolder = (id: string | undefined): string | undefined => (id === undefined ? resolve(main.options.cwd ?? process.cwd()) : folderBook.resolve(id, resolve(main.options.cwd ?? process.cwd()), namedFolders()));
   const schedule = (lane: Lane, cmd: Extract<Command, { cmd: "schedules" | "schedule.add" | "schedule.update" | "schedule.remove" | "schedule.run" }>): void => {
@@ -763,7 +777,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   };
   const accountsPage = accounts({
     io,
-    inCloud: () => { const f = loadConfig(configPath(io.env, main.options.config)); return !!main.options.sandboxed || (f.ok && !!f.value?.webProxy); },
+    inCloud: () => runsInCloud(main.options, io.env),
     account: signedIn,
     tell: (e) => say(main, e),
     models: { save: (name, entry) => { saveModel(configPath(io.env, main.options.config), name, entry); }, remove: (name) => { removeModel(configPath(io.env, main.options.config), name); } },
@@ -777,7 +791,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   const local = localModels({
     io,
     ...(hubOptions.probe ? { probe: hubOptions.probe } : {}),
-    inCloud: () => { const f = loadConfig(configPath(io.env, main.options.config)); return !!main.options.sandboxed || (f.ok && !!f.value?.webProxy); },
+    inCloud: () => runsInCloud(main.options, io.env),
     hubToken: () => { const f = loadConfig(configPath(io.env, main.options.config)); return f.ok ? f.value?.providers?.[MODEL_HUB.tokenProvider]?.key : undefined; },
     tell: (e) => say(main, e),
     models: {
@@ -1009,6 +1023,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     connected: () => connect(main) !== undefined,
     created: () => main.created,
     error: () => main.error,
+    refreshModels,
     cancel() { for (const lane of lanes.values()) lane.created?.engine.handle({ cmd: "cancel" }); for (const slot of asideSlots) slot.created?.engine.handle({ cmd: "cancel" }); },
     restart() {
       // A new model or a new setting reaches every conversation that is open, whatever its kind.
