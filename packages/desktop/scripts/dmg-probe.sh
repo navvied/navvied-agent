@@ -78,7 +78,7 @@ attempt() {
       fi
     fi
     cleanup
-    rm -rf "$stage" "$image" "$work/clean-$way-$i" "$work/h-$way-$i.dmg"
+    rm -rf "$stage" "$image" "$work/udf-$i.dmg"
     i=$((i + 1))
   done
 }
@@ -89,33 +89,43 @@ attempt create plain 'hdiutil create -srcfolder "$stage" -volname probe -fs HFS+
 attempt create-quiet quiet 'hdiutil create -srcfolder "$stage" -volname probe -fs HFS+ -fsargs "-c c=64,a=16,e=16" -format UDRW "$image"'
 # The way the installer now makes it: scripts/make-dmg.sh, from the app alone, never attaching an image.
 attempt script plain 'bash "$here/make-dmg.sh" "$stage/navvied.app" "$image" navvied'
-# Opens an image the way a person does and checks the app inside against the one it was made from ($1): the system's own signature
-# check on both (the source is the control), the link, the content, and the extended attribute when $3 says it must survive.
+# Opens an image the way a person does and checks the app inside against the one it was made from ($1). Every check runs, so one
+# annotation shows all that is wrong: the system's own signature check on the source (the control), on the app in the image and on a
+# copy of it made the way dragging it into Applications makes one; the link, the executable bit, the content, and the extended attribute
+# when $3 says it must survive.
 opened() {
-  src=$1; img=$2; m=$(mktemp -d "$work/mount.XXXXXX"); bad=0
-  need codesign --verify --deep --strict "$src" || return 1
+  src=$1; img=$2; bad=0; m=$(mktemp -d "$work/mount.XXXXXX"); out="$work/copy-$way-$i"
+  need codesign --verify --deep --strict "$src" || bad=1
   hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$m" "$img" >/dev/null || return 1
-  need test -L "$m/Applications" && need cmp "$m/navvied.app/Contents/Resources/program" "$src/Contents/Resources/program" \
-    && need codesign --verify --deep --strict "$m/navvied.app" && need test "$(readlink "$m/navvied.app/Contents/Resources/rest-link")" = rest \
-    && { [ "${3:-}" != xattr ] || need test "$(xattr -p com.navvied.probe "$m/navvied.app/Contents/Resources/rest")" = kept; } || bad=1
+  need test -L "$m/Applications" || bad=1
+  need test -x "$m/navvied.app/Contents/MacOS/navvied" || bad=1
+  need cmp "$m/navvied.app/Contents/Resources/program" "$src/Contents/Resources/program" || bad=1
+  need codesign --verify --deep --strict "$m/navvied.app" || bad=1
+  need test "$(readlink "$m/navvied.app/Contents/Resources/rest-link")" = rest || bad=1
+  if [ "${3:-}" = xattr ]; then need test "$(xattr -p com.navvied.probe "$m/navvied.app/Contents/Resources/rest")" = kept || bad=1; fi
+  mkdir -p "$out" && ditto "$m/navvied.app" "$out/navvied.app" && { need codesign --verify --deep --strict "$out/navvied.app" || bad=1; }
   if [ $bad = 1 ]; then
-    { echo "--- attributes of the app it was made from"; xattr -lr "$src" | grep -E 'com\.apple' | head -6
-      echo "--- attributes of the app in the image"; xattr -lr "$m/navvied.app" | grep -E 'com\.apple' | head -6; } >&2
+    { echo "--- attributes of the app it was made from"; xattr -lr "$src" | grep -E 'com\.apple' | head -3
+      echo "--- attributes of the app in the image (with their bytes)"; xattr -lrx "$m/navvied.app" | grep -E -A3 'com\.apple' | head -14
+      echo "--- file system of the volume"; diskutil info "$m" | grep -E 'File System|Type'; } >&2
   fi
   hdiutil detach "$m" >/dev/null || bad=1
+  rm -rf "$out"
   return $bad
 }
 
 # The old way, then opened: tells whether what is lost is lost by every way of making an image or only by the new one.
 attempt create-opened plain 'hdiutil create -srcfolder "$stage" -volname probe -fs HFS+ -fsargs "-c c=64,a=16,e=16" -format UDRW "$image" && opened "$stage/navvied.app" "$image" xattr'
-# That finished download opened the way a person opens it.
+# The way of the installer, opened.
 attempt script-opened plain 'bash "$here/make-dmg.sh" "$stage/navvied.app" "$image" navvied && opened "$stage/navvied.app" "$image" xattr'
-# The app copied without resource forks, extended attributes and quarantine marks before the image is made.
-attempt script-clean-opened plain 'c="$work/clean-$way-$i"; mkdir "$c" && ditto --norsrc --noextattr --noqtn "$stage/navvied.app" "$c/navvied.app" && bash "$here/make-dmg.sh" "$c/navvied.app" "$image" navvied && opened "$c/navvied.app" "$image"'
+# Written straight from the folder as a UDF volume, which has no Finder information to give: still no volume is attached while making it.
+attempt udf-opened plain 'hdiutil makehybrid -default-volume-name probe -udf -o "$work/udf-$i.dmg" "$stage" && hdiutil convert -format UDZO -o "$image" "$work/udf-$i.dmg" && hdiutil verify "$image" && opened "$stage/navvied.app" "$image" xattr'
+# The fallback, if nothing above keeps the signature: an image of our own that is attached, filled and detached by this script, to count how often that is refused.
+attempt manual plain 'hdiutil create -size 300m -fs HFS+ -volname probe -ov "$image" && m=$(mktemp -d "$work/fill.XXXXXX") && hdiutil attach -nobrowse -noautoopen -mountpoint "$m" "$image" >/dev/null && ditto "$stage" "$m" && sync && hdiutil detach "$m"'
 
 {
   echo "way             images  failed  slowest (s)"
-  for way in create create-quiet script create-opened script-opened script-clean-opened; do
+  for way in create create-quiet script create-opened script-opened udf-opened manual; do
     awk -v w="$way" '$1 == w {n++; if ($2 == "fail") f++; if ($3 > s) s = $3} END {printf "%-15s %6d  %6d  %11d\n", w, n, f, s}' "$results"
   done
 } >"$work/summary.txt"
