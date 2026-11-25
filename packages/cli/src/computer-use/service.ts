@@ -25,6 +25,7 @@ export interface ServiceInput {
   humanHasControl?: () => boolean;
   /** Which app the agent is using while a step runs, `undefined` when it lets go (for the indicator with Stop). */
   indicator?: (app: string | undefined) => void;
+  trace?: ConstructorParameters<typeof DriverAdapter>[0]["trace"];
   pin?: Pin;
   install?: typeof realInstall;
 }
@@ -86,6 +87,7 @@ export class ComputerUse {
     const a = new DriverAdapter({
       guard, mode, platform: this.i.platform, ready: this.ready,
       ...(this.i.indicator ? { indicator: this.i.indicator } : {}),
+      ...(this.i.trace ? { trace: this.i.trace } : {}),
       driver: { call: (name, args, ms) => (this.host ? this.host.call(name, args, ms) : Promise.reject(new Error("not started"))) as Promise<CallResult> },
     });
     this.helpers.add(a);

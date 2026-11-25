@@ -20,6 +20,7 @@ setTimeout(() => { say("result", "the drive did not finish in six minutes"); pro
 const platform = osPlatform();
 const use = new ComputerUse({
   platform, arch: osArch(), env: process.env, dir: join(process.env.NAVVIED_HOME ?? join(homedir(), ".navvied"), "computer"), fetchFn: fetch, run, spawn: spawnChild, probe: probeStatus, pid: process.pid, ownApps: ["navvied-agent-runner"],
+  trace: ({ tool, args, result }) => { if (result.isError) say("driver said", `${tool} ${JSON.stringify({ ...args, text: undefined }).slice(0, 160)} -> ${(JSON.stringify(result.structured ?? "") + " " + result.text).replace(/\s+/g, " ").slice(0, 330)}`); },
 });
 const helper = use.helper();
 const allow = async () => "app" as const;
@@ -85,11 +86,12 @@ if (first.verdict !== "delivered" || target === undefined) { check("the program 
     await act("select all", { action: "key", keys: `${mod}+a` });
     await act("long text", { action: "type", target: field(lines)!, text: Array.from({ length: 120 }, (_, n) => `line ${n + 1}`).join("\n") });
     lines = await look();
-    const bar = lines.find((l) => /(ScrollBar|AXScrollBar).*Vertical|AXValueIndicator/.test(l)) ?? "";
+    const bars = (ls: string[]) => ls.filter((l) => /scroll/i.test(l)).map((l) => l.trim()).join(" | ");
+    const before = bars(lines);
     await act("scroll", { action: "scroll", app, direction: "up", amount: 15 });
     await pause(300);
-    const after = (await look()).find((l) => /(ScrollBar|AXScrollBar).*Vertical|AXValueIndicator/.test(l)) ?? "";
-    check("scroll moves the text", bar !== "" && after !== bar, `${bar.trim()} -> ${after.trim()}`);
+    const afterBars = bars(await look());
+    check("scroll moves the text", before !== "" && afterBars !== before, `${before.slice(0, 120)} -> ${afterBars.slice(0, 120)}`);
     await act("drag", { action: "drag", x: 20, y: 90, to_x: 60, to_y: 90 });
     await act("type over the selection", { action: "type", target: field(lines)!, text: "Z" });
     lines = await look();

@@ -19,6 +19,8 @@ export interface AdapterInput {
   indicator?: (app: string | undefined) => void;
   /** Tells the driver how a keyboard shortcut is spelled on this system. */
   platform: string;
+  /** What the driver answered, as it answered, for a check that has to see why a step failed. Never for a conversation: the model never reads it. */
+  trace?: (call: { tool: string; args: Record<string, unknown>; result: CallResult }) => void;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -199,6 +201,7 @@ export class DriverAdapter implements ComputerHelper {
       sent.catch(() => undefined);
       // A stopped turn does not wait for the driver: the call is let go, and whether it happened is not known.
       const r = signal ? await Promise.race([sent, cut(signal)]) : await sent;
+      if (r !== CUT) this.i.trace?.({ tool: name, args, result: r });
       if (r === CUT) return { fail: input ? { verdict: "unverified", next: NEXT_CUT } : refused("blocked_by_policy", "The person stopped this turn. Do nothing more on the screen.") };
       if (!r.isError) return { ok: r };
       const known = refusalOf(r);
