@@ -208,3 +208,16 @@ describe("the tasks of asking, keeping a list and handing work to helpers", () =
     expect(events.filter((e, i) => i < firstDone && e.ev === "tool" && e.name === "Agent" && e.status === "running" && e.input !== undefined)).toHaveLength(2);
   }, 60_000);
 });
+
+describe("a step that ended in an error says why in the run's steps", () => {
+  test("so that a failed run names the message and not only the tool", async () => {
+    const { measure } = await import("../src/run.ts");
+    const line = (o: object): string => JSON.stringify(o);
+    const out = [
+      line({ ev: "tool", id: "1", name: "Edit", status: "running", seq: 1, eid: "e1" }),
+      line({ ev: "tool", id: "1", name: "Edit", status: "error", output: "Error: src/a.ts was not read in this conversation.\nsecond line", seq: 2, eid: "e2" }),
+      line({ ev: "tool", id: "2", name: "Bash", status: "done", output: "ok", seq: 3, eid: "e3" }),
+    ].join("\n");
+    expect(measure(out).steps).toEqual(["Edit:error: Error: src/a.ts was not read in this conversation.", "Bash:done"]);
+  });
+});

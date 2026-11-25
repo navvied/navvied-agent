@@ -138,6 +138,28 @@ describe("acting", () => {
     await adapter.call({ action: "scroll", direction: "up", amount: 99 });
     expect(calls.at(-1)).toMatchObject({ name: "scroll", args: { direction: "up", amount: 50, by: "line" } });
   });
+  test("one key is press_key, a combination is hotkey", async () => {
+    const { adapter, calls } = make();
+    await adapter.call({ action: "capture", app: "Notes" });
+    await adapter.call({ action: "key", keys: "Escape" });
+    expect(calls.at(-1)).toMatchObject({ name: "press_key", args: { key: "escape" } });
+    await adapter.call({ action: "key", keys: "cmd+s" });
+    expect(calls.at(-1)).toMatchObject({ name: "hotkey", args: { keys: ["cmd", "s"] } });
+  });
+  test("a place in pixels needs a picture of the window: one is taken first when the capture had none, and only then", async () => {
+    const { adapter, calls } = make();
+    await adapter.call({ action: "capture", app: "Notes", mode: "ax" });
+    await adapter.call({ action: "drag", x: 1, y: 2, to_x: 3, to_y: 4 });
+    const names = calls.map((c) => `${c.name}${c.args.include_screenshot ? "+picture" : ""}`);
+    expect(names.slice(-3)).toEqual(["get_window_state", "get_window_state+picture", "drag"]);
+    const before = calls.length;
+    await adapter.call({ action: "drag", x: 1, y: 2, to_x: 3, to_y: 4 });
+    expect(calls.slice(before).map((c) => c.name)).toEqual(["drag"]);
+    const { adapter: a2, calls: c2 } = make();
+    await a2.call({ action: "capture", app: "Notes", mode: "som" });
+    await a2.call({ action: "drag", x: 1, y: 2, to_x: 3, to_y: 4 });
+    expect(c2.filter((c) => c.name === "get_window_state").length).toBe(1);
+  });
   test("a drag between two elements uses the middle of each, or pixels when given", async () => {
     const { adapter, calls } = make();
     await adapter.call({ action: "capture", app: "Notes" });
@@ -205,6 +227,11 @@ describe("what the person decides", () => {
     expect((await adapter.call({ action: "click", target: 1 }, undefined, async () => "once")).verdict).toBe("delivered");
     expect(calls.at(-1)!.args.delivery_mode).toBe("foreground");
   });
+  test("a foreground that cannot be had either is told as it is: the app cannot be used, and the person is told", async () => {
+    const { adapter } = make("bypass", { click: (a) => ({ isError: true, text: "x", structured: { code: a.delivery_mode === "background" ? "background_unavailable" : "foreground_unavailable" } }) });
+    await adapter.call({ action: "capture", app: "Notes" });
+    expect(await adapter.call({ action: "click", target: 1 }, undefined, async () => "once")).toMatchObject({ verdict: "refused", code: "background_unavailable", next: expect.stringContaining("could not be brought") });
+  });
   test("the hard blocks and the person's own windows are refused before the driver or the person is asked", async () => {
     const { adapter, calls } = make("bypass");
     await adapter.call({ action: "capture", app: "Notes" });
@@ -233,13 +260,16 @@ describe("what the system says", () => {
     expect(await adapter.call({ action: "capture", app: "Notes" })).toMatchObject({ code: "permission_missing", which: "Accessibility" });
     expect(calls.length).toBe(0);
   });
-  test("the driver's failures are put into the closed words and never passed on as they are", () => {
-    const bad = (text: string, code?: string): CallResult => ({ isError: true, text, structured: code ? { code } : null });
-    expect(refusalOf(bad("Accessibility permission is not granted"))).toEqual({ code: "permission_missing", which: "Accessibility" });
-    expect(refusalOf(bad("Screen Recording permission denied"))).toEqual({ code: "permission_missing", which: "Screen Recording" });
-    expect(refusalOf(bad("target_occluded: a window covers the point"))).toEqual({ code: "background_occluded" });
-    expect(refusalOf(bad("blocked: UIPI, higher integrity level"))).toEqual({ code: "background_uipi_blocked" });
-    expect(refusalOf(bad("something odd"))).toBeUndefined();
+  test("the driver's failures are put into the closed words from its structured code, never from the words of its text", () => {
+    const bad = (code?: string, text = "", extra: object = {}): CallResult => ({ isError: true, text, structured: code ? { code, ...extra } : null });
+    expect(refusalOf(bad("background_unavailable"))).toMatchObject({ code: "background_unavailable" });
+    expect(refusalOf(bad("foreground_unavailable"))).toMatchObject({ code: "background_unavailable", next: expect.stringContaining("front") });
+    expect(refusalOf(bad("target_occluded"))).toMatchObject({ code: "background_occluded" });
+    expect(refusalOf(bad("background_uipi_blocked"))).toMatchObject({ code: "background_uipi_blocked" });
+    expect(refusalOf(bad("permission_missing", "", { which: "Screen Recording" }))).toMatchObject({ code: "permission_missing", which: "Screen Recording" });
+    expect(refusalOf(bad("screenshot_context_missing"))).toMatchObject({ code: "input_target_mismatch" });
+    expect(refusalOf(bad("tool_invocation_failed", "Accessibility permission is not granted; the window is occluded; UIPI; foreground"))).toBeUndefined();
+    expect(refusalOf(bad(undefined, "background_unavailable permission occluded"))).toBeUndefined();
   });
   test("a driver error it cannot name is unverified for input and a plain refusal for looking; neither carries the driver's words", async () => {
     const boom = () => ({ isError: true, text: "/Users/x/secret path failed: errno 5", structured: { code: "tool_invocation_failed" } }) as CallResult;

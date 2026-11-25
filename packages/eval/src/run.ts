@@ -133,7 +133,7 @@ export interface TaskResult {
 
 interface Metrics { tools?: Record<string, number>; nested?: number; /** Every task list the agent sent. */ plans?: PlanEntry[][]; misuse?: Misuse; web?: WebUse; modelCalls: number; toolCalls: number; outTokens: number; peakContext: number; error?: string; /** What the agent said in its last turn. */ said?: string; /** The tools it used, in order, with how each ended. */ steps?: string[] }
 
-function measure(stdout: string, known = ""): Metrics {
+export function measure(stdout: string, known = ""): Metrics {
   const m: Metrics = { modelCalls: 0, toolCalls: 0, outTokens: 0, peakContext: 0 };
   const seenTools = new Set<string>(), seenNested = new Set<string>(), names = new Map<string, string>();
   const inputs = new Map<string, unknown>();
@@ -147,7 +147,7 @@ function measure(stdout: string, known = ""): Metrics {
     else if (e.ev === "tool") {
       if (!seenTools.has(e.id)) { seenTools.add(e.id); names.set(e.id, e.name); m.toolCalls += 1; m.tools = { ...m.tools, [e.name]: (m.tools?.[e.name] ?? 0) + 1 }; }
       if (e.input !== undefined) inputs.set(e.id, e.input);
-      if (e.status !== "running") { (m.steps ??= []).push(`${e.name}:${e.status}`); ended.push({ name: e.name, status: e.status, input: inputs.get(e.id), ...(e.output !== undefined ? { output: e.output } : {}) }); }
+      if (e.status !== "running") { (m.steps ??= []).push(e.status === "error" ? `${e.name}:error: ${(e.output ?? "").split("\n")[0]!.slice(0, 160)}` : `${e.name}:${e.status}`); ended.push({ name: e.name, status: e.status, input: inputs.get(e.id), ...(e.output !== undefined ? { output: e.output } : {}) }); }
     }
     else if (e.ev === "plan") (m.plans ??= []).push(e.entries);
     else if (e.ev === "error" && !m.error) m.error = e.msg;

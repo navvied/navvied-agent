@@ -34,14 +34,27 @@ const NEXT_FAILED = "This could not be done. Capture the app again; if it fails 
 
 const refused = (code: Refusal & ComputerResult["code"], next: string, extra: Partial<ComputerResult> = {}): ComputerResult => ({ verdict: "refused", code: code as NonNullable<ComputerResult["code"]>, next, ...extra });
 
-/** What a driver's failure says, in the closed words the model is given: never the operating system's own text. */
-export function refusalOf(r: CallResult): { code: NonNullable<ComputerResult["code"]>; which?: string } | undefined {
-  const said = `${JSON.stringify(r.structured ?? "")} ${r.text}`.toLowerCase();
-  if (/permission|not trusted|accessibility.*(denied|not granted|disabled)|screen recording/.test(said)) return { code: "permission_missing", which: /screen recording/.test(said) ? "Screen Recording" : "Accessibility" };
-  if (/uipi|higher integrity|elevated/.test(said)) return { code: "background_uipi_blocked" };
-  if (/occluded|covered by|minimi[sz]ed|not on screen/.test(said)) return { code: "background_occluded" };
-  if (/background_unavailable|wm_chord_unavailable|foreground/.test(said) && r.isError) return { code: "background_unavailable" };
-  return undefined;
+/** The driver's own closed codes, as it puts them in `structuredContent.code`, and what each means to the model. What its text says is never read: it is for people, and it names paths and system calls. */
+const DRIVER_CODES: Record<string, { code: NonNullable<ComputerResult["code"]>; next: string }> = {
+  background_unavailable: { code: "background_unavailable", next: "This app cannot be used without bringing it to the front of the screen. Tell the person and stop." },
+  foreground_unavailable: { code: "background_unavailable", next: "This app can only be used in front of the screen, and it could not be brought there. Tell the person and stop." },
+  wm_chord_unavailable: { code: "background_unavailable", next: "That shortcut belongs to the desktop and cannot be sent to an app. Tell the person and stop." },
+  background_occluded: { code: "background_occluded", next: "The window is hidden. Ask the person to show it, then capture again." },
+  target_occluded: { code: "background_occluded", next: "Another window covers that place. Ask the person to move it, then capture again." },
+  background_uipi_blocked: { code: "background_uipi_blocked", next: "This app runs with more rights than navvied and cannot be controlled. Tell the person and stop." },
+  permission_missing: { code: "permission_missing", next: "The person must allow it in the system settings. Tell them and stop." },
+  screenshot_context_missing: { code: "input_target_mismatch", next: "Capture the app again, then act." },
+  point_outside_window: { code: "input_target_mismatch", next: "That place is outside the window. Capture the app again, then act." },
+  element_not_found: { code: "input_target_mismatch", next: "Capture the app again, then use the new numbers." },
+};
+
+/** What a driver's failure means in the closed words the model is given, from its structured code only. */
+export function refusalOf(r: CallResult): { code: NonNullable<ComputerResult["code"]>; next: string; which?: string } | undefined {
+  const code = (r.structured as { code?: unknown } | undefined)?.code;
+  const known = typeof code === "string" ? DRIVER_CODES[code] : undefined;
+  if (!known) return undefined;
+  const which = (r.structured as { which?: unknown } | undefined)?.which;
+  return { ...known, ...(known.code === "permission_missing" && typeof which === "string" ? { which } : {}) };
 }
 
 /** A pause that ends the moment the person stops the turn. */
@@ -56,6 +69,8 @@ const words = (keys: string): string[] => keys.split(/\s*[+-]\s*/).map((k) => k.
 export class DriverAdapter implements ComputerHelper {
   private window?: Win;
   private elements = new Map<number, Element>();
+  /** Whether the last read of the window had a picture: places in pixels mean something only against one. */
+  private shot = false;
   private halted = false;
 
   constructor(private i: AdapterInput) {}
@@ -127,6 +142,7 @@ export class DriverAdapter implements ComputerHelper {
     if ("fail" in r) return r.fail;
     this.window = { pid: win.pid, windowId: win.windowId, app: win.app || app, title: win.title };
     this.elements = parseElements(r.ok);
+    this.shot = mode !== "ax";
     const tree = [...this.elements.keys()].sort((a, b) => a - b).map((n) => this.lineOf(n, r.ok)).join("\n");
     return { verdict: "delivered", app, ...(tree ? { tree } : {}), ...(r.ok.image ? { image: r.ok.image } : {}) };
   }
@@ -150,6 +166,13 @@ export class DriverAdapter implements ComputerHelper {
     const win = this.window;
     if (!win || !app) return refused("input_target_mismatch", "Capture an app first.");
     const base = { pid: win.pid, window_id: win.windowId, delivery_mode: delivery };
+    const byPixels = c.action === "drag" || ((c.action === "click" || c.action === "scroll") && c.target === undefined && c.x !== undefined);
+    if (byPixels && !this.shot) {
+      // A place in pixels is a place in a picture of the window: take one (the model is not shown it) before the step.
+      const seen = await this.safe("get_window_state", { pid: win.pid, window_id: win.windowId, tree_format: "elements", include_screenshot: true, timeout_ms: 8000 }, false, signal);
+      if ("fail" in seen) return seen.fail;
+      this.shot = true;
+    }
     const element = c.target !== undefined ? this.elements.get(c.target) : undefined;
     const held = c.keys && c.action !== "key" ? { modifier: words(c.keys) } : {};
     let name: string, args: Record<string, unknown>;
@@ -167,7 +190,7 @@ export class DriverAdapter implements ComputerHelper {
         break;
       }
       case "type": return this.typeText(base, element, c.text ?? "", app, signal);
-      case "key": name = "hotkey"; args = { ...base, keys: words(c.keys ?? "") }; break;
+      case "key": { const ks = words(c.keys ?? ""); if (ks.length === 1) { name = "press_key"; args = { ...base, key: ks[0] }; } else { name = "hotkey"; args = { ...base, keys: ks }; } break; }
       case "scroll": name = "scroll"; args = { ...base, direction: c.direction ?? "down", amount: Math.max(1, Math.min(50, c.amount ?? 3)), by: "line", ...(element ? { element_token: element.token } : {}) }; break;
       default: return refused("blocked_by_policy", "This step does not exist.");
     }
@@ -205,7 +228,7 @@ export class DriverAdapter implements ComputerHelper {
       if (r === CUT) return { fail: input ? { verdict: "unverified", next: NEXT_CUT } : refused("blocked_by_policy", "The person stopped this turn. Do nothing more on the screen.") };
       if (!r.isError) return { ok: r };
       const known = refusalOf(r);
-      if (known) return { fail: refused(known.code, known.code === "permission_missing" ? `The person must allow ${known.which ?? "it"} in the system settings. Tell them and stop.` : refusalNext(known.code), known.which ? { which: known.which } : {}) };
+      if (known) return { fail: refused(known.code, known.next, known.which ? { which: known.which } : {}) };
       return { fail: input ? { verdict: "unverified", next: NEXT_UNKNOWN } : refused("background_unavailable", NEXT_FAILED) };
     } catch (e) {
       if (e instanceof NotSent) return { fail: refused("background_unavailable", "The screen helper is not running. Tell the person.") };
@@ -213,10 +236,6 @@ export class DriverAdapter implements ComputerHelper {
       throw e;
     }
   }
-}
-
-function refusalNext(code: NonNullable<ComputerResult["code"]>): string {
-  return code === "background_occluded" ? "The window is hidden. Ask the person to show it, then capture again." : code === "background_uipi_blocked" ? "This app runs with more rights than navvied and cannot be controlled. Tell the person and stop." : NEXT_FAILED;
 }
 
 /** The number an element goes by: the one the driver gave it, which is also the end of its token. */

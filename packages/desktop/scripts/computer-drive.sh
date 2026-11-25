@@ -12,6 +12,8 @@ case "$(uname -s)" in
     /usr/libexec/at-spi-bus-launcher --launch-immediately & sleep 2
     { echo "IsEnabled set: $(dbus-send --session --print-reply --dest=org.a11y.Bus /org/a11y/bus org.freedesktop.DBus.Properties.Set string:org.a11y.Status string:IsEnabled variant:boolean:true 2>&1 | tail -1)"; } >"$report.a11y" 2>&1
     { echo "accessibility bus: $(dbus-send --session --print-reply --dest=org.a11y.Bus /org/a11y/bus org.a11y.Bus.GetAddress 2>&1 | tail -1)"; pgrep -a 'at-spi|dbus' | head -5; } >>"$report.a11y" 2>&1
+    # A window manager, which a person's screen has: without one no window can be brought in front.
+    openbox >/dev/null 2>&1 & sleep 1
     python3 "$here/packages/cli/test/fixtures/gtk-target.py" & app=$!; needle=navvied-target ;;
   Darwin) open -a TextEdit; app=; needle=TextEdit ;;
   # The program must not hold the output of this script open, or whatever reads it waits for the program to end.

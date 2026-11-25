@@ -25,7 +25,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: A virtual screen and the accessibility bus (Linux only)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb x11-utils libxtst6 libxi6 libatspi2.0-0 at-spi2-core libatk-adaptor dbus-x11 python3-gi gir1.2-gtk-3.0 gir1.2-atspi-2.0
+        run: sudo apt-get update && sudo apt-get install -y xvfb x11-utils libxtst6 libxi6 libatspi2.0-0 at-spi2-core libatk-adaptor dbus-x11 python3-gi gir1.2-gtk-3.0 gir1.2-atspi-2.0 openbox
       - name: Fetch the driver, start it, list what it offers, read one open program
         timeout-minutes: 10
         run: |
