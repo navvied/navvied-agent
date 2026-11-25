@@ -26,17 +26,17 @@ describe("a task's earlier runs", () => {
     await scheduleScreen(t.kit(l), () => NOW);
     expect(l.commands("schedule.runs")).toEqual([{ cmd: "schedule.runs", id: "a", limit: 3 }]);
     const list = t.shown.find((s) => s.title === "What it said before")!;
-    expect(list.items.map((i) => i.label)).toEqual(["✓  today 9:00", "✓  yesterday 9:00", "✗  Monday 9:00"]);
+    expect(list.items.map((i) => i.label)).toEqual(["✓  today 9:00  Fine", "✓  yesterday 9:00  Fine", "✗  Monday 9:00  Failed"]);
     expect(list.items[0]!.hint).toBe("Three commits yesterday.");
     expect(list.frame.body).toContain("The last three runs.");
     const detail = t.shown.find((s) => s.title === "Morning summary" && s.frame.body?.includes("The last run failed."))!;
     expect(detail.frame.body!.join("\n")).toContain("The folder could not be opened.");
     expect(l.commands("schedule.run")).toHaveLength(1);
   });
-  test("no runs yet says when the first one happens", async () => {
+  test("no runs yet says so, and nothing more", async () => {
     const t = scripted([0, "What it said before", undefined, undefined]);
     await scheduleScreen(t.kit(hub([job()], [])), () => NOW);
-    expect(t.shown.find((s) => s.title === "What it said before")!.frame.body!.join("\n")).toContain("The first run happens at its next time.");
+    expect(t.shown.find((s) => s.title === "What it said before")!.frame.body).toEqual(["No runs yet."]);
   });
 });
 
@@ -132,7 +132,7 @@ describe("turning Computer Use on", () => {
     await computerScreen(k, { title: "Computer Use" });
     expect(t.shown[0]!.frame.body!.join("\n")).toContain("It asks before it uses an app, and you can stop it at any time.");
     const perms = t.shown.find((s) => s.title === "Two permissions")!;
-    expect(perms.items.map((i) => `${i.label}|${i.hint}`)).toEqual(["✓  Accessibility|Granted", "·  Screen Recording|Lets navvied see the screen."]);
+    expect(perms.items.map((i) => `${i.label}|${i.hint}`)).toEqual(["✓  Accessibility|undefined", "·  Screen Recording|undefined"]);
     expect(l.commands("computer.permission")).toEqual([{ cmd: "computer.permission", id: "screen-recording" }]);
     expect(t.shown.find((s) => s.title === "Screen Recording")!.frame.body![1]).toBe("Switch navvied on there, then come back. navvied waits.");
     expect(l.commands("computer.on")).toEqual([{ cmd: "computer.on", on: true }]);

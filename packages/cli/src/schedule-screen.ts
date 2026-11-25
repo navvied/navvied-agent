@@ -3,7 +3,7 @@ import type { Kit } from "./providers/kit.ts";
 import { BAD_CRON, BAD_DATE, BAD_DAY, BAD_EVERY, BAD_TIME, DATES, EVERIES, MONTHDAYS, TIMES, WEEKDAYS, WHENS, whenWords, firstWhen, parseDay, parseEvery, parseTime, scheduleOf, subSteps, validDate, whenOf, type When } from "@navvied/protocol";
 
 export const SCHEDULE_FOOT = "Tasks run only while this computer is on and navvied is running.";
-const MODES = [{ label: "Only read and plan", hint: "It looks and writes a plan. It changes nothing." }, { label: "Can change files", hint: "It may change files with nobody to ask. Your permission rules still apply." }];
+const MODES = [{ label: "Only read and plan", hint: "It changes nothing." }, { label: "Can change files", hint: "Your permission rules still apply." }];
 const clock = (h: number, m: number): string => `${h}:${String(m).padStart(2, "0")}`;
 
 /** "today 9:00", "yesterday 16:00", "Monday 9:00": the day as a person says it, then the time. */
@@ -35,7 +35,7 @@ export async function scheduleScreen(k: Kit, now: () => number = Date.now): Prom
     const items = got.items;
     const empty = !items.length;
     const rows = [...items.map((j) => row(j, now())), { label: "New task" }];
-    const body = empty ? [k.dim("No tasks yet."), k.dim("A task is something navvied does for you at a time you choose."), k.dim(SCHEDULE_FOOT)] : [k.dim(SCHEDULE_FOOT)];
+    const body = empty ? [k.dim("No tasks yet."), k.dim(SCHEDULE_FOOT)] : [k.dim(SCHEDULE_FOOT)];
     const picked = await k.choose("Schedule", "Schedule", rows, { at: Math.min(at, rows.length - 1), body });
     if (picked === undefined) return;
     at = picked;
@@ -44,15 +44,16 @@ export async function scheduleScreen(k: Kit, now: () => number = Date.now): Prom
   }
 }
 
-const RUN_MARK = { fine: "✓", failed: "✗", stopped: "✗", running: "…", missed: "−" } as const;
+const RUN_MARK = { fine: "✓", failed: "✗", stopped: "■", running: "…", missed: "−" } as const;
+const RUN_CHIP = { fine: "Fine", failed: "Failed", stopped: "Stopped", running: "Running", missed: "Missed" } as const;
 
 /** What a task said the last times it ran (newest first); a run that failed opens to say why, with a way to run it again. */
 async function history(k: Kit, j: ScheduleInfo, now: () => number): Promise<void> {
   const got = await k.link.call("schedule.runs", { cmd: "schedule.runs", id: j.id, limit: 3 });
   if (typeof got === "string") { k.note.push(got); return; }
-  if (!got.runs.length) { await k.choose("What it said before", "What it said before", [{ label: "Back" }], { body: ["No runs yet.", k.dim("The first run happens at its next time.")] }); return; }
+  if (!got.runs.length) { await k.choose("What it said before", "What it said before", [{ label: "Back" }], { body: ["No runs yet."] }); return; }
   for (;;) {
-    const rows = got.runs.map((r) => ({ label: `${RUN_MARK[r.outcome]}  ${day(r.at, now())}`, hint: r.said ?? (r.outcome === "missed" ? "The computer was off." : "") }));
+    const rows = got.runs.map((r) => ({ label: `${RUN_MARK[r.outcome]}  ${day(r.at, now())}  ${RUN_CHIP[r.outcome]}`, ...(r.said ? { hint: r.said } : {}) }));
     const picked = await k.choose("What it said before", "What it said before", rows, { body: ["The last three runs."] });
     const run = picked === undefined ? undefined : got.runs[picked];
     if (!run) return;
@@ -66,7 +67,7 @@ async function history(k: Kit, j: ScheduleInfo, now: () => number): Promise<void
 async function task(k: Kit, j: ScheduleInfo, now: () => number): Promise<void> {
   const rows = [
     { label: "Run now" },
-    j.enabled ? { label: "Turn it off", hint: "It stays in the list and does not run." } : { label: "Turn it on", hint: "It runs at the next time above." },
+    j.enabled ? { label: "Turn it off" } : { label: "Turn it on" },
     { label: "What it said before" },
     { label: "Change it" },
     { label: "Remove it" },

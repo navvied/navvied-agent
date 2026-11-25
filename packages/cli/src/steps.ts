@@ -56,6 +56,7 @@ export function describeStep(name: string, input: unknown, cwd: string, app = ""
     case "CronCreate": return { running: "Scheduling a task", done: "Scheduled a task" };
     case "CronDelete": return { running: "Removing a scheduled task", done: "Removed a scheduled task" };
     case "NotebookEdit": return { running: "Editing a notebook", done: "Edited a notebook" };
+    case "mcp__find": return { running: "Searching the tools of the connected programs", done: "Searched the tools of the connected programs" };
     case "MakeImage": return { running: "Making a picture", done: "Made a picture" };
     case "MakeVideo": return { running: "Making a short video", done: "Made a short video" };
     case "Speak": return { running: "Reading the text aloud", done: "Read the text aloud" };
@@ -133,6 +134,7 @@ export function stepTail(name: string, input: unknown, output: string): string {
     }
     case "Glob": { const n = output.split("\n").filter((l) => l.trim() && !l.startsWith("[")).length; return n ? `${n} file${n === 1 ? "" : "s"}` : ""; }
     case "Grep": return /^No matches/.test(first) ? "no matches" : "";
+    case "mcp__find": { const n = /^(\d+) found/.exec(first)?.[1]; return `“${oneLine(str(a.query), 40)}”, ${n ?? "no"} found`; }
     default: return "";
   }
 }

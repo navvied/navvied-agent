@@ -11,6 +11,9 @@ import { paint } from "../render.ts";
 import { HubLink } from "../providers/link.ts";
 import { Kit } from "../providers/kit.ts";
 import { providersScreen } from "../providers/index.ts";
+import { agentsScreen } from "../agents-screen.ts";
+import { memoryHubRows } from "../memory-screen.ts";
+import { pluginsScreen } from "../plugins-screen.ts";
 import { scheduleScreen } from "../schedule-screen.ts";
 import { toolsScreen } from "../tools-screen.ts";
 
@@ -27,6 +30,8 @@ export interface MenuContext {
   busy: () => boolean;
   /** The other computers of the account (empty when signed out or the list cannot be had). */
   computers: () => Promise<{ id: string; name: string }[]>;
+  /** The bottom bar should be drawn again (what it says changed). */
+  refresh?: () => void;
   /** A model is about to be switched to: the screen says so when the hub confirms it. */
   switching: (handover: boolean) => void;
 }
@@ -105,11 +110,16 @@ export function hubMenus(c: MenuContext) {
     send({ cmd: how === 0 ? "move" : "copy", id: s.id, to: to.id });
   };
 
+  /** Whether the agent holds the screen of this computer or the person does, as the hub last said. */
+  let screen: { on: boolean; control?: "agent" | "person" } | undefined;
+
   const parse = (arg: string): string[] => arg.trim().split(/\s+/).filter(Boolean);
 
   return {
     /** What the hub said, for a menu that was waiting for it. Returns true when the event was a menu's answer. */
     onEvent(e: EngineEvent): boolean {
+      if (e.ev === "computer.state") { screen = { on: e.on, ...(e.control ? { control: e.control } : {}) }; c.refresh?.(); }
+      if (e.ev === "mcp.signin" && e.state === "needed") c.say(`${paint(io.color, "yellow", "!")} ${e.server} needs you to sign in. /plugins opens it.`);
       if (e.ev === "caps") caps = { ...(e.folders ? { folders: e.folders } : {}) };
       if (e.ev === "importable") { const before = cloudWaiting; cloudWaiting = e.count; if (e.count > 0 && e.count !== before) c.say(`${paint(io.color, "cyan", "●")} ${e.count} conversation${e.count === 1 ? "" : "s"} from the cloud can be brought to this computer: /import`); }
       if (e.ev === "imported") c.say(e.count ? `${paint(io.color, "cyan", "✓")} Brought ${e.count} conversation${e.count === 1 ? "" : "s"} to this computer. /resume lists them.` : "Nothing was waiting in the cloud.");
@@ -137,18 +147,10 @@ export function hubMenus(c: MenuContext) {
       c.say(`${paint(io.color, "cyan", "✓")} A new conversation starts in ${paint(io.color, "bold", f.path ?? f.name)}.`);
     },
 
-    /** `/plugins`: what extends the agent here, and switching each on or off. */
-    plugins(): void {
-      ask("plugins", { cmd: "plugins" }, async (e) => {
-        if (!e.items.length) { c.say("No skills, tool servers or hooks are set up. Skills are folders with a SKILL.md in ~/.config/navvied/skills; tool servers (mcp) and hooks go in config.json."); c.marker(); return; }
-        const rows = e.items.map((p) => ({ label: `${p.enabled ? "on " : "off"}  ${p.kind}  ${p.name}`, hint: p.description }));
-        const picked = await choose("Switch which?", "Skills, tool servers and hooks (Enter switches one)", rows);
-        const p = picked === undefined ? undefined : e.items[picked];
-        if (!p) { c.marker(); return; }
-        send({ cmd: "plugin.toggle", id: p.id, enabled: !p.enabled });
-        c.say(`${paint(io.color, "cyan", "✓")} ${p.name} is now ${p.enabled ? "off" : "on"}${p.fromNext ? " (from the next new conversation)" : ""}.`);
-        c.marker();
-      });
+    /** `/plugins`: skills, tool servers, hooks and plugins; connect, trust, install. */
+    async plugins(): Promise<void> {
+      await pluginsScreen(new Kit(io, link, c.say, c.switching));
+      c.marker();
     },
 
     /** `/tools`: every tool with its own switch, under its heading, and where commands run. */
@@ -171,6 +173,31 @@ export function hubMenus(c: MenuContext) {
         });
       });
       // A file that cannot be shown comes back as an error: the terminal's own error line says why.
+    },
+
+    /** The rows of /memory that come from the computer's own notes. */
+    memoryRows(): ReturnType<typeof memoryHubRows> { return memoryHubRows(new Kit(io, link, c.say, c.switching)); },
+
+    /** Who holds the screen: the person has taken it (the agent waits), or the agent has it, or Computer Use is not on. */
+    screenControl(): "agent" | "person" | undefined { return screen?.on ? screen.control ?? "agent" : undefined; },
+
+    /** `/screen`: take the screen over, give it back, or stop. */
+    async screen(stop: () => void): Promise<void> {
+      const k = new Kit(io, link, c.say, c.switching);
+      const now = await link.call("computer.state", { cmd: "computer.state" });
+      if (typeof now === "string") { c.say(now); c.marker(); return; }
+      if (!now.on) { c.say("Computer Use is off. Turn it on in /tools."); c.marker(); return; }
+      const person = (now.control ?? "agent") === "person";
+      const picked = await k.choose("Computer Use", "Computer Use", [{ label: person ? "Give back" : "Take over", hint: person ? "navvied goes on." : "navvied waits until you give it back." }, { label: "Stop", hint: "It stops what it is doing. The screen is yours again." }], { body: [person ? "Paused" : "Using the computer"] });
+      if (picked === 0) await link.call("computer.state", { cmd: person ? "computer.giveback" : "computer.takeover" });
+      else if (picked === 1) { stop(); c.say("You stopped Computer Use. The screen is yours again."); }
+      c.marker();
+    },
+
+    /** `/agents`: the other agents that may ask this one. */
+    async agents(): Promise<void> {
+      await agentsScreen(new Kit(io, link, c.say, c.switching));
+      c.marker();
     },
 
     /** `/schedule`: the tasks, each with when it runs next, and what can be done to one; New task adds one. */

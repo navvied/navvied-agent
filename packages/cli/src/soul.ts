@@ -24,8 +24,11 @@ const IDENTITY = (brain: Brain): string => [
   "Say what you really did and what you did not check.",
 ].join(" ");
 
+/** Screens only the person uses: the model never needs to know them, and its prompt stays short. */
+export const PERSON_ONLY: ReadonlySet<string> = new Set(["session", "accent", "open", "agents", "screen"]);
+
 const commandList = (withMeaning: boolean): string =>
-  SLASH_COMMANDS.filter((c) => c.name !== "session" && c.name !== "accent").map((c) => (withMeaning ? `/${c.name} (${c.desc.replace(/\.$/, "").split(/[:.]/)[0]!.toLowerCase()})` : `/${c.name}`)).join(", ");
+  SLASH_COMMANDS.filter((c) => !PERSON_ONLY.has(c.name)).map((c) => (withMeaning ? `/${c.name} (${c.desc.replace(/\.$/, "").split(/[:.]/)[0]!.toLowerCase()})` : `/${c.name}`)).join(", ");
 
 /** What the brain knows about the program it runs in, so it can answer "how do I switch the model?" correctly. */
 export function aboutNavvied(brain: Brain): string {

@@ -80,11 +80,12 @@ async function runOne(a: Record<string, unknown>, ctx: ToolContext, stripped: bo
       return launch.confined ? launch.argv : plain;
     };
     const current = (): Launch => launch;
+    const guarded = (): boolean => { const l = current(); return l.confined && l.guarded; };
     const withLine = (text: string): string => { const l = current().line; return l ? `${text}\n${l}` : text; };
     if (a.interactive === true || a.run_in_background === true) { const full = ctx.jobs.room(); if (full) return full; }
     if (a.interactive === true) {
       if (ctx.backend && ctx.backend.id !== "local") return `Error: a program you type to runs on this computer only, and commands are set to run elsewhere. Retry without interactive: ${example({ command })}`;
-      const job = ctx.jobs.start(argv(false), where.cwd, str(a.description) || command.slice(0, 80), undefined, true);
+      const job = ctx.jobs.start(argv(false), where.cwd, str(a.description) || command.slice(0, 80), undefined, true, undefined, guarded());
       ctx.report?.({ background: true });
       return withLine(`Started ${job.id}, a program you can type to. See what it prints with BashOutput (job_id "${job.id}", wait 2), type to it with BashInput, stop it with KillShell.`);
     }
@@ -101,7 +102,7 @@ async function runOne(a: Record<string, unknown>, ctx: ToolContext, stripped: bo
     const seconds = Math.min(Math.max(1, num(a.timeout, SILENCE_SECONDS)), 600);
     let handedOn: string | undefined;
     const title = str(a.description) || command.slice(0, 80);
-    const r = await run(argv(keep !== undefined && !explicit), { cwd: where.cwd, signal: ctx.signal, idleMs: seconds * 1000, timeoutMs: 600_000, ...(ctx.env ? { env: ctx.env } : {}), ...(ctx.live ? { onChunk: ctx.live } : {}), onTimeout: (child, printed) => { handedOn = ctx.jobs.adopt(child, title, printed).id; return true; } });
+    const r = await run(argv(keep !== undefined && !explicit), { cwd: where.cwd, signal: ctx.signal, idleMs: seconds * 1000, timeoutMs: 600_000, guarded: guarded(), onSpawn: (child) => { if (current().confined) child.once("exit", ctx.jobs.track(child.pid)); }, ...(ctx.env ? { env: ctx.env } : {}), ...(ctx.live ? { onChunk: ctx.live } : {}), onTimeout: (child, printed) => { handedOn = ctx.jobs.adopt(child, title, printed).id; return true; } });
     const budget = outputBudget(ctx.window);
     const cleaned = cleanOutput(r.output);
     const full = redact(cleaned).trimEnd();

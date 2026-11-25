@@ -18,6 +18,8 @@ export const SLASH_COMMANDS: readonly CommandInfo[] = [
   { name: "clear", desc: "Start a new conversation" },
   { name: "schedule", desc: "See the tasks that run by themselves; run, turn off or remove one (add with: navvied schedule add)" },
   { name: "folder", desc: "Choose the folder the next conversation works in" },
+  { name: "screen", desc: "Computer Use: take the screen over, give it back, or stop" },
+  { name: "agents", desc: "Other agents that may ask this one: make a token, take access back" },
   { name: "open", desc: "Open a file the agent made: a picture, a sound, a video or a download" },
   { name: "tools", desc: "See what the agent can do here, and switch each tool on or off" },
   { name: "providers", desc: "Add a model: an API key, a server of your own, or a model that runs on this computer" },

@@ -2,7 +2,7 @@ import type { ComputerPermission, ComputerState, ToolEntry } from "@navvied/prot
 import type { Kit } from "./providers/kit.ts";
 import { toolSetup } from "./tool-setup.ts";
 
-const PERMISSIONS = { accessibility: { title: "Accessibility", hint: "Lets navvied click and type." }, "screen-recording": { title: "Screen Recording", hint: "Lets navvied see the screen." } } as const;
+const PERMISSIONS = { accessibility: { title: "Accessibility" }, "screen-recording": { title: "Screen Recording" } } as const;
 const ABOUT = "Use the screen, mouse and keyboard.";
 
 const state = (k: Kit, cmd: object): Promise<ComputerState | string> => k.link.call("computer.state", cmd) as Promise<ComputerState | string>;
@@ -39,7 +39,7 @@ export async function computerScreen(k: Kit, e: Pick<ToolEntry, "title">): Promi
 /** The system's grants, with what each is for; Enter on one that is missing opens the system's own question for it. Resolves false when the person leaves. */
 async function permissions(k: Kit, list: ComputerPermission[]): Promise<boolean> {
   const shown = list.filter((p) => p.state !== "not-needed");
-  const picked = await k.choose("Two permissions", "Two permissions", shown.map((p) => ({ label: `${p.state === "granted" ? "✓" : "·"}  ${PERMISSIONS[p.id].title}`, hint: p.state === "granted" ? "Granted" : PERMISSIONS[p.id].hint })), {
+  const picked = await k.choose("Two permissions", "Two permissions", shown.map((p) => ({ label: `${p.state === "granted" ? "✓" : "·"}  ${PERMISSIONS[p.id].title}` })), {
     at: Math.max(0, shown.findIndex((p) => p.state === "missing")), body: ["The system asks for these, one at a time. Only you can answer its questions."],
   });
   const p = picked === undefined ? undefined : shown[picked];

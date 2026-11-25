@@ -4,7 +4,7 @@
  * The session lives in this process, so a client that comes back with the last number it saw receives what it missed.
  */
 import { EventEncoder, parseCommand, type Command, type EngineEvent, type HistoryItem, type PermMode, type ComputerPermissionId, type ComputerState, type ScheduleInfo, type SearchHit, type SessionInfo, type SessionKind } from "@navvied/protocol";
-import { historyOf, MediaShelf } from "@navvied/engine";
+import { historyOf, MediaShelf, type ComputerHelper } from "@navvied/engine";
 import { pageCommand } from "../page-commands.ts";
 import type { Options } from "../args.ts";
 import { FileSessionStore, OAuthStore, findChrome, SkillBook, forgetCheckpoints, loadSkills } from "@navvied/engine";
@@ -40,6 +40,7 @@ import { DEFAULT_SERVER, readAccount, type Account } from "../account.ts";
 import { deleteConversation, getConversation, listComputers, listConversations, type AccountComputer } from "../account-client.ts";
 import { talkToComputer } from "../relay-client.ts";
 import { relayUrlFor } from "../computer.ts";
+import { computerWire } from "../computer-use/wire.ts";
 import { SessionMetaFile } from "../session-meta.ts";
 import { computerName } from "../computer.ts";
 import { Conversations } from "../conversations.ts";
@@ -57,11 +58,13 @@ const WATCH_MS = 1000;
 export interface Client { send(text: string): unknown; /** True: this window shows the agent's questions and can answer them. A window that does not say so (a page whose question card is not built yet) is not counted as someone who can be asked. */ answers?: true }
 
 /** What the desktop app's native side gives the hub for computer use: where turning it on stands, asking the system for a grant, and the switch. It calls `changed` whenever a grant or the switch changes without a command (the person granted it in the system's settings). */
-export interface ComputerPort { state(): Promise<ComputerState>; request(id: ComputerPermissionId): Promise<void>; turn(on: boolean): Promise<void>; /** The person takes the screen (`person`: the helper refuses every step with `human_has_control`) or gives it back (`agent`). It reports the one who has it as `control` of `state()`, and calls `changed` when the person takes it by using the screen themselves. Without it the hub says the person cannot take over from here. */ control?(who: "person" | "agent"): Promise<void> }
+export interface ComputerPort { state(): Promise<ComputerState>; request(id: ComputerPermissionId): Promise<void>; turn(on: boolean): Promise<void>; /** The driver of the screen while computer use is on, none while it is off: asked once at the start of each turn, so the switch applies to the conversation that is open. Without it the `computer` tool is never offered. `owner` is the one conversation's engine, so what a conversation was allowed is its own. */ helper?(owner?: object): ComputerHelper | undefined; /** The person takes the screen (`person`: the helper refuses every step with `human_has_control`) or gives it back (`agent`). It reports the one who has it as `control` of `state()`, and calls `changed` when the person takes it by using the screen themselves. Without it the hub says the person cannot take over from here. */ control?(who: "person" | "agent"): Promise<void> }
 
 export interface HubOptions {
   /** The native side of computer use (the desktop app gives it); without it `computer.state` says `unavailable`. */
   computer?: (changed: () => void) => ComputerPort;
+  /** The system the screen is driven on, when it is not the one this runs on (a test gives its own). */
+  computerPlatform?: string;
   /** Run the scheduled tasks while this hub is up (a server wants this; the interactive app runs them itself). Default false. */
   schedule?: boolean;
   /** How a scheduled task is run (a test gives its own). */
@@ -356,6 +359,13 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     say(lane, { ev: "sessions", items: listSessions(lane) });
     return true;
   };
+  /** Without a native side given by the host, this computer's own: its driver, its grants, its switch. */
+  const wired = hubOptions.computer ? undefined : computerWire({
+    io, changed: () => { void tellComputer(); for (const l of lanes.values()) tellTools(l); },
+    unavailable: () => (runsInCloud(main.options, io.env) ? "Computer use is not available in a cloud session." : undefined),
+    open: (url) => { try { Bun.spawn(["/usr/bin/open", url]); } catch { /* nothing opens it */ } },
+    ...(hubOptions.computerPlatform ? { platform: hubOptions.computerPlatform } : {}),
+  });
   // Scheduled tasks: kept in the computer's own file, listed to every window, and (where asked) run while this hub is up.
   const schedules = new ScheduleStore(schedulesPath(io.env));
   const runner = new JobRunner(schedules, { env: io.env, where: scheduledDir(io.env), ...(hubOptions.runner ? { run: hubOptions.runner } : {}), changed: () => { tellSchedules(); } });
@@ -363,7 +373,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   const engineFor = (lane: Lane, earlier?: string): ReturnType<typeof createEngine> => {
     const slot: Slot = { lane, bg: false, id: undefined, created: undefined, journal: lane.journal, running: false, asking: false, turn: [], writing: lane.writing };
     lane.slot = slot;
-    return createEngine(lane.options, io, (e) => { if (slot.bg) sayAside(slot, e); else say(lane, e); }, { wake: true, shelf, conversations: lane.conversations, jobs: () => runner, schedulesChanged: () => { tellSchedules(); }, attended: () => [...clients].some((c) => c.answers === true), ...(earlier ? { earlier } : {}) });
+    return createEngine(lane.options, io, (e) => { if (slot.bg) sayAside(slot, e); else say(lane, e); }, { wake: true, shelf, computer: () => computerPort?.helper?.(slot), conversations: lane.conversations, jobs: () => runner, schedulesChanged: () => { tellSchedules(); }, attended: () => [...clients].some((c) => c.answers === true), ...(earlier ? { earlier } : {}) });
   };
 
   const connect = (lane: Lane): Created | undefined => {
@@ -710,7 +720,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     return { id: j.id, title: j.title ?? (j.prompt.length > 60 ? `${j.prompt.slice(0, 59)}…` : j.prompt), prompt: j.prompt, cron: timingText(j), when: whenOf(j), ...(j.tz ? { tz: j.tz } : {}), ...(next ? { next } : {}), ...(j.lastRun ? { last: j.lastRun } : {}), ...(j.lastCode !== undefined ? { lastCode: j.lastCode } : {}), enabled: !j.disabled, ...(kind === "agent" ? { folder: { id: folderId(j.cwd), name: basename(j.cwd) || j.cwd } } : {}), kind, mode: j.mode, ...(runner.running(j.id) ? { running: true as const } : {}), ...(j.missed ? { missed: j.missed } : {}) };
   });
   const NO_COMPUTER: ComputerState = { on: false, step: "unavailable", permissions: [], reason: "Computer use needs the desktop app." };
-  const computerPort = hubOptions.computer?.(() => { void tellComputer(); });
+  const computerPort = hubOptions.computer?.(() => { void tellComputer(); }) ?? wired?.port;
   const tellComputer = async (lane: Lane = main): Promise<void> => {
     const state = await (computerPort?.state() ?? Promise.resolve(NO_COMPUTER)).catch((): ComputerState => ({ ...NO_COMPUTER, reason: "The screen helper did not answer." }));
     say(lane, { ev: "computer.state", ...state, ...(state.on && !state.control ? { control: "agent" as const } : {}) });
@@ -793,8 +803,9 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   });
   for (const id of mediaSetup.ids) toolSetups.set(id, (_lane, mode) => { mediaSetup.start(id, mode); });
   // The browser tool waits for a browser that is already on the computer: nothing is fetched for it, but its row speaks the same events as the others.
+  if (wired) toolSetups.set("computer", (lane) => { void wired.setup((e) => { say(lane, e); });});
   toolSetups.set("browser", (lane) => { say(lane, findChrome(io.env) ? { ev: "tool.setup", id: "browser", state: "done" } : { ev: "tool.setup", id: "browser", state: "unavailable", error: "No browser was found on this computer." }); });
-  const toolAvailability: Availability = (row) => (row.id === "browser" && !findChrome(io.env) ? "needs-setup" : ROW_NEED[row.id] && !media().has(ROW_NEED[row.id]!) ? "needs-setup" : undefined);
+  const toolAvailability: Availability = (row) => (row.id === "browser" && !findChrome(io.env) ? "needs-setup" : row.id === "computer-use" && wired && (wired.port.step === "install" || wired.port.step === "permissions") ? "needs-setup" : ROW_NEED[row.id] && !media().has(ROW_NEED[row.id]!) ? "needs-setup" : undefined);
   const tellTools = (lane: Lane): void => { const items = listTools(pluginState, toolUsage); say(lane, { ev: "tools", items, sets: listSets(items), entries: listEntries(pluginState, toolUsage, undefined, toolAvailability, new Set(toolSetups.keys())), categories: CATEGORIES.map((c) => ({ ...c })), backends: listBackends(terminalState, terminalConfig()), sandbox: sandboxInfo(sandboxSetting(sandboxState, sandboxConfig())) }); };
   const pluginItems = () => {
     const file = configPath(io.env, options.config), cwd = resolve(main.options.cwd ?? process.cwd()), f = loadConfig(file, io.env);

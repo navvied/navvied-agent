@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { SLASH_COMMANDS } from "../src/slash.ts";
-import { soulFor } from "../src/soul.ts";
+import { PERSON_ONLY, soulFor } from "../src/soul.ts";
 
 const words = (s: string): number => s.split(/\s+/).length;
 
@@ -14,7 +14,7 @@ describe("what every brain is told about navvied", () => {
   });
   test("it knows the real commands, so it can answer how to switch the model", () => {
     const text = soulFor({ label: "x" });
-    for (const c of SLASH_COMMANDS.filter((c) => c.name !== "session" && c.name !== "accent")) expect(text).toContain(`/${c.name}`);
+    for (const c of SLASH_COMMANDS.filter((c) => !PERSON_ONLY.has(c.name))) expect(text).toContain(`/${c.name}`);
     expect(text).toContain("/model (choose or switch the model)");
     expect(text).toContain("Shift+Tab");
     expect(text).toContain("NAVVIED.md");

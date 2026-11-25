@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EngineEvent } from "@navvied/protocol";
 import { inTerminal, killTree, processStart, usesProcessGroups } from "./platform.ts";
+import { sweep, track } from "./orphans.ts";
 import { spawnPty } from "./pty.ts";
+import { releaseChild, withGuardStdio } from "./sandbox/handshake.ts";
 import { Redactor } from "./redact.ts";
 import { QUIET_ENV, cleanOutput } from "./tools/util.ts";
 
@@ -100,19 +102,24 @@ export class Jobs {
    * `interactive`: its input stays open, for BashInput to type to, and it runs in a terminal of its own where the system has one. Otherwise nobody can type to it, it sees the
    * end of its input at once, and its output goes to a file, so that it does not stop when this program does.
    * `notify`: text that, when a line of its output has it, wakes the model; "off" for a job that must not wake it at all.
+   * `guarded`: it is confined with a guard that waits to be released (`Launch.guarded`).
    */
-  start(argv: string[], cwd: string, title: string, env?: NodeJS.ProcessEnv, interactive = false, notify?: string): JobView {
+  start(argv: string[], cwd: string, title: string, env?: NodeJS.ProcessEnv, interactive = false, notify?: string, guarded = false): JobView {
     const id = `job${this.#next++}`;
     const job = this.#make(id, title, interactive, "", false, notify);
     if (interactive) {
       let exited = (): void => {};
       job.gone = new Promise<void>((resolve) => { exited = resolve; });
-      const pty = spawnPty(argv, { cwd, env: this.#env({ ...env, TERM: "xterm-256color", COLUMNS: "100", LINES: "30" }), onData: (text) => this.#feed(job, text), onExit: (code) => { exited(); this.#end(job, code); } });
+      const pty = spawnPty(argv, { cwd, env: this.#env({ ...env, TERM: "xterm-256color", COLUMNS: "100", LINES: "30" }), onData: (text) => this.#feed(job, text), onExit: (code) => { exited(); this.#end(job, code); }, guarded });
       if (pty) job.proc = { pid: pty.pid, quit: () => pty.kill("SIGTERM"), kill: () => pty.kill("SIGKILL"), write: (t) => pty.write(t), end: () => pty.write("\x04") };
-      else { exited(); this.#spawnPiped(job, inTerminal(argv) ?? argv, cwd, env); }
+      else { exited(); this.#spawnPiped(job, (guarded ? undefined : inTerminal(argv)) ?? argv, cwd, env, guarded); }
+      void job.gone.then(this.track(job.proc.pid));
     } else this.#spawnToFile(job, argv, cwd, env);
     return this.#announce(job);
   }
+
+  /** Writes down a confined command that must end with this program, so that the next start ends it if this one is killed before it can (see `orphans.ts`). Returns the call that forgets it. */
+  track(pid: number | undefined): () => void { return track(this.#dir(), pid, this.o.startOf); }
 
   /** Takes over a command that is already running, as one that ran out of its time in the foreground: `printed` is what it has said so far, all of it already shown to the model. */
   adopt(child: ChildProcess, title: string, printed: string): JobView {
@@ -151,9 +158,12 @@ export class Jobs {
     if (child.pid !== undefined && start !== undefined && this.o.session && this.o.dir) this.#save(job, { pid: child.pid, start, argv });
   }
 
-  #spawnPiped(job: Job, argv: string[], cwd: string, env?: NodeJS.ProcessEnv): void {
+  /** Without a terminal; a guarded command keeps this form because the guard must be started by the program that releases it, not by a terminal in between. */
+  #spawnPiped(job: Job, argv: string[], cwd: string, env?: NodeJS.ProcessEnv, guarded = false): void {
     const [cmd, ...args] = argv;
-    this.#attach(job, spawn(cmd ?? "", args, { cwd, env: this.#env(env), detached: usesProcessGroups(), windowsHide: true, stdio: ["pipe", "pipe", "pipe"] }));
+    const child = spawn(cmd ?? "", args, { cwd, env: this.#env(env), detached: usesProcessGroups(), windowsHide: true, stdio: withGuardStdio(["pipe", "pipe", "pipe"], guarded) });
+    if (guarded) releaseChild(child);
+    this.#attach(job, child);
   }
 
   #attach(job: Job, child: ChildProcess): void {
@@ -179,6 +189,7 @@ export class Jobs {
   recover(): void {
     const { dir, session } = this.o;
     if (!dir || !session) return;
+    sweep(dir, this.o.startOf);
     let files: string[];
     try { files = readdirSync(dir); } catch { return; }
     for (const name of files) {

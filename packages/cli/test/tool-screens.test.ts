@@ -40,13 +40,13 @@ describe("steps of the new tools, in the words of the page", () => {
 describe("a refusal on the screen", () => {
   const words = (code: string, extra: object = {}) => refusalWords({ verdict: "refused", code, ...extra });
   test("each closed reason has its own plain sentence", () => {
-    expect(words("human_has_control", { app: "Notes" })).toEqual({ title: "Could not click in Notes", said: "You are using the screen. navvied waits until you stop." });
-    expect(words("background_occluded", { app: "Notes" })!.said).toBe("Another window is covering it. Move that window, or let navvied bring Notes to the front.");
+    expect(words("human_has_control", { app: "Notes" })).toEqual({ title: "Could not click in Notes", said: "You are using the screen. navvied waits." });
+    expect(words("background_occluded", { app: "Notes" })!.said).toBe("Another window covers Notes. Move it, or let navvied bring Notes to the front.");
     expect(words("background_unavailable", { app: "Notes" })!.title).toBe("Could not work in Notes");
-    expect(words("background_uipi_blocked", { app: "Task Manager" })!.said).toBe("This program runs with higher rights, so navvied cannot control it.");
+    expect(words("background_uipi_blocked", { app: "Task Manager" })!.said).toBe("This program needs higher rights, so navvied cannot control it.");
     expect(words("input_target_mismatch")!.title).toBe("Stopped before typing");
     expect(words("permission_missing", { which: "screen_recording" })!.title).toBe("Could not see the screen");
-    expect(words("permission_missing", { which: "accessibility", app: "Notes" })!.said).toBe("Accessibility is not allowed for navvied. Allow it in the system settings.");
+    expect(words("permission_missing", { which: "accessibility", app: "Notes" })!.said).toBe("Allow Accessibility for navvied in the system settings.");
     expect(words("blocked_by_policy", { app: "Passwords" })!.title).toBe("Could not open Passwords");
   });
   test("a step that was delivered, or a reason without words, has none", () => {
@@ -88,7 +88,7 @@ describe("in a conversation", () => {
     r.send({ ev: "user", qid: "q", text: "x" }, { ev: "tool", id: "t", name: "Computer", status: "running", input: { action: "click", app: "Notes", target: 3 } },
       { ev: "tool", id: "t", name: "Computer", status: "done", output: "refused: human_has_control\nWait.", screen: { verdict: "refused", code: "human_has_control", app: "Notes" } });
     expect(r.shown()).toContain("Could not click in Notes");
-    expect(r.shown()).toContain("You are using the screen. navvied waits until you stop.");
+    expect(r.shown()).toContain("You are using the screen. navvied waits.");
     expect(r.shown()).not.toContain("human_has_control");
   });
   test("while a screen step runs, the app it uses is known, and after it ends it is not", () => {
@@ -158,10 +158,11 @@ describe("/schedule", () => {
     await scheduleScreen(t.kit(hub([job({ last: at(0, 12), lastCode: undefined })])), () => NOW);
     expect(t.shown[0]!.items[0]!.hint).toContain("Not run yet");
   });
-  test("no tasks yet says what a task is", async () => {
+  test("no tasks yet says so, with the footer", async () => {
     const t = scripted([undefined]);
     await scheduleScreen(t.kit(hub([])), () => NOW);
-    expect(t.shown[0]!.frame.body!.join("\n")).toContain("A task is something navvied does for you at a time you choose.");
+    expect(t.shown[0]!.frame.body!.join("\n")).toContain("No tasks yet.");
+    expect(t.shown[0]!.frame.body!.join("\n")).not.toContain("A task is something");
     expect(t.shown[0]!.items.map((i) => i.label)).toEqual(["New task"]);
   });
   test("a task can be run now, turned off and on, and removed after asking", async () => {

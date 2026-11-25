@@ -1,3 +1,5 @@
+import { GUARD_STDIO, releaseFds } from "./sandbox/handshake.ts";
+
 /**
  * A real terminal for a program that behaves differently when a person sits at it (a REPL, an installer, a full-screen program). Bun
  * gives a child its own pseudo-terminal on Linux and macOS; where it cannot (Windows, an older Bun) there is none, and the caller falls back.
@@ -23,13 +25,15 @@ export function answers(output: string, cols = COLS, rows = ROWS): string {
   return found.sort((a, b) => a.at - b.at).map((f) => f.reply).join("");
 }
 
-export function spawnPty(argv: string[], o: { cwd: string; env: NodeJS.ProcessEnv; onData: (text: string) => void; onExit: (code: number | null) => void }): Pty | undefined {
+export function spawnPty(argv: string[], o: { cwd: string; env: NodeJS.ProcessEnv; onData: (text: string) => void; onExit: (code: number | null) => void; /** Confined with a guard that waits to be released (`Launch.guarded`). */ guarded?: boolean }): Pty | undefined {
   if (process.platform === "win32" || typeof Bun === "undefined") return undefined;
   const decoder = new TextDecoder();
   try {
     const child = Bun.spawn(argv, {
       cwd: o.cwd,
       env: o.env as Record<string, string>,
+      // The terminal is the command's standard input and output; the two descriptors after them are the guard's.
+      ...(o.guarded ? { stdio: [undefined, undefined, undefined, ...GUARD_STDIO] as never } : {}),
       terminal: {
         cols: COLS,
         rows: ROWS,
@@ -41,6 +45,7 @@ export function spawnPty(argv: string[], o: { cwd: string; env: NodeJS.ProcessEn
         },
       },
     });
+    if (o.guarded) releaseFds((child as unknown as { stdio: [unknown, unknown, unknown, unknown, number, number] }).stdio.slice(4) as [number, number]);
     void child.exited.then((code) => o.onExit(code));
     return {
       pid: child.pid,

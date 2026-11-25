@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { bubblewrapArgs, withFilter } from "./bubblewrap.ts";
+import { bubblewrapArgs, guarded, withFilter } from "./bubblewrap.ts";
 import { denialIn, type Denial } from "./denial.ts";
 import { planFor, type Plan, type Setting } from "./policy.ts";
 import { seatbeltProfile } from "./seatbelt.ts";
@@ -14,6 +14,7 @@ export { denialIn, type Denial } from "./denial.ts";
 export { seatbeltProfile } from "./seatbelt.ts";
 export { seccompProgram } from "./seccomp.ts";
 export { bubblewrapArgs } from "./bubblewrap.ts";
+export { GUARD_STDIO, release, releaseFds } from "./handshake.ts";
 export { commandLine, quoteArg, useSandboxHelper, windowsLaunch, windowsLine } from "./windows.ts";
 export { runConfined } from "./windows-run.ts";
 
@@ -39,7 +40,7 @@ export interface SandboxOptions {
 
 /** A command as it will be started. When `confined`, `line` says what is really in force; otherwise it says why nothing is, once. */
 export type Launch =
-  | { confined: true; argv: string[]; line: string; plan: Plan; denial(output: string, cwd: string): Denial | undefined }
+  | { confined: true; argv: string[]; /** Started with `GUARD_STDIO` and released with `release` (see `handshake.ts`); without that the command never starts. */ guarded: boolean; line: string; plan: Plan; denial(output: string, cwd: string): Denial | undefined }
   | { confined: false; line?: string };
 
 const BASE = ["--ro-bind", "/", "/", "--dev", "/dev", "--cap-drop", "ALL"];
@@ -110,17 +111,19 @@ export class Sandbox {
       const helper = this.o.helper ?? sandboxHelper();
       if (!helper) return { confined: false, line: "[no sandbox: navvied cannot start its own helper here; commands run as they are]" };
       const detached = at.detached === true;
-      return { confined: true, argv: windowsLaunch(helper, argv, { detached }), line: windowsLine(setting, { detached }), plan: { writable: [], hiddenDirs: [], hiddenFiles: [] }, denial: () => undefined };
+      return { confined: true, argv: windowsLaunch(helper, argv, { detached }), guarded: false, line: windowsLine(setting, { detached }), plan: { writable: [], hiddenDirs: [], hiddenFiles: [] }, denial: () => undefined };
     }
     const plan = planFor({ root: at.root, home: this.o.home ?? homedir(), tmp: this.o.tmp ?? [tmpdir(), "/tmp", "/var/tmp", "/dev/shm"], extra: this.o.extra?.() ?? [], hide: this.o.hide?.() ?? [] });
     const filtered = ability.how === "bubblewrap" && ability.filter;
+    const guard = ability.how === "bubblewrap" && at.detached !== true;
     let started: string[];
     if (ability.how === "seatbelt") started = ["sandbox-exec", "-p", seatbeltProfile(plan, setting), ...argv];
     else {
       const bwrap = bubblewrapArgs(plan, setting, { cwd: at.cwd, filter: filtered, dieWithParent: at.detached !== true });
-      if (filtered) { this.#file ??= filterFile(seccompProgram()!); started = withFilter(this.#file, bwrap, argv); } else started = ["bwrap", ...bwrap, ...argv];
+      const inside = guard ? guarded(argv) : argv;
+      if (filtered) { this.#file ??= filterFile(seccompProgram()!); started = withFilter(this.#file, bwrap, inside); } else started = ["bwrap", ...bwrap, ...inside];
     }
     const parts = ["writes only in the project, temp and caches", ...(plan.hiddenDirs.length + plan.hiddenFiles.length ? ["secret folders hidden"] : []), `network ${setting.network ? "on" : "off"}`, ...(filtered ? ["risky system calls blocked"] : [])];
-    return { confined: true, argv: started, line: `[sandbox: ${parts.join("; ")}]`, plan, denial: (output, cwd) => denialIn(output, plan, cwd) };
+    return { confined: true, argv: started, guarded: guard, line: `[sandbox: ${parts.join("; ")}]`, plan, denial: (output, cwd) => denialIn(output, plan, cwd) };
   }
 }

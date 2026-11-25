@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import type { ComputerHelper } from "@navvied/engine";
 import { parseCommand, type ComputerState } from "@navvied/protocol";
 import { createHub, type ComputerPort } from "../src/commands/hub.ts";
 import { fakeIO, remove, startMockModel, tempDir, until } from "./helpers.ts";
@@ -10,11 +11,12 @@ afterAll(() => { mock.stop(); dirs.forEach(remove); });
 
 type Ev = { ev: string; [k: string]: unknown };
 
-function open(computer?: (changed: () => void) => ComputerPort) {
+function open(opts: { computer?: (changed: () => void) => ComputerPort; computerPlatform?: string; env?: Record<string, string> } = {}) {
+  const { computer, computerPlatform } = opts;
   const state = tempDir(), work = tempDir();
   dirs.push(state, work);
-  const env = { HOME: state, XDG_STATE_HOME: state, NAVVIED_BASE_URL: mock.url, NAVVIED_MODEL: "mock-model", NAVVIED_WINDOW: "100000" };
-  const hub = createHub({ json: false, yes: false, thinking: false, cwd: work } as never, fakeIO({ env }).io, { watch: false, ...(computer ? { computer } : {}) });
+  const env = { HOME: state, XDG_STATE_HOME: state, NAVVIED_BASE_URL: mock.url, NAVVIED_MODEL: "mock-model", NAVVIED_WINDOW: "100000", ...opts.env };
+  const hub = createHub({ json: false, yes: false, thinking: false, cwd: work } as never, fakeIO({ env }).io, { watch: false, ...(computer ? { computer } : {}), ...(computerPlatform ? { computerPlatform } : {}) });
   const got: Ev[] = [];
   hub.attach({ send: (line) => { got.push(JSON.parse(String(line))); } }, 0);
   const send = (cmd: object): void => hub.command(JSON.stringify(cmd), () => undefined);
@@ -30,8 +32,8 @@ test("the commands are checked: a grant is one of two, the switch is a boolean",
   expect(parseCommand('{"cmd":"computer.on","on":"yes"}').ok).toBe(false);
 });
 
-test("without the desktop app the state is unavailable, with a reason and no grants", async () => {
-  const { hub, send, states } = open();
+test("on a system the driver does not run on the state is unavailable, with a reason and no grants", async () => {
+  const { hub, send, states } = open({ computerPlatform: "freebsd" });
   send({ cmd: "computer.state" });
   await until(() => states().length > 0);
   expect(states()[0]).toMatchObject({ on: false, step: "unavailable", permissions: [] });
@@ -47,7 +49,7 @@ test("the native side's state is told on ask, after a grant is requested, after 
     request: async (id) => { asked.push(id); },
     turn: async (v) => { on = v; },
   };
-  const { hub, send, states } = open((changed) => { poke = changed; return port; });
+  const { hub, send, states } = open({ computer: (changed) => { poke = changed; return port; } });
   send({ cmd: "computer.state" });
   await until(() => states().length === 1);
   expect(states()[0]).toMatchObject({ ev: "computer.state", on: false, step: "permissions", permissions: [{ id: "accessibility", state: "granted" }, { id: "screen-recording", state: "missing" }] } as never);
@@ -61,5 +63,34 @@ test("the native side's state is told on ask, after a grant is requested, after 
   send({ cmd: "computer.on", on: true });
   await until(() => states().length === 4);
   expect(states()[3]!.on).toBe(true);
+  await hub.stop();
+});
+
+test("a hub with no native side from its host drives this computer itself: the driver is fetched first, and nothing is on", async () => {
+  const { hub, send, states } = open({ computerPlatform: "linux", env: { DISPLAY: ":0" } });
+  send({ cmd: "computer.state" });
+  await until(() => states().length > 0);
+  expect(states()[0]).toMatchObject({ on: false, step: "install", permissions: [{ id: "accessibility", state: "not-needed" }, { id: "screen-recording", state: "not-needed" }] });
+  send({ cmd: "computer.on", on: true });
+  await until(() => states().length > 1);
+  expect(states().at(-1)!.on).toBe(false);
+  await hub.stop();
+});
+
+test("the switch applies to the open conversation: the computer tool is offered from the next turn after the helper appears, and not after it goes", async () => {
+  let helper: ComputerHelper | undefined;
+  const port: ComputerPort = { state: async () => ({ on: helper !== undefined, step: "ready", permissions: [] }), request: async () => undefined, turn: async (v) => { helper = v ? { call: async () => ({ verdict: "delivered" }) } : undefined; }, helper: () => helper };
+  const { hub, got, send } = open({ computer: () => port });
+  const offered = async (text: string): Promise<boolean> => {
+    const from = mock.requests.length, done = got.filter((e) => e.ev === "done").length;
+    send({ cmd: "prompt", text });
+    await until(() => got.filter((e) => e.ev === "done").length > done);
+    return (mock.requests.slice(from).at(0)?.body.tools ?? []).some((t: { function: { name: string } }) => t.function.name === "computer");
+  };
+  expect(await offered("first")).toBe(false);
+  await port.turn(true);
+  expect(await offered("second")).toBe(true);
+  await port.turn(false);
+  expect(await offered("third")).toBe(false);
   await hub.stop();
 });

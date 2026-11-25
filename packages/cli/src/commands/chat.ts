@@ -163,7 +163,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
   // Signing in or out from a page does what `/login` does: this computer joins the account's computers, or leaves them (both are defined below, and used only later).
   const hub = createHub(options, io, { watch: false, onSignedIn: (a) => joinAccount(a), onSignOut: (a) => disconnectThisComputer(io.fetch, a, devices, (id) => relay().forget(id)) });
   menus = hubMenus({
-    io, hub, say, marker, busy: () => busy, switching: (handover) => { switching = true; switchingHandover = handover; summarised = false; },
+    io, hub, say, marker, busy: () => busy, refresh: () => dock?.refresh(), switching: (handover) => { switching = true; switchingHandover = handover; summarised = false; },
     computers: async () => { const account = readAccount(accountPath(io.env, options.config)); return account ? (await listComputers(io.fetch, account)).filter((c) => c.name !== computerName()).map((c) => ({ id: c.id, name: c.name })) : []; },
   });
   // Tasks the person scheduled run while the app is open, and any that came due while it was closed start once, now.
@@ -203,7 +203,10 @@ export async function chatCommand(initial: string | undefined, options: Options,
     const cols = process.stdout.columns ?? 80;
     const plain = (t: string): number => [...t].length;
     const using = presenter?.usingApp;
-    const left = using !== undefined
+    const paused = menus?.screenControl() === "person";
+    const left = paused
+      ? [`${paint(io.color, "yellow", "●")} ${paint(io.color, "bold", "Paused")}`, paint(io.color, "dim", "You are using the screen. navvied waits until you stop."), paint(io.color, "dim", "/screen gives it back")]
+      : using !== undefined
       ? [`${paint(io.color, "cyan", "●")} ${paint(io.color, "bold", using ? `Using ${using}` : "Using the computer")}`, paint(io.color, "dim", "Esc stops it")]
       : current
       ? [`${paint(io.color, "cyan", paint(io.color, "bold", current.modelName))}`, ...(options.kind === "chat" ? [] : [`${paint(io.color, "dim", MODE_LABEL[mode])}`]), ...(capsNow?.effort ? [paint(io.color, "dim", `Effort ${effortLabel(capsNow.effort)}`)] : []), ...(context && context.win > 0 ? [paint(io.color, "dim", `Context ${Math.min(100, Math.round((context.ctx / context.win) * 100))}%`)] : [])]
@@ -325,6 +328,8 @@ export async function chatCommand(initial: string | undefined, options: Options,
       case "plugins": menus?.plugins(); return;
       case "providers": void connect(); return;
       case "tools": menus?.tools(); return;
+      case "agents": menus?.agents(); return;
+      case "screen": menus?.screen(() => current?.engine.handle({ cmd: "cancel" })); return;
       case "open": void openScreen(io, presenter?.files.list() ?? [], say).then(marker); return;
       case "artifacts": menus?.artifacts(); return;
       case "import": menus?.import(); return;
@@ -485,15 +490,22 @@ export async function chatCommand(initial: string | undefined, options: Options,
     const rows = memoryRows(paths, dir);
     if (!io.choose) { say(rows.map((r) => `${r.label}: ${r.hint ?? ""}`).join("\n")); marker(); return; }
     const head = [paint(io.color, "cyan", paint(io.color, "bold", "Memory")), paint(io.color, "dim", "navvied reads these at the start of every conversation.")];
-    const picked = await io.choose("What should it remember?", rows.map(({ label, hint }) => ({ label, ...(hint ? { hint } : {}) })), 0, { heading: head });
-    const action = typeof picked === "number" ? rows[picked]?.action : undefined;
-    if (action?.kind === "open") { ensureFile(action.file, action.header); io.system.open(action.file); say(`Opened ${paint(io.color, "dim", action.file)}`); }
-    else if (action?.kind === "add") {
-      const note = await io.text?.("What should it remember?", "", { heading: head });
-      if (typeof note === "string" && note.trim()) {
-        const result = keep(paths, { action: "add", scope: "project", text: note }, { today: new Date().toISOString().slice(0, 10), origin: "user" });
-        say(result.startsWith("Remembered") ? `${paint(io.color, "cyan", "✓")} Remembered for this project: ${note.replace(/\s+/g, " ").trim()}` : result);
+    for (let at = 0; ; ) {
+      const mine = await menus?.memoryRows() ?? [];
+      const picked = await io.choose("What should it remember?", [...mine, ...rows].map(({ label, hint }) => ({ label, ...(hint ? { hint } : {}) })), at, { heading: head });
+      if (typeof picked !== "number") break;
+      at = picked;
+      if (picked < mine.length) { await mine[picked]!.run(); continue; }
+      const action = rows[picked - mine.length]?.action;
+      if (action?.kind === "open") { ensureFile(action.file, action.header); io.system.open(action.file); say(`Opened ${paint(io.color, "dim", action.file)}`); }
+      else if (action?.kind === "add") {
+        const note = await io.text?.("What should it remember?", "", { heading: head });
+        if (typeof note === "string" && note.trim()) {
+          const result = keep(paths, { action: "add", scope: "project", text: note }, { today: new Date().toISOString().slice(0, 10), origin: "user" });
+          say(`${result.startsWith("Remembered") ? `${paint(io.color, "cyan", "✓")} Remembered for this project: ${note.replace(/\s+/g, " ").trim()}` : result}`);
+        }
       }
+      break;
     }
     marker();
   };

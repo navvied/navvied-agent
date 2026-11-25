@@ -129,8 +129,8 @@ export interface EngineOptions {
   recall?: Recall;
   /** Where the Schedule tool keeps its jobs; without it the tool is not offered. */
   schedule?: ScheduleBackend;
-  /** What drives this computer's screen: given when computer use is on, and only then is the `computer` tool there. */
-  computer?: ComputerHelper;
+  /** What drives this computer's screen: given when computer use is on, and only then is the `computer` tool there. A function is asked once at the start of each turn, so the switch the person flips applies to the open conversation: the tool is offered from the next turn while it answers a helper, and not while it answers nothing. */
+  computer?: ComputerHelper | (() => ComputerHelper | undefined);
   /** Where each tool keeps what it makes (the pictures of the Browser tool): a folder under the program's own, by the tool's name. Without it nothing is kept. */
   toolFolder?: (tool: string) => string;
   /** Where the pictures, sounds and videos the steps make are kept for a page to fetch (`media.read`). Without it a step carries no `media`. */
@@ -267,7 +267,13 @@ export class Engine implements AgentEngine {
   get #on(): Tool[] {
     const on = this.#o.toolOn, media = this.#o.media;
     // A tool of media is on only where something can do its work: a computer with nothing set up is never offered it.
-    return (on ? this.#tools.filter((t) => on(t.name)) : this.#tools.filter((t) => !t.experimental)).filter((t) => !t.needs || media?.has(t.needs));
+    return (on ? this.#tools.filter((t) => on(t.name)) : this.#tools.filter((t) => !t.experimental)).filter((t) => !t.needs || media?.has(t.needs)).filter((t) => t.name !== COMPUTER_TOOL || this.#computer !== undefined);
+  }
+  /** The helper of the screen as of the start of this turn (see `EngineOptions.computer`). */
+  #computer: ComputerHelper | undefined;
+  #askComputer(): ComputerHelper | undefined {
+    const c = this.#o.computer;
+    return typeof c === "function" ? attempt(c) : c;
   }
   readonly #disposers: (() => void)[] = [];
   /** What tools keep for the conversation (see `ToolContext.keep`). */
@@ -368,6 +374,7 @@ export class Engine implements AgentEngine {
 
   constructor(opts: EngineOptions) {
     this.#o = { maxSteps: 60, allowPrivateNetwork: false, ...opts };
+    this.#computer = this.#askComputer();
     this.#codeOffer = new CodeOffer(opts.codeOffer?.after, opts.codeOffer?.mode === "always");
     this.#provider = retrying(opts.provider, opts.retry);
     this.#mcpAnswers = new McpAnswers(
@@ -393,7 +400,7 @@ export class Engine implements AgentEngine {
     this.#reference = opts.reference;
     this.#model = opts.switcher?.current;
     this.#efforts = opts.switcher?.efforts ?? opts.efforts;
-    this.#tools = profileTools(opts.kind ?? "agent", [...(opts.tools ?? defaultTools({ applyPatch: opts.applyPatch })), ...(opts.computer && !opts.tools?.some((t) => t.name === COMPUTER_TOOL) ? [computer] : [])], { sandboxed: opts.sandboxed === true }).map((t) => (t.name === AGENT_TOOL_NAME && opts.agents?.length ? agentTool(opts.agents) : t));
+    this.#tools = profileTools(opts.kind ?? "agent", [...(opts.tools ?? defaultTools({ applyPatch: opts.applyPatch })), ...(opts.computer !== undefined && !opts.tools?.some((t) => t.name === COMPUTER_TOOL) ? [computer] : [])], { sandboxed: opts.sandboxed === true }).map((t) => (t.name === AGENT_TOOL_NAME && opts.agents?.length ? agentTool(opts.agents) : t));
     if (opts.peers?.names.length && (opts.kind ?? "agent") === "agent") this.#tools.push(askAgentTool(opts.peers.names));
     this.sessionId = opts.sessionId ?? crypto.randomUUID();
     this.#jobs = new Jobs((e) => this.#emit(e), Date.now, { session: this.sessionId, ...(opts.jobsDir ? { dir: opts.jobsDir } : {}), env: () => childEnv(process.env, opts.env), onNews: () => this.#wakeNow(), ...(opts.wake ? { wake: true } : {}) });
@@ -749,6 +756,7 @@ export class Engine implements AgentEngine {
   async #turn(first: Queued): Promise<void> {
     this.#cancelled = false;
     this.#abort = new AbortController();
+    this.#computer = this.#askComputer();
     let stop: StopReason = "end_turn";
     try {
       let next: Queued | undefined = first;
@@ -892,7 +900,7 @@ export class Engine implements AgentEngine {
 
       const small = this.#small;
       const skills = modelSkills(attempt(() => this.#o.skills?.()) ?? []);
-      const offeredNow = toolsFor(this.#mode, this.#on, { small, userText: this.#userText(), jobs: this.#jobs.running, steps: step, chat: this.#kind === "chat", typable: this.#jobs.typable, skills: skills.length, recall: (this.#o.recall?.recent(1).length ?? 0) > 0, memory: this.#o.memory !== undefined, schedule: this.#o.schedule !== undefined, computer: this.#o.computer !== undefined, code: this.#codeOffer.offered });
+      const offeredNow = toolsFor(this.#mode, this.#on, { small, userText: this.#userText(), jobs: this.#jobs.running, steps: step, chat: this.#kind === "chat", typable: this.#jobs.typable, skills: skills.length, recall: (this.#o.recall?.recent(1).length ?? 0) > 0, memory: this.#o.memory !== undefined, schedule: this.#o.schedule !== undefined, computer: this.#computer !== undefined, code: this.#codeOffer.offered });
       // A tool the model has used stays offered. Of the others, the ones that are not offered are named in the prompt, and a call to one of
       // them is run, not refused: the words that bring a tool in (the web, a helper) are a guess about the request, and a guess can be wrong.
       const allowedNow = (t: Tool): boolean => this.#mode !== "plan" || t.readOnly || t.inPlan === true;
@@ -900,7 +908,7 @@ export class Engine implements AgentEngine {
       const news = this.#jobs.news();
       const finished = news.flatMap(jobLines);
       // Named only where they can work: earlier conversations, and skills the agent may change, exist only in some places.
-      const usable = (t: Tool): boolean => (t.name === "Recall" ? this.#o.recall !== undefined : t.name === "Remember" ? this.#o.memory !== undefined : t.name === "SkillManage" ? this.#o.skillBook !== undefined && this.#kind !== "chat" : t.name === "Schedule" ? this.#o.schedule !== undefined : t.name === COMPUTER_TOOL ? this.#o.computer !== undefined : true);
+      const usable = (t: Tool): boolean => (t.name === "Recall" ? this.#o.recall !== undefined : t.name === "Remember" ? this.#o.memory !== undefined : t.name === "SkillManage" ? this.#o.skillBook !== undefined && this.#kind !== "chat" : t.name === "Schedule" ? this.#o.schedule !== undefined : t.name === COMPUTER_TOOL ? this.#computer !== undefined : true);
       const also = this.#on.filter((t) => EXTRA.has(t.name) && usable(t) && allowedNow(t) && !tools.some((o) => o.name === t.name)).map((t) => t.name);
       try { await this.#o.prepare?.({ userText: this.#lastUserText() }); } catch { /* the notes fall back to words */ }
       const instructions = attempt(() => this.#o.instructions?.({ userText: this.#lastUserText() }));
@@ -1318,7 +1326,7 @@ export class Engine implements AgentEngine {
     let output: string;
     try {
       this.#outside.record(tool.name, args, this.#o.cwd);
-      const execute = (unconfined?: true): Promise<string> => tool.run(this.#restored(tool.name, args), { cwd: this.#o.cwd, ...(isConfined(this.#kind) || this.#o.outside ? { root: this.#o.cwd } : {}), signal: this.#abort.signal, emit: (e) => { if (e.ev === "plan") { this.#todos = e.entries; this.#sinceTodo = 0; } this.#emit(e.ev === "plan" ? { ...e, ...(this.#turnQid ? { qid: this.#turnQid } : {}), tool: call.id } : e.ev === "browser" ? { ...e, tool: call.id } : e); }, ask: (q, s) => this.#askPerson(q, s, call.id), live, report: (m) => { meta = { ...meta, ...m }; }, allowPrivateNetwork: this.#o.allowPrivateNetwork, window: this.#window, shell: this.#shell, jobs: this.#jobs, env: childEnv(process.env, this.#o.env), credentials: () => ({ secrets: this.#secrets(), origins: this.#named() }), ...(this.#o.backend ? { backend: this.#o.backend } : {}), ...(this.#o.recall ? { recall: this.#o.recall } : {}), ...(this.#o.peers ? { peers: this.#o.peers } : {}), ...(this.#o.schedule ? { schedule: this.#o.schedule } : {}), ...(this.#o.search ? { search: this.#o.search } : {}), ...(this.#o.toolFolder ? { folder: this.#o.toolFolder } : {}), ...(this.#o.computer ? { computer: this.#o.computer, consent: (ask: ScreenAsk) => this.#consent(ask, call.id) } : {}), outside: (text) => this.#outside.note(text), ...(this.#o.media ? { media: this.#o.media } : {}), ...(this.#o.webProxy ? { webProxy: this.#o.webProxy } : {}), ...(this.#o.skills ? { skills: this.#o.skills } : {}), ...(this.#o.memory ? { memory: this.#o.memory } : {}), helper: (task, signal) => this.#delegate(call.id, task, signal), files: this.#files, show: (p) => { this.#pictures.push({ part: p, call: call.id }); }, keepOut: (note, kind) => { this.#notes.set(call.id, note); this.#kinds.set(call.id, kind ?? ""); }, ...(this.#vision !== undefined ? { vision: this.#vision } : {}), mode: this.#mode, ...(this.#outside.seen ? { untrusted: true } : {}), ...(this.#o.skillBook ? { skillBook: this.#o.skillBook } : {}), ...(this.#o.skillApproval ? { skillApproval: this.#o.skillApproval } : {}), call: this.#within(call, offered), keep: (key, make) => { let v = this.#kept.get(key); if (!v) { v = make(); this.#kept.set(key, v); } return v as ReturnType<typeof make>; }, sandbox: this.#sandbox, ...(unconfined ? { unconfined } : {}) });
+      const execute = (unconfined?: true): Promise<string> => tool.run(this.#restored(tool.name, args), { cwd: this.#o.cwd, ...(isConfined(this.#kind) || this.#o.outside ? { root: this.#o.cwd } : {}), signal: this.#abort.signal, emit: (e) => { if (e.ev === "plan") { this.#todos = e.entries; this.#sinceTodo = 0; } this.#emit(e.ev === "plan" ? { ...e, ...(this.#turnQid ? { qid: this.#turnQid } : {}), tool: call.id } : e.ev === "browser" ? { ...e, tool: call.id } : e); }, ask: (q, s) => this.#askPerson(q, s, call.id), live, report: (m) => { meta = { ...meta, ...m }; }, allowPrivateNetwork: this.#o.allowPrivateNetwork, window: this.#window, shell: this.#shell, jobs: this.#jobs, env: childEnv(process.env, this.#o.env), credentials: () => ({ secrets: this.#secrets(), origins: this.#named() }), ...(this.#o.backend ? { backend: this.#o.backend } : {}), ...(this.#o.recall ? { recall: this.#o.recall } : {}), ...(this.#o.peers ? { peers: this.#o.peers } : {}), ...(this.#o.schedule ? { schedule: this.#o.schedule } : {}), ...(this.#o.search ? { search: this.#o.search } : {}), ...(this.#o.toolFolder ? { folder: this.#o.toolFolder } : {}), ...(this.#computer ? { computer: this.#computer, consent: (ask: ScreenAsk) => this.#consent(ask, call.id) } : {}), outside: (text) => this.#outside.note(text), ...(this.#o.media ? { media: this.#o.media } : {}), ...(this.#o.webProxy ? { webProxy: this.#o.webProxy } : {}), ...(this.#o.skills ? { skills: this.#o.skills } : {}), ...(this.#o.memory ? { memory: this.#o.memory } : {}), helper: (task, signal) => this.#delegate(call.id, task, signal), files: this.#files, show: (p) => { this.#pictures.push({ part: p, call: call.id }); }, keepOut: (note, kind) => { this.#notes.set(call.id, note); this.#kinds.set(call.id, kind ?? ""); }, ...(this.#vision !== undefined ? { vision: this.#vision } : {}), mode: this.#mode, ...(this.#outside.seen ? { untrusted: true } : {}), ...(this.#o.skillBook ? { skillBook: this.#o.skillBook } : {}), ...(this.#o.skillApproval ? { skillApproval: this.#o.skillApproval } : {}), call: this.#within(call, offered), keep: (key, make) => { let v = this.#kept.get(key); if (!v) { v = make(); this.#kept.set(key, v); } return v as ReturnType<typeof make>; }, sandbox: this.#sandbox, ...(unconfined ? { unconfined } : {}) });
       output = await execute();
       if (meta.denied && tool.name === "Bash") { const { denied, ...rest } = meta; meta = rest; output = await this.#afterSandbox(call.id, args, denied, output, execute); }
     } catch (e) { output = `Error: ${e instanceof Error ? e.message : String(e)}`; }

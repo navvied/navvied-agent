@@ -6,6 +6,7 @@
 import type { EngineEvent, FileNote } from "@navvied/protocol";
 import { mark } from "./banner.ts";
 import { refusalWords } from "./screen-words.ts";
+import { browserLine, hookLine, type StepLine } from "./step-events.ts";
 import { SavedFiles, pictureFile, savedFile } from "./saved-files.ts";
 import type { IO } from "./io.ts";
 import { Markdown } from "./markdown.ts";
@@ -165,6 +166,8 @@ export class Presenter {
       case "plan": this.#plan = e.entries.map((p) => ({ title: p.title, status: p.status })); this.#renderLive(); return;
       case "usage": this.#usage = { ctx: e.ctx, win: e.win }; this.fallback.handle(e); return;
       case "retry": this.#settle(); this.#closeWork(); this.#line(`  ${paint(this.io.color, "dim", retryLine(e))}`); return;
+      case "hook": { const line = hookLine(e); if (line) this.#stepLine(line); return; }
+      case "browser": { const line = browserLine(e); if (line) this.#stepLine(line); return; }
       case "notice": this.#settle(); this.#closeWork(); this.#line(`  ${this.#warn("!")} ${e.msg}`); return;
       case "error": this.#settle(); this.#closeWork(); this.#line(`  ${this.#bad("✗")} ${paint(this.io.color, "bold", plainModelError(e.msg))}`); return;
       case "done": return this.#done(e.stop);
@@ -380,6 +383,15 @@ export class Presenter {
     const step = known.step ?? describeStep(e.name, known.input, this.opts.cwd(), this.#app);
     const bad = e.status === "error" || failed(e.output ?? "");
     this.#line(`    ${paint(this.io.color, "faint", "│")} ${paint(this.io.color, "dim", bad ? describeFailure(e.name, known.input, this.opts.cwd()) : step.done)}`);
+  }
+
+  /** A line of its own for something that happened beside a step (a hook decided, the page asked a question, a download was saved). */
+  #stepLine(l: StepLine): void {
+    this.#settle();
+    this.#stepStart();
+    this.#row(l.mark === "bad" ? this.#bad("✗") : l.mark === "ask" ? this.#warn("?") : this.#ok("✓"), l.title, l.right ?? "");
+    if (l.under) this.#line(`    ${paint(this.io.color, "faint", "⎿")} ${paint(this.io.color, "dim", l.under.length > this.#width() - 10 ? `${l.under.slice(0, this.#width() - 11)}…` : l.under)}`);
+    this.#endStep(l.mark !== "ok");
   }
 
   /** One finished step: its mark, what it was, and on the right how long it took and anything worth a note. */

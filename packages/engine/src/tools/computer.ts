@@ -128,7 +128,7 @@ async function run(a: Record<string, unknown>, ctx: ToolContext): Promise<string
   let r: ComputerResult;
   const lines = askLines(call);
   const consent = ctx.consent;
-  try { r = await helper.call(call, ctx.signal, consent ? (ask) => consent({ ...ask, lines }) : undefined); }
+  try { r = await helper.call(call, ctx.signal, consent ? (ask) => consent({ ...ask, lines }) : undefined, ctx.mode); }
   catch {
     // What an operating system said is not for the model; what is known is that nobody knows how it ended.
     if (ctx.signal.aborted) return "[interrupted]";

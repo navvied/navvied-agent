@@ -161,7 +161,8 @@ export interface ComputerResult {
  * only sends an action and relays the answer. A call that throws or is cut off has an outcome nobody knows.
  */
 export interface ComputerHelper {
-  call(c: ComputerCall, signal?: AbortSignal, consent?: ComputerConsent): Promise<ComputerResult>;
+  /** `mode` is the conversation's permission mode at the step (`ask`, `auto`, `bypass`, `plan`), for a helper that treats looking and acting differently. */
+  call(c: ComputerCall, signal?: AbortSignal, consent?: ComputerConsent, mode?: PermMode): Promise<ComputerResult>;
 }
 
 /**

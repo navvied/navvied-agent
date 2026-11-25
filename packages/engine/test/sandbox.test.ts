@@ -10,6 +10,7 @@ import { DENIED_CALLS } from "../src/sandbox/seccomp.ts";
 import { SECRET_DIRS, isSecretPath } from "../src/secret-stores.ts";
 import type { ToolContext } from "../src/types.ts";
 import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
+import { run } from "../src/tools/util.ts";
 import { cleanupAll, prompt, rig, until, wait } from "./helpers.ts";
 
 const base = mkdtempSync(join(tmpdir(), "navvied-sandbox-test-"));
@@ -26,10 +27,10 @@ const works = linux && sandboxAbility().how === "bubblewrap";
 const setting = (s: Partial<SandboxSetting> = {}) => () => ({ ...DEFAULT_SANDBOX, ...s });
 const sandbox = (s: Partial<SandboxSetting> = {}, o: { hide?: string[] } = {}) => new Sandbox({ setting: setting(s), home, ...(o.hide ? { hide: () => o.hide! } : {}) });
 
-/** Runs a shell command confined, the way the Bash tool starts one. */
+/** Runs a shell command confined, the way the Bash tool starts one (as a job that is not ended with its parent: this call has no program to release a guard). */
 function confined(command: string, s: Partial<SandboxSetting> = {}, o: { hide?: string[]; cwd?: string } = {}): { code: number | null; out: string; line: string } {
   const cwd = o.cwd ?? project;
-  const launch = sandbox(s, o).confine(["bash", "-c", command], { root: project, cwd });
+  const launch = sandbox(s, o).confine(["bash", "-c", command], { root: project, cwd, detached: true });
   if (!launch.confined) throw new Error(`not confined: ${launch.line}`);
   const r = spawnSync(launch.argv[0]!, launch.argv.slice(1), { cwd, encoding: "utf8", env: { ...process.env, HOME: home } });
   return { code: r.status, out: `${r.stdout}${r.stderr}`, line: launch.line };
@@ -239,11 +240,10 @@ describe.skipIf(!works)("a confined command, for real (bubblewrap)", () => {
 
   const tag = (): string => `${process.pid}${Math.floor(Math.random() * 100000)}`;
   const alive = (t: string): boolean => spawnSync("pgrep", ["-f", `^sleep [34]${t}$`]).status === 0;
-  const quote = (argv: string[]): string => argv.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
 
   test("when the process group is killed everything it started is gone", async () => {
     const t = tag();
-    const launch = sandbox().confine(["bash", "-c", `sleep 3${t} & sleep 4${t}; wait`], { root: project, cwd: project });
+    const launch = sandbox().confine(["bash", "-c", `sleep 3${t} & sleep 4${t}; wait`], { root: project, cwd: project, detached: true });
     if (!launch.confined) throw new Error("not confined");
     const child = spawn(launch.argv[0]!, launch.argv.slice(1), { cwd: project, detached: true, stdio: "ignore" });
     await until(() => alive(t));
@@ -251,17 +251,35 @@ describe.skipIf(!works)("a confined command, for real (bubblewrap)", () => {
     await until(() => !alive(t));
   });
 
-  test("a command that was started by a parent that dies goes with it; a job meant to outlive the program does not", async () => {
-    for (const detached of [false, true]) {
-      const t = tag();
-      const launch = sandbox().confine(["sleep", `3${t}`], { root: project, cwd: project, detached });
-      if (!launch.confined) throw new Error("not confined");
-      const parent = spawn("bash", ["-c", `${quote(launch.argv)} & wait`], { cwd: project, stdio: "ignore" });
-      await until(() => alive(t));
-      parent.kill("SIGKILL");
-      if (!detached) await until(() => !alive(t));
-      else { await wait(300); expect(alive(t)).toBe(true); spawnSync("pkill", ["-f", `sleep 3${t}`]); }
-    }
+  /** Starts the stand-in program, waits until it is about to start the command, and kills it after `ms` milliseconds. */
+  async function killedAfter(ms: number, how: "foreground" | "interactive" | "detached"): Promise<string> {
+    const t = tag();
+    const parent = spawn("bun", [join(import.meta.dir, "sandbox-parent.ts"), project, t, how], { stdio: ["ignore", "pipe", "inherit"] });
+    await new Promise<void>((resolve) => parent.stdout.once("data", () => resolve()));
+    await wait(ms);
+    parent.kill("SIGKILL");
+    return t;
+  }
+
+  test("a command whose parent dies right after it started never outlives it, however early; a job meant to outlive the program does", async () => {
+    const detached = await killedAfter(0, "detached");
+    await until(() => alive(detached));
+    await wait(300);
+    expect(alive(detached)).toBe(true);
+    spawnSync("pkill", ["-f", `sleep 3${detached}`]);
+    // The parent dies at every moment of bubblewrap's own start (it arms its death signal only once it runs): none of the commands may be left.
+    const runs = await Promise.all(Array.from({ length: 15 }, (_, i) => killedAfter(i * 2, i % 5 === 4 ? "interactive" : "foreground")));
+    await wait(1500);
+    expect(runs.filter(alive)).toEqual([]);
+  }, 30_000);
+
+  test("a command is not started unless it is released by the program that is still its parent", () => {
+    const launch = sandbox().confine(["sh", "-c", "echo started"], { root: project, cwd: project });
+    if (!launch.confined || !launch.guarded) throw new Error("not guarded");
+    // Descriptor 5 is where the program answers the guard: a program that died has closed it, so nothing arrives.
+    const started = (input: string) => { const r = spawnSync("sh", ["-c", 'exec "$@" 4>/dev/null 5<&0', "sh", ...launch.argv], { input, encoding: "utf8" }); return { code: r.status, out: r.stdout }; };
+    expect(started("")).toEqual({ code: 125, out: "" });
+    expect(started("go\n")).toEqual({ code: 0, out: "started\n" });
   });
 
   test("the person's other programs can be seen and stopped, as without the sandbox", async () => {
@@ -273,11 +291,15 @@ describe.skipIf(!works)("a confined command, for real (bubblewrap)", () => {
     } finally { other.kill(); }
   });
 
-  test("it costs a few milliseconds to start", () => {
+  test("it costs a few milliseconds to start", async () => {
     const sb = sandbox();
-    const time = (argv: (() => string[])): number => { const t = performance.now(); for (let i = 0; i < 20; i++) spawnSync(argv()[0]!, argv().slice(1)); return (performance.now() - t) / 20; };
-    const plain = time(() => ["true"]);
-    const wrapped = time(() => { const l = sb.confine(["true"], { root: project, cwd: project }); return l.confined ? l.argv : ["true"]; });
+    const time = async (argv: () => { argv: string[]; guarded: boolean }): Promise<number> => {
+      const t = performance.now();
+      for (let i = 0; i < 20; i++) { const a = argv(); await run(a.argv, { cwd: project, signal: new AbortController().signal, timeoutMs: 20_000, guarded: a.guarded }); }
+      return (performance.now() - t) / 20;
+    };
+    const plain = await time(() => ({ argv: ["true"], guarded: false }));
+    const wrapped = await time(() => { const l = sb.confine(["true"], { root: project, cwd: project }); return l.confined ? l : { argv: ["true"], guarded: false }; });
     console.log(`start of a command: ${plain.toFixed(1)} ms plain, ${wrapped.toFixed(1)} ms confined`);
     expect(wrapped - plain).toBeLessThan(150);
   });

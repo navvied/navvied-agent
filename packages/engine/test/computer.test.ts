@@ -58,6 +58,43 @@ describe("the tool", () => {
     on.cleanup();
   });
 
+  test("a helper given as a function is asked once a turn: the tool appears and disappears in the open conversation", async () => {
+    const fake = new FakeComputer(WORLD);
+    let helper: ComputerHelper | undefined;
+    let asked = 0;
+    const r = rig((req) => (asText(req.messages.at(-1)!) === "two" ? { calls: [use("list")] } : { text: "done" }), { computer: () => { asked++; return helper; } });
+    const on = (from: number) => r.provider.requests.slice(from).map((q) => q.tools.some((t) => t.name === "computer"));
+    await r.turn(prompt("one"));
+    expect(on(0).every((v) => !v)).toBe(true);
+    helper = fake;
+    let from = r.provider.requests.length;
+    await r.turn(prompt("two"));
+    expect(on(from).every((v) => v)).toBe(true);
+    expect(fake.calls).toEqual([{ action: "list" }]);
+    helper = undefined;
+    from = r.provider.requests.length;
+    await r.turn(prompt("three"));
+    expect(on(from).every((v) => !v)).toBe(true);
+    expect(asked).toBe(4);
+    r.cleanup();
+  });
+
+  test("a getter that throws means no helper: the tool is not offered", async () => {
+    const r = rig(script(use("list")), { computer: () => { throw new Error("native side gone"); } });
+    await r.turn(prompt("hello"));
+    expect(r.provider.requests[0]!.tools.map((t) => t.name)).not.toContain("computer");
+    r.cleanup();
+  });
+
+  test("the helper is told the conversation's mode as the fourth argument", async () => {
+    const seen: (string | undefined)[] = [];
+    const helper: ComputerHelper = { call: async (_c, _s, _k, mode) => { seen.push(mode); return { verdict: "delivered" }; } };
+    const r = rig(script(use("list")), { computer: helper });
+    await r.turn(prompt("hello", { mode: "bypass" }));
+    expect(seen).toEqual(["bypass"]);
+    r.cleanup();
+  });
+
   test("a small model is not shown its definition but is told its name; a call to it is run", async () => {
     const fake = new FakeComputer(WORLD);
     const r = rig(script(use("list")), { computer: fake, window: 16_000, small: true });
@@ -225,7 +262,7 @@ describe("a refusal and an input that cannot be proven", () => {
   });
 
   test("a helper that does not name the app is given the one of the call, and a step that names none gets the last capture's", async () => {
-    const r = rig(script(use("capture", { app: "Notes" }), use("key", { keys: "cmd+s" })), { computer: { call: async () => ({ verdict: "delivered", tree: "1 x" }) } });
+    const r = rig(script(use("capture", { app: "Notes" }), use("key", { keys: "cmd+s" })), { computer: { call: async () => ({ verdict: "delivered" as const, tree: "1 x" }) } });
     await r.turn(prompt("go"));
     expect(r.of("tool").filter((e) => e.status !== "running").map((e) => e.screen?.app)).toEqual(["Notes", "Notes"]);
     r.cleanup();
