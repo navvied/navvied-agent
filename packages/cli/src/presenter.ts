@@ -5,6 +5,8 @@
  */
 import type { EngineEvent, FileNote } from "@navvied/protocol";
 import { mark } from "./banner.ts";
+import { refusalWords } from "./screen-words.ts";
+import { SavedFiles, savedFile } from "./saved-files.ts";
 import type { IO } from "./io.ts";
 import { Markdown } from "./markdown.ts";
 import { paint, retryLine, type Renderer } from "./render.ts";
@@ -88,6 +90,10 @@ export class Presenter {
   #frame = 0;
   #stopTimer: (() => void) | undefined;
   #lastTool: { name: string; input: unknown } | undefined;
+  /** The application the last look at the screen named: a click or a key does not name one. */
+  #app = "";
+  /** The files this conversation made, for `/open`. */
+  readonly files = new SavedFiles();
   /** Steps asked for in the same go as one that is running: they wait their turn. */
   readonly #waiting = new Map<string, { name: string; input: unknown }>();
   /** What the steps of this turn came to, for the line that closes it. */
@@ -124,6 +130,16 @@ export class Presenter {
   get lastOutput(): { title: string; text: string } | undefined { return this.#lastOutput; }
 
   /** The step the engine is asking about, so the question can say what it is for. */
+  /** The application the agent is using on the screen right now, while a step of it runs (an empty text when it is not named yet). */
+  get usingApp(): string | undefined {
+    for (const r of this.#running.values()) if (r.name === "Computer") return this.#appOf(r.name, r.input);
+    return undefined;
+  }
+  #appOf(name: string, input: unknown): string {
+    const app = name === "Computer" && typeof input === "object" && input !== null ? (input as { app?: unknown }).app : undefined;
+    if (typeof app === "string" && app.trim()) this.#app = app.trim();
+    return this.#app;
+  }
   get pendingTool(): { name: string; input: unknown } | undefined { return this.#lastTool; }
 
   /** A message the person sent while the agent works: shown under the live line until it is taken in. */
@@ -357,11 +373,11 @@ export class Presenter {
     const known = this.#running.get(e.id) ?? { name: e.name, input: undefined, step: undefined, out: [], started: this.#now() };
     this.#running.set(e.id, known);
     if (e.status === "running") {
-      if (e.input !== undefined && !known.step) { known.input = e.input; known.step = describeStep(e.name, e.input, this.opts.cwd()); }
+      if (e.input !== undefined && !known.step) { known.input = e.input; known.step = describeStep(e.name, e.input, this.opts.cwd(), this.#appOf(e.name, e.input)); }
       return;
     }
     this.#running.delete(e.id);
-    const step = known.step ?? describeStep(e.name, known.input, this.opts.cwd());
+    const step = known.step ?? describeStep(e.name, known.input, this.opts.cwd(), this.#app);
     const bad = e.status === "error" || failed(e.output ?? "");
     this.#line(`    ${paint(this.io.color, "faint", "│")} ${paint(this.io.color, "dim", bad ? describeFailure(e.name, known.input, this.opts.cwd()) : step.done)}`);
   }
@@ -401,14 +417,14 @@ export class Presenter {
       if (e.input !== undefined && !known.step) {
         this.#settle();
         known.input = e.input;
-        known.step = describeStep(e.name, e.input, this.opts.cwd());
+        known.step = describeStep(e.name, e.input, this.opts.cwd(), this.#appOf(e.name, e.input));
         this.#lastTool = { name: e.name, input: e.input };
         this.#label = known.step.running;
         this.#renderLive();
       } else if (e.input !== undefined && known.step && JSON.stringify(e.input) !== JSON.stringify(known.input)) {
         // The person changed the command before allowing it.
         known.input = e.input;
-        known.step = describeStep(e.name, e.input, this.opts.cwd());
+        known.step = describeStep(e.name, e.input, this.opts.cwd(), this.#appOf(e.name, e.input));
         known.out = [];
         (known as Running & { edited?: boolean }).edited = true;
         this.#label = known.step.running;
@@ -420,7 +436,7 @@ export class Presenter {
     this.#settle();
     this.#stepStart();
     this.#group.steps++;
-    const step = known.step ?? describeStep(e.name, known.input ?? e.input, this.opts.cwd());
+    const step = known.step ?? describeStep(e.name, known.input ?? e.input, this.opts.cwd(), this.#app);
     const input = known.input ?? e.input;
     const output = e.output ?? "";
     const right = e.ms !== undefined ? took(e.ms) : "";
@@ -431,7 +447,7 @@ export class Presenter {
     const notes = [...(e.truncated ? ["TRUNCATED"] : []), ...((known as Running & { edited?: boolean }).edited ? ["EDITED"] : [])];
     const what = (): string => step.done;
     // A step stays on the screen when something went wrong or when it changed a file: those are what a person needs to see.
-    const attention = (e.outcome !== undefined && e.outcome !== "background" && e.outcome !== "skipped" && e.outcome !== "redirected") || e.status === "error" || (e.code !== undefined && e.code !== null && e.code !== 0) || failed(e.output ?? "") || e.name === "Edit" || e.name === "Write";
+    const attention = (e.outcome !== undefined && e.outcome !== "background" && e.outcome !== "skipped" && e.outcome !== "redirected") || e.status === "error" || (e.code !== undefined && e.code !== null && e.code !== 0) || failed(e.output ?? "") || e.screen?.verdict === "refused" || savedFile(e.output ?? "") !== undefined || e.name === "Edit" || e.name === "Write";
     if (e.outcome === "denied") { this.#counts.denied++; this.#group.denied++; this.#row(paint(this.io.color, "dim", "−"), paint(this.io.color, "dim", `You said no: ${what()}`), right, notes); }
     else if (e.outcome === "blocked") {
       this.#counts.failed++; this.#group.failed++;
@@ -444,8 +460,13 @@ export class Presenter {
     else if (e.outcome === "background") { this.#counts.background++; this.#group.background++; this.#count(e.name); this.#row(paint(this.io.color, "cyan", "◉"), what(), "running in the background", notes); }
     else {
       this.#count(e.name);
-      const bad = e.status === "error" || failed(output) || (e.code !== undefined && e.code !== null && e.code !== 0) || (bash ? bash.exitCode !== undefined && bash.exitCode !== 0 : false);
-      if (bad) {
+      const bad = e.status === "error" || e.screen?.verdict === "refused" || failed(output) || (e.code !== undefined && e.code !== null && e.code !== 0) || (bash ? bash.exitCode !== undefined && bash.exitCode !== 0 : false);
+      const refusal = e.screen ? refusalWords(e.screen) : undefined;
+      if (bad && refusal) {
+        this.#counts.failed++; this.#group.failed++;
+        this.#row(this.#bad("✗"), refusal.title, right, notes);
+        this.#line(`    ${paint(this.io.color, "faint", "⎿")} ${paint(this.io.color, "dim", refusal.said)}`);
+      } else if (bad) {
         this.#counts.failed++; this.#group.failed++;
         const code = e.code !== undefined && e.code !== null && e.code !== 0 ? `exit ${e.code}  ` : bash?.exitCode ? `exit ${bash.exitCode}  ` : "";
         this.#row(this.#bad("✗"), describeFailure(e.name, input, this.opts.cwd()), `${code}${right}`.trim(), notes);
@@ -463,6 +484,11 @@ export class Presenter {
           for (const n of bash.notes) this.#line(`    ${paint(this.io.color, "faint", n)}`);
         }
         if (e.name === "Edit") this.#diff(input as Record<string, unknown>, output);
+        const saved = savedFile(output);
+        if (saved) {
+          this.files.add(saved);
+          for (const l of [saved.path, saved.size]) this.#line(`    ${paint(this.io.color, "faint", "⎿")} ${paint(this.io.color, "dim", l)}`);
+        }
       }
     }
     this.#endStep(attention);

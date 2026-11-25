@@ -16,6 +16,7 @@ import type { Created } from "../create.ts";
 import { askApproval, askPlan } from "../approval-ui.ts";
 import { answeredLines, askQuestions } from "../question-ui.ts";
 import { effortLabel, effortRows, modelRows } from "../model-ui.ts";
+import { openScreen } from "../open-screen.ts";
 import { Presenter } from "../presenter.ts";
 import { createHub } from "./hub.ts";
 import { hubMenus } from "./hub-menus.ts";
@@ -114,6 +115,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
     if (e.ev === "taken") busy = true;
     if (menus?.onEvent(e)) return;
     view.handle(e);
+    if (e.ev === "tool" && e.name === "Computer") dock?.refresh();
     if (e.ev === "caps") {
       const before = capsNow;
       capsNow = e;
@@ -202,7 +204,10 @@ export async function chatCommand(initial: string | undefined, options: Options,
   const footer = (): string => {
     const cols = process.stdout.columns ?? 80;
     const plain = (t: string): number => [...t].length;
-    const left = current
+    const using = presenter?.usingApp;
+    const left = using !== undefined
+      ? [`${paint(io.color, "cyan", "●")} ${paint(io.color, "bold", using ? `Using ${using}` : "Using the computer")}`, paint(io.color, "dim", "Esc stops it")]
+      : current
       ? [`${paint(io.color, "cyan", paint(io.color, "bold", current.modelName))}`, ...(options.kind === "chat" ? [] : [`${paint(io.color, "dim", MODE_LABEL[mode])}`]), ...(capsNow?.effort ? [paint(io.color, "dim", `Effort ${effortLabel(capsNow.effort)}`)] : []), ...(context && context.win > 0 ? [paint(io.color, "dim", `Context ${Math.min(100, Math.round((context.ctx / context.win) * 100))}%`)] : [])]
       : [paint(io.color, "dim", "No model connected")];
     const keys: [string, string][] = updated ? [] : current
@@ -322,6 +327,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
       case "plugins": menus?.plugins(); return;
       case "providers": void connect(); return;
       case "tools": menus?.tools(); return;
+      case "open": void openScreen(io, presenter?.files.list() ?? [], say).then(marker); return;
       case "artifacts": menus?.artifacts(); return;
       case "import": menus?.import(); return;
       case "move": case "copy": menus?.transfer(name as "move" | "copy", arg, current?.engine.sessionId ?? null); return;

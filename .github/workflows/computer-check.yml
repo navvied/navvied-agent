@@ -1,0 +1,38 @@
+name: computer-check
+# Not part of any release. Runs the pinned screen driver for real on each system's runner: fetches it (hash and signature checked), starts it the
+# way the app does, and writes what it offers and what it says about the programs on the machine as one annotation (see
+# packages/cli/src/computer-use/check.ts). Started from the Actions tab, or by pushing a tag named computer-<anything> (read the annotations,
+# then delete the tag). No input is sent to any program.
+on:
+  push:
+    tags: ["computer-*"]
+  workflow_dispatch:
+jobs:
+  driver:
+    if: ${{ github.repository == 'navvied/navvied-agent' }}
+    name: driver (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: A virtual screen and the accessibility bus (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb x11-utils libxtst6 libxi6 libatspi2.0-0 at-spi2-core dbus-x11
+      - name: Fetch the driver, start it, list what it offers
+        run: |
+          cmd=(bun packages/cli/src/computer-use/check.ts --report "$RUNNER_TEMP/report.txt")
+          [ "$RUNNER_OS" = Linux ] && cmd=(xvfb-run -a dbus-run-session -- "${cmd[@]}")
+          bash packages/desktop/scripts/ci-run.sh "driver check" "${cmd[@]}"
+      - name: What the driver said
+        if: always()
+        run: |
+          source packages/desktop/scripts/ci-annotate.sh
+          [ -f "$RUNNER_TEMP/report.txt" ] && annotate notice "driver check on ${{ matrix.os }}" "$RUNNER_TEMP/report.txt" || echo "no report was written"

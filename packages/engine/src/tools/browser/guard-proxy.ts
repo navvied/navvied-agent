@@ -40,10 +40,11 @@ const deny = (s: Socket<Side>, why: string): void => { send(s, Buffer.from(`HTTP
 export interface GuardProxy { readonly port: number; close(): void }
 
 /**
- * `allowPrivate` is asked at each connection (the host's choice can change between calls); `refused` hears why a connection was not made,
- * for the sentence that tells the person a page could not be opened.
+ * `allowPrivate` is asked at each connection (the host's choice can change between calls); `refused` hears why a connection to `host` was not made,
+ * for the sentence that tells the person a page could not be opened; the browser's own background traffic comes through here too, so
+ * the listener must match the host against what a page asked for.
  */
-export function startGuardProxy(allowPrivate: () => boolean, refused: (why: string) => void): GuardProxy {
+export function startGuardProxy(allowPrivate: () => boolean, refused: (why: string, host: string) => void): GuardProxy {
   const upstreamHandlers: SocketHandler<Side> = {
     data(up, chunk) { if (up.data.peer) send(up.data.peer, chunk); },
     drain: flush,
@@ -54,7 +55,7 @@ export function startGuardProxy(allowPrivate: () => boolean, refused: (why: stri
   /** Vets the host and connects to an address that was checked; nothing is said to the browser here. */
   async function dial(client: Socket<Side>, host: string, port: number): Promise<Socket<Side> | undefined> {
     const v = await vet(new URL(`https://${host.includes(":") ? `[${host}]` : host}`), allowPrivate());
-    if ("refused" in v) { refused(v.refused); deny(client, v.refused); return undefined; }
+    if ("refused" in v) { refused(v.refused, host); deny(client, v.refused); return undefined; }
     for (const address of v.pin.length ? v.pin.slice(0, 4) : [host]) {
       try { return await web.dial(address, port, upstreamHandlers, side(client)); } catch { /* the next address */ }
     }

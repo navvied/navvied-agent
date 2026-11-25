@@ -85,6 +85,12 @@ export class Tab {
     }
   }
 
+  /** The proxy refused a connection to `host`: it is this tab's refusal only when this tab asked for that host (the browser also makes requests of its own). */
+  refuseHost(host: string, why: string): void {
+    const bare = host.replace(/^\[|\]$/g, "").toLowerCase();
+    for (const u of [...this.#urls.values(), this.url]) { try { if (new URL(u).hostname.replace(/^\[|\]$/g, "").toLowerCase() === bare) { this.refusal = why; return; } } catch { /* not an address */ } }
+  }
+
   #add(list: string[], line: string): void { list.push(line.slice(0, 300)); if (list.length > RING) list.shift(); }
   #done(id: string): void { this.#inflight.delete(id); this.#urls.delete(id); if (!this.#inflight.size) for (const q of this.#quiet) q(); }
 

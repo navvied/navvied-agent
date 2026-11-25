@@ -11,6 +11,7 @@ import { paint } from "../render.ts";
 import { HubLink } from "../providers/link.ts";
 import { Kit } from "../providers/kit.ts";
 import { providersScreen } from "../providers/index.ts";
+import { scheduleScreen } from "../schedule-screen.ts";
 import { toolsScreen } from "../tools-screen.ts";
 
 type Say = (text: string) => void;
@@ -172,24 +173,10 @@ export function hubMenus(c: MenuContext) {
       // A file that cannot be shown comes back as an error: the terminal's own error line says why.
     },
 
-    /** `/schedule`: the tasks, each with when it runs next, and what can be done to one. */
-    schedule(): void {
-      ask("schedules", { cmd: "schedules" }, async (e) => {
-        if (!e.items.length) { c.say('No scheduled tasks. Add one with: navvied schedule add "0 9 * * 1-5" "summarise yesterday\'s commits"'); c.marker(); return; }
-        const rows = e.items.map((j: ScheduleInfo) => ({ label: `${j.enabled ? "on " : "off"}  ${j.title}`, hint: `${j.cron}${j.next ? `  next ${when(j.next)}` : ""}${j.lastCode === undefined ? "" : j.lastCode === 0 ? "  last ran fine" : "  last run failed"}${j.running ? "  running now" : ""}` }));
-        const picked = await choose("Which task?", `Scheduled tasks. They run only while this computer is on and navvied is running.`, rows);
-        const j = picked === undefined ? undefined : e.items[picked];
-        if (!j) { c.marker(); return; }
-        const actions = [
-          { label: "Run it now", run: () => send({ cmd: "schedule.run", id: j.id }) },
-          { label: j.enabled ? "Turn it off" : "Turn it on", run: () => send({ cmd: "schedule.update", id: j.id, enabled: !j.enabled }) },
-          { label: "Remove it", run: () => send({ cmd: "schedule.remove", id: j.id }) },
-        ];
-        const which = await choose(j.title, j.title, actions.map((a) => ({ label: a.label })));
-        const action = which === undefined ? undefined : actions[which];
-        if (action) { action.run(); c.say(`${paint(io.color, "cyan", "✓")} ${action.label.replace(/^./, (ch) => ch.toUpperCase())}.`); }
-        c.marker();
-      });
+    /** `/schedule`: the tasks, each with when it runs next, and what can be done to one; New task adds one. */
+    async schedule(): Promise<void> {
+      await scheduleScreen(new Kit(io, link, c.say, c.switching));
+      c.marker();
     },
 
     /** `/import`: the conversations waiting in the cloud, brought here. */

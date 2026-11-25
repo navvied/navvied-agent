@@ -405,7 +405,8 @@ Everything the web page and the phone do with a computer's hub is a command to t
 | `/plugins` | The skills, tool servers and hooks, each on or off; Enter switches one (the files and `config.json` are not touched). |
 | `/tools` | What the agent can do on this computer: six categories (Work, Browse & research, Plan & coordinate, Memory & knowledge, See, hear & create, Control the computer), each with its tools, and every tool with its own on or off (Files & Search is one). Enter switches one where it stands; a tool coding is made of asks first. A tool that waits for setup, is not built yet (Soon) or cannot run here has no switch. Where commands run: this computer, a Docker or Podman container, or another computer over SSH. A change reaches open conversations at their next step. |
 | `/artifacts` | The files conversations wrote; pick one to show it (text; a picture says where it is). |
-| `/schedule` | The scheduled tasks with when each runs next and how the last run went; run one now, turn it off or on, remove it. Add one with `navvied schedule add`. |
+| `/schedule` | The scheduled tasks with when each runs next and how the last run went; New task asks its name, what to do, when, at what time and what it may do (only read and plan, or can change files), one question at a time; for a task: run now, turn it off or on, change it, remove it (asked first). `navvied schedule add` still adds one from the command line. |
+| `/open` | The files this conversation made (a picture, a sound, a video, a download): open one with this computer's own program, or show its folder. |
 
 Not in the terminal yet: switching between an agent and a chat inside one session (start `navvied --kind chat` for a chat), and the hosted-model choice screen of the page (`/model` lists the models of your account, the free ones and your own).
 

@@ -90,12 +90,13 @@ describe("the proxy every connection of the browser goes through", () => {
   let proxy: GuardProxy;
   let allow = false;
   const refusals: string[] = [];
+  const refusedHosts: string[] = [];
   beforeAll(() => {
     web.addresses = async (host) => { if (host === "public.test") return ["93.184.216.34"]; if (host === "rebind.test") return ["93.184.216.34", "10.0.0.5"]; throw new Error("no such name"); };
     web.dial = (address, _port, socket, data) => { dialed.push(address); return was.dial("127.0.0.1", echo.port, socket, data); };
-    proxy = startGuardProxy(() => allow, (why) => refusals.push(why));
+    proxy = startGuardProxy(() => allow, (why, host) => { refusals.push(why); refusedHosts.push(host); });
   });
-  afterEach(() => { allow = false; hits.length = 0; dialed.length = 0; refusals.length = 0; });
+  afterEach(() => { allow = false; hits.length = 0; dialed.length = 0; refusals.length = 0; refusedHosts.length = 0; });
   afterAll(() => { proxy.close(); echo.stop(true); web.addresses = was.addresses; web.dial = was.dial; });
 
   /** Sends bytes to the proxy and collects what comes back until it hangs up (or until `until` has been seen). */
@@ -125,6 +126,7 @@ describe("the proxy every connection of the browser goes through", () => {
     }
     expect(dialed).toEqual([]);
     expect(refusals.length).toBe(5);
+    expect(refusedHosts).toEqual(["rebind.test", "127.0.0.1", "10.1.2.3", "169.254.169.254", "nope.test"]);
   });
 
   test("where the host allows private addresses a local one is let through", async () => {
@@ -177,5 +179,17 @@ describe("what the person typed at the end of a sentence", () => {
 
   test("numbers a small model writes as text are taken as numbers, and words stay words", () => {
     expect(browser.fixArgs!({ action: "click", ref: "3", tab: " 2 ", text: "7", seconds: "x" })).toEqual({ action: "click", ref: 3, tab: 2, text: "7", seconds: "x" });
+  });
+});
+
+describe("a refusal belongs to the tab that asked for that host", () => {
+  test("the browser's own background request does not become the reason a page was not opened", async () => {
+    const { Tab } = await import("../src/tools/browser/tab.ts");
+    const tab = new Tab({} as never, "t", "s", async () => undefined);
+    tab.url = "http://public.test:8080/page";
+    tab.refuseHost("www.google.com", "the name www.google.com could not be looked up, so it was not fetched.");
+    expect(tab.refusal).toBe("");
+    tab.refuseHost("PUBLIC.test", "its own");
+    expect(tab.refusal).toBe("its own");
   });
 });

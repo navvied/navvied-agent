@@ -39,7 +39,7 @@ export class Session {
     try {
       if (endpoint) { s.cdp = await Cdp.connect(endpoint); }
       else {
-        s.#proxy = startGuardProxy(() => s.allowPrivate, (why) => { for (const t of s.tabs) t.refusal = why; });
+        s.#proxy = startGuardProxy(() => s.allowPrivate, (why, host) => { for (const t of s.tabs) t.refuseHost(host, why); });
         s.#launched = await launch(chrome!, s.#proxy.port);
         s.cdp = await Cdp.connect(s.#launched.endpoint);
       }

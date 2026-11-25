@@ -19,7 +19,17 @@ export function shortPath(path: string, cwd: string): string {
   return home ? `~/${p.slice(home[0].length)}` : p;
 }
 
-export function describeStep(name: string, input: unknown, cwd: string): Step {
+/** The page a browser step is about, the way the web page words it: "example.com/pricing". */
+const pageOf = (url: string): string => { try { const u = new URL(url); return `${u.host}${u.pathname === "/" ? "" : u.pathname}`; } catch { return url; } };
+
+const BROWSER: Record<string, [string, string]> = {
+  read: ["Reading the page", "Read the page"], click: ["Clicking on the page", "Clicked on the page"], type: ["Typing on the page", "Typed on the page"], choose: ["Choosing on the page", "Chose on the page"],
+  press: ["Pressing a key", "Pressed a key"], scroll: ["Scrolling the page", "Scrolled the page"], back: ["Going back", "Went back"], screenshot: ["Taking a screenshot", "Took a screenshot"],
+  dialog: ["Answering a dialog", "Answered a dialog"], upload: ["Filling in a form", "Filled in a form"], wait: ["Waiting for the page", "Waited for the page"],
+};
+
+/** `app` is the application the last look at the screen named: a click or a key names no app of its own. */
+export function describeStep(name: string, input: unknown, cwd: string, app = ""): Step {
   const a = (typeof input === "object" && input !== null ? input : {}) as Input;
   const file = shortPath(str(a.file_path), cwd);
   switch (name) {
@@ -46,6 +56,31 @@ export function describeStep(name: string, input: unknown, cwd: string): Step {
     case "CronCreate": return { running: "Scheduling a task", done: "Scheduled a task" };
     case "CronDelete": return { running: "Removing a scheduled task", done: "Removed a scheduled task" };
     case "NotebookEdit": return { running: "Editing a notebook", done: "Edited a notebook" };
+    case "MakeImage": return { running: "Making a picture", done: "Made a picture" };
+    case "MakeVideo": return { running: "Making a short video", done: "Made a short video" };
+    case "Speak": return { running: "Reading the text aloud", done: "Read the text aloud" };
+    case "Transcribe": return { running: "Turning speech into text", done: "Turned speech into text" };
+    case "LookAt": return { running: "Looking at the picture", done: "Looked at the picture" };
+    case "Watch": return { running: "Looking through the video", done: "Looked through the video" };
+    case "Browser": {
+      const action = str(a.action);
+      if (action === "open" || action === "new") { const page = pageOf(str(a.url)); return { running: `Opening ${page}`, done: `Opened ${page}` }; }
+      const known = BROWSER[action];
+      return known ? { running: known[0], done: known[1] } : { running: "Using the browser", done: "Used the browser" };
+    }
+    case "Computer": {
+      const where = str(a.app) || app, at = where ? ` in ${where}` : "";
+      switch (str(a.action)) {
+        case "capture": return { running: "Looking at the screen", done: "Looked at the screen" };
+        case "click": return { running: `Clicking${at}`, done: `Clicked${at}` };
+        case "type": return { running: `Typing${at}`, done: `Typed${at}` };
+        case "key": return { running: `Pressing keys${at}`, done: `Pressed keys${at}` };
+        case "scroll": return { running: `Scrolling${at}`, done: `Scrolled${at}` };
+        case "list": return { running: "Looking at the open apps", done: "Looked at the open apps" };
+        case "wait": return { running: "Waiting", done: "Waited" };
+        default: return { running: "Using the computer", done: "Used the computer" };
+      }
+    }
     default: {
       const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
       if (mcp) { const what = `${words(mcp[1]!.replace(/^[a-z]+_ai_/i, ""))}: ${words(mcp[2]!).toLowerCase()}`; return { running: `Using ${what}`, done: `Used ${what}` }; }
@@ -68,6 +103,14 @@ export function describeFailure(name: string, input: unknown, cwd: string): stri
     case "Bash": return str(a.description) ? `${oneLine(str(a.description), 70)} failed` : `The command failed: ${oneLine(str(a.command), 70)}`;
     case "Glob": case "Grep": return "The search did not work";
     case "WebFetch": case "WebSearch": return "Could not reach the web";
+    case "MakeImage": return "Could not make the picture";
+    case "MakeVideo": return "Could not make the video";
+    case "Speak": return "Could not read the text aloud";
+    case "Transcribe": return "Could not turn the speech into text";
+    case "LookAt": return "Could not look at the picture";
+    case "Watch": return "Could not look through the video";
+    case "Browser": return str(a.action) === "open" || str(a.action) === "new" ? `Could not open ${pageOf(str(a.url))}` : str(a.action) === "screenshot" ? "Could not take a screenshot" : "Could not use the browser";
+    case "Computer": return "Could not use the screen";
     default: return `Could not use ${name}`;
   }
 }
