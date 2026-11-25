@@ -25,7 +25,7 @@ export interface AdapterInput {
 }
 
 interface Win { pid: number; windowId: number; app: string; title: string }
-interface Element { token: string; frame?: { x: number; y: number; w: number; h: number } }
+interface Element { token: string; frame?: { x: number; y: number; w: number; h: number }; /** What the system lets be done to it, when it says (an empty list: nothing can be pressed, it can only be clicked where it is). */ actions?: string[] }
 
 const NEXT_GONE = (app: string) => `${app} has no open window. Ask the person to open it, then capture again.`;
 const NEXT_UNKNOWN = "The step was sent and could not be confirmed. Capture the app and look before you act again; do not send it twice.";
@@ -166,7 +166,8 @@ export class DriverAdapter implements ComputerHelper {
     const win = this.window;
     if (!win || !app) return refused("input_target_mismatch", "Capture an app first.");
     const base = { pid: win.pid, window_id: win.windowId, delivery_mode: delivery };
-    const byPixels = c.action === "drag" || ((c.action === "click" || c.action === "scroll") && c.target === undefined && c.x !== undefined);
+    const el0 = c.target !== undefined ? this.elements.get(c.target) : undefined;
+    const byPixels = c.action === "drag" || ((c.action === "click" || c.action === "scroll") && c.target === undefined && c.x !== undefined) || (c.action === "click" && el0 !== undefined && el0.actions !== undefined && el0.actions.length === 0 && el0.frame !== undefined);
     if (byPixels && !this.shot) {
       // A place in pixels is a place in a picture of the window: take one (the model is not shown it) before the step.
       const seen = await this.safe("get_window_state", { pid: win.pid, window_id: win.windowId, tree_format: "elements", include_screenshot: true, timeout_ms: 8000 }, false, signal);
@@ -178,7 +179,9 @@ export class DriverAdapter implements ComputerHelper {
     let name: string, args: Record<string, unknown>;
     switch (c.action) {
       case "click": {
-        const at = element ? { element_token: element.token } : this.place(c, "from");
+        // An element the system offers no action for (a text field) is clicked where it is, as a person would.
+        const pressable = !element || element.actions === undefined || element.actions.length > 0 || element.frame === undefined;
+        const at = element && pressable ? { element_token: element.token } : this.place(c, "from");
         if (!at) return refused("input_target_mismatch", "That element has no place on screen. Capture again.", { app });
         name = "click"; args = { ...base, ...at, ...held, ...(c.button ? { button: c.button } : {}), ...(c.count === 2 ? { count: 2 } : {}) };
         break;
@@ -199,8 +202,7 @@ export class DriverAdapter implements ComputerHelper {
       if (r.fail.code === "background_unavailable" && delivery === "background" && consent && (await consent({ app, about: "foreground" })) !== "no") return this.input(c, app, consent, "foreground", signal);
       return r.fail;
     }
-    const effect = (r.ok.structured as { effect?: unknown } | undefined)?.effect;
-    if (typeof effect === "string" && /unconfirmed|unknown|not_confirmed/.test(effect)) return { verdict: "unverified", next: NEXT_UNKNOWN, app };
+    if (unconfirmed(r.ok)) return { verdict: "unverified", next: NEXT_UNKNOWN, app };
     return { verdict: "delivered", app };
   }
 
@@ -210,8 +212,7 @@ export class DriverAdapter implements ComputerHelper {
       if (at > 0 && signal?.aborted) return { verdict: "unverified", next: NEXT_CUT, app };
       const r = await this.safe("type_text", { ...base, text: text.slice(at, at + TYPE_PIECE), ...(element ? { element_token: element.token } : {}) }, true, signal);
       if ("fail" in r) return r.fail;
-      const effect = (r.ok.structured as { effect?: unknown } | undefined)?.effect;
-      if (typeof effect === "string" && /unconfirmed|unknown|not_confirmed/.test(effect)) return { verdict: "unverified", next: NEXT_UNKNOWN, app };
+      if (unconfirmed(r.ok)) return { verdict: "unverified", next: NEXT_UNKNOWN, app };
     }
     return { verdict: "delivered", app };
   }
@@ -238,6 +239,9 @@ export class DriverAdapter implements ComputerHelper {
   }
 }
 
+/** The driver says whether it saw the step take effect: `confirmed`, or anything else (it was sent and nothing proved it). A driver that says nothing is taken at its word. */
+const unconfirmed = (r: CallResult): boolean => { const e = (r.structured as { effect?: unknown } | undefined)?.effect; return typeof e === "string" && e !== "confirmed"; };
+
 /** The number an element goes by: the one the driver gave it, which is also the end of its token. */
 const indexOf = (e: Record<string, unknown>): number | undefined => {
   if (typeof e.element_index === "number") return e.element_index;
@@ -253,7 +257,7 @@ export function parseElements(r: CallResult): Map<number, Element> {
     const n = indexOf(e), token = e.element_token;
     if (n === undefined || typeof token !== "string") continue;
     const f = e.frame as { x?: number; y?: number; w?: number; h?: number } | undefined;
-    out.set(n, { token, ...(f && [f.x, f.y, f.w, f.h].every((v) => typeof v === "number") ? { frame: f as Element["frame"] } : {}) });
+    out.set(n, { token, ...(f && [f.x, f.y, f.w, f.h].every((v) => typeof v === "number") ? { frame: f as Element["frame"] } : {}), ...(Array.isArray(e.actions) ? { actions: e.actions.map(String) } : {}) });
   }
   return out;
 }

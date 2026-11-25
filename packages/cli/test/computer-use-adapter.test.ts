@@ -176,9 +176,19 @@ describe("acting", () => {
     expect(await adapter.call({ action: "click", app: "Mail", target: 1 })).toMatchObject({ verdict: "refused", code: "input_target_mismatch" });
   });
   test("an effect the driver could not confirm is unverified", async () => {
-    const { adapter } = make("bypass", { click: () => ok({ effect: "unconfirmed" }) });
+    const { adapter } = make("bypass", { click: () => ok({ effect: "unverifiable" }) });
     await adapter.call({ action: "capture", app: "Notes" });
     expect(await adapter.call({ action: "click", target: 1 })).toMatchObject({ verdict: "unverified", next: expect.stringContaining("do not send it twice") });
+  });
+  test("an element with nothing to press is clicked where it is, in pixels, the way a person would", async () => {
+    const { adapter, calls } = make("bypass", { get_window_state: () => ok({ elements: [{ element_token: "s1:1", role: "text area", label: "Body", actions: [], frame: { x: 10, y: 20, w: 100, h: 40 } }, { element_token: "s1:2", role: "button", label: "Ok", actions: ["press"], frame: { x: 0, y: 0, w: 4, h: 4 } }] }) });
+    await adapter.call({ action: "capture", app: "Notes" });
+    await adapter.call({ action: "click", target: 1 });
+    expect(calls.at(-1)).toMatchObject({ name: "click", args: { x: 60, y: 40 } });
+    expect(calls.at(-1)!.args.element_token).toBeUndefined();
+    expect(calls.at(-2)).toMatchObject({ name: "get_window_state", args: { include_screenshot: true } });
+    await adapter.call({ action: "click", target: 2 });
+    expect(calls.at(-1)!.args.element_token).toBe("s1:2");
   });
   test("a driver that stops or does not answer during input leaves the outcome unknown; one that was never reached is a refusal", async () => {
     let how: "unknown" | "unsent" = "unknown";

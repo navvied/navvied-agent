@@ -20,7 +20,10 @@ setTimeout(() => { say("result", "the drive did not finish in six minutes"); pro
 const platform = osPlatform();
 const use = new ComputerUse({
   platform, arch: osArch(), env: process.env, dir: join(process.env.NAVVIED_HOME ?? join(homedir(), ".navvied"), "computer"), fetchFn: fetch, run, spawn: spawnChild, probe: probeStatus, pid: process.pid, ownApps: ["navvied-agent-runner"],
-  trace: ({ tool, args, result }) => { if (result.isError || tool === "click") say(result.isError ? "driver said" : "driver did", `${tool} ${JSON.stringify({ ...args, text: undefined }).slice(0, 160)} -> ${(JSON.stringify(result.structured ?? "") + " " + result.text).replace(/\s+/g, " ").slice(0, 330)}`); },
+  trace: ({ tool, args, result }) => {
+    if (result.isError) say("driver said", `${tool} ${JSON.stringify({ ...args, text: undefined }).slice(0, 160)} -> ${(JSON.stringify(result.structured ?? "") + " " + result.text).replace(/\s+/g, " ").slice(0, 330)}`);
+    else if (["click", "hotkey", "press_key", "scroll", "drag", "type_text"].includes(tool)) { const r = (result.structured ?? {}) as { effect?: string; route?: string; delivery?: { mode?: string } }; say("driver did", `${tool} ${r.delivery?.mode ?? ""} effect=${r.effect ?? "-"} route=${r.route ?? "-"}`); }
+  },
 });
 const helper = use.helper();
 const allow = async () => "app" as const;
@@ -42,10 +45,18 @@ const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const field = (lines: string[]): number | undefined => numberOf(lines, platform === "linux" ? /navvied-entry/ : /(AXTextArea|Edit "Text Editor")/);
 const valueOf = (lines: string[], n: number | undefined): string => { const l = lines.find((x) => Number(x.split(" ")[0]) === n) ?? ""; return /= "(.*)"$/.exec(l)?.[1] ?? ""; };
 
+/** How many windows the program has: a menu that opens as a window of its own is seen here, not in the tree of the main one. */
+const windowCount = async (): Promise<number> => ((await helper.call({ action: "list", app }, undefined, allow, "bypass")).tree ?? "").split("\n").filter(Boolean).length;
+
 const first = await act("capture", { action: "capture", app, mode: "ax" });
 const start = (first.tree ?? "").split("\n");
 const target = field(start);
 if (first.verdict !== "delivered" || target === undefined) { check("the program is captured and has a field", false, JSON.stringify(first).slice(0, 200)); } else {
+  if (platform === "linux") {
+    // The button first: its own action needs no focus, so it is the cleanest case of a click in the background.
+    const press = numberOf(start, /push button "Press"/);
+    if (press !== undefined) { await act("click", { action: "click", target: press }); await pause(300); check("click", (await look()).some((l) => /"pressed"/.test(l))); }
+  }
   // Type, select all and type over it: key (a shortcut with held keys) and type, each shown by the value of the field.
   await act("click field", { action: "click", target });
   await act("type", { action: "type", target, text: "hello world" });
@@ -57,22 +68,21 @@ if (first.verdict !== "delivered" || target === undefined) { check("the program 
   const over = valueOf(lines, field(lines));
   check("key select all, then type over it", over.includes("replaced") && !over.includes("hello"), over);
 
-  // Right click opens the context menu; Escape closes it. The menu's items are in the next capture.
+  // Right click opens the context menu; Escape closes it. Seen in the next capture, or, when the menu is a window of its own, in the program's windows.
+  const windowsBefore = await windowCount();
   await act("right click", { action: "click", target: field(lines)!, button: "right" });
   await pause(500);
   lines = await look();
   const inMenu = (ls: string[]) => ls.some((l) => /(Select All|Paste|Copy)/i.test(l) && !/navvied-entry|AXTextArea|Text Editor/.test(l));
-  const menu = inMenu(lines);
-  if (menu || platform === "linux" || platform === "darwin") check("right click opens the context menu", menu, lines.filter((l) => /(Select All|Paste|Copy)/i.test(l)).slice(0, 3).join(" | "));
-  else unseen("right click", "the menu is a window of its own that the tree of this program does not hold");
+  const windowsOpen = await windowCount();
+  check("right click opens the context menu", inMenu(lines) || windowsOpen > windowsBefore, `${windowsBefore} -> ${windowsOpen} windows; ${lines.filter((l) => /(Select All|Paste|Copy)/i.test(l)).slice(0, 2).join(" | ")}`);
   await act("key Escape", { action: "key", keys: "escape" });
   await pause(300);
   lines = await look();
-  check("Escape closes the menu", !inMenu(lines));
+  const windowsClosed = await windowCount();
+  check("Escape closes the menu", !inMenu(lines) && windowsClosed <= windowsBefore, `${windowsClosed} windows`);
 
   if (platform === "linux") {
-    const press = numberOf(lines, /push button "Press"/);
-    if (press !== undefined) { await act("click", { action: "click", target: press }); lines = await look(); check("click", lines.some((l) => /"pressed"/.test(l))); }
     // A drag along the slider, in pixels of the window: from the handle at its left end to a place well to the right.
     await act("drag", { action: "drag", x: 108, y: 95, to_x: 260, to_y: 95 });
     lines = await look();
@@ -94,9 +104,10 @@ if (first.verdict !== "delivered" || target === undefined) { check("the program 
     await act("scroll", { action: "scroll", app, direction: "up", amount: 15 });
     await pause(300);
     const afterBars = bars(await look());
-    if (before === "") unseen("scroll", "the tree shows no scroll bar or position");
+    if (before === "" || !/= "/.test(before)) unseen("scroll", "the tree shows no scroll position");
     else check("scroll moves the text", afterBars !== before, `${before.slice(0, 120)} -> ${afterBars.slice(0, 120)}`);
     await act("drag", { action: "drag", x: 20, y: 90, to_x: 60, to_y: 90 });
+    lines = await look();
     await act("type over the selection", { action: "type", target: field(lines)!, text: "Z" });
     lines = await look();
     const v = valueOf(lines, field(lines));
