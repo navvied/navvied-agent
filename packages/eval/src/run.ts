@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { gitEnv } from "../../engine/src/git-env.ts";
 import { join } from "node:path";
 import { LineSplitter, parseEvent, type PlanEntry } from "@navvied/protocol";
 import type { Adapter } from "./adapter.ts";
@@ -180,7 +181,7 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
   const other = opts.agent ? instantiate(opts.agent, { prompt: task.prompt, dir, ...(opts.model ? { model: opts.model } : {}), ...(opts.meter && opts.agent.pointable ? { baseUrl: opts.meter.url(runId) } : {}), ...(opts.key ? { key: opts.key } : {}) }) : undefined;
   const proc = Bun.spawn(
     other ? other.argv : [program!, ...base, "run", task.prompt, "--cwd", dir, "--json", "--mode", "auto", "--max-steps", String(task.maxSteps), ...(task.answers ? ["--answers", JSON.stringify(task.answers)] : []), ...(opts.model ? ["--model", opts.model] : [])],
-    { cwd: dir, env: { ...process.env, ...secret, NAVVIED_TERMINAL_ENV: "BENCH_SECRET", ...opts.env, ...config.env, ...taskEnv(dir, task), ...counted, ...other?.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+    { cwd: dir, env: { ...gitEnv(), ...secret, NAVVIED_TERMINAL_ENV: "BENCH_SECRET", ...opts.env, ...config.env, ...taskEnv(dir, task), ...counted, ...other?.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
   );
   const memory = watchMemory(proc.pid);
   let timedOut = false;

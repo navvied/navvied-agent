@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { gitEnv } from "../../engine/src/git-env.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -144,7 +145,7 @@ describe("workspace", () => {
   const task = loadTasks(TASKS, ["fix-off-by-one"])[0]!;
   test("starts as a git repository with one commit and the task's files", () => {
     const dir = prepare(task);
-    const log = Bun.spawnSync(["git", "log", "--oneline"], { cwd: dir }).stdout.toString().trim().split("\n");
+    const log = Bun.spawnSync(["git", "log", "--oneline"], { cwd: dir, env: gitEnv() }).stdout.toString().trim().split("\n");
     expect(log).toHaveLength(1);
     expect(existsSync(join(dir, "src/range.ts"))).toBe(true);
     rmSync(dir, { recursive: true, force: true });

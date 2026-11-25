@@ -33,6 +33,7 @@ export { scanText, clean as cleanText } from "./text-scan.ts";
 export { projectDirs } from "./instructions.ts";
 export { jsonIn, validate as validateJson } from "./json-schema.ts";
 export { browser, closeBrowser, findChrome } from "./tools/browser.ts";
+export { GIT_LOCAL_ENV, gitEnv } from "./git-env.ts";
 export { agentDirs, loadAgents, parseAgent, type AgentDef } from "./agents.ts";
 export { Rules, hardBlock, hasRules, parseRules, splitCommand, type RuleSet, type Verdict } from "./rules.ts";
 export { commandHooks, type HookCommand, type HookConfig, type HookEvent, type Hooks } from "./hooks.ts";

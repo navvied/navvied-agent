@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { CheckpointInfo, RestoreEntry } from "@navvied/protocol";
+import { gitEnv } from "./git-env.ts";
 
 export type Git = (cwd: string, args: string[], opts?: { env?: Record<string, string>; input?: string }) => { ok: boolean; out: string };
 
@@ -12,7 +13,7 @@ export const spawnGit: Git = (cwd, args, opts = {}) => {
   try {
     const p = Bun.spawnSync(["git", ...EXACT, ...args], {
       cwd,
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C", ...opts.env },
+      env: { ...gitEnv(), GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C", ...opts.env },
       stdin: opts.input !== undefined ? new TextEncoder().encode(opts.input) : undefined,
       stdout: "pipe",
       stderr: "pipe",

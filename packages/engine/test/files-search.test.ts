@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { gitEnv } from "../src/git-env.ts";
 import { mkdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { HOOK_MS, hook } from "../../protocol/test/support/cleanup.ts";
@@ -21,7 +22,7 @@ async function only<T>(programs: string[], body: () => Promise<T>): Promise<T> {
 
 function project(): string {
   const d = workdir();
-  if (git) Bun.spawnSync(["git", "init", "-q"], { cwd: d });
+  if (git) Bun.spawnSync(["git", "init", "-q"], { env: gitEnv(), cwd: d });
   mkdirSync(join(d, "src")); mkdirSync(join(d, "dist")); mkdirSync(join(d, ".github"));
   writeFileSync(join(d, ".gitignore"), "dist/\n*.log\n");
   writeFileSync(join(d, "src/a.ts"), "const needle = 1;\n");

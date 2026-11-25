@@ -2,9 +2,10 @@ import { execFile } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { gitEnv } from "./git-env.ts";
 
 const git = (cwd: string, args: string[]): Promise<{ ok: boolean; out: string }> =>
-  new Promise((done) => execFile("git", args, { cwd, timeout: 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }, (err, out, errOut) => done({ ok: !err, out: (out || errOut || "").trim() })));
+  new Promise((done) => execFile("git", args, { cwd, timeout: 60_000, env: { ...gitEnv(), GIT_TERMINAL_PROMPT: "0" } }, (err, out, errOut) => done({ ok: !err, out: (out || errOut || "").trim() })));
 
 export interface Isolated {
   /** The folder the helper works in: the same place in a copy of the project. */

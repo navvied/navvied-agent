@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { gitEnv } from "../../engine/src/git-env.ts";
 import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";
 import { dirname, join, sep, win32 } from "node:path";
@@ -13,7 +14,7 @@ const write = (dir: string, files: Record<string, string>): void => {
 };
 
 const git = (cwd: string, ...args: string[]): void => {
-  const r = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync(["git", ...args], { cwd, env: gitEnv(), stdout: "pipe", stderr: "pipe" });
   if (r.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed`);
 };
 
@@ -129,7 +130,7 @@ export function commandLine(command: string, bash: string | null = findBash() ??
 /** A shell command in the workspace; `ok` when it exits with 0. */
 export async function shell(dir: string, command: string, env: Record<string, string> = {}, timeoutMs = 120_000): Promise<CheckResult> {
   const started = Date.now();
-  const p = Bun.spawn(commandLine(command), { cwd: dir, env: { ...process.env, ...env }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
+  const p = Bun.spawn(commandLine(command), { cwd: dir, env: { ...gitEnv(), ...env }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
   const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
   return { ok: (await p.exited) === 0, output: `${out}${err}`.slice(-4000), ms: Date.now() - started };
 }

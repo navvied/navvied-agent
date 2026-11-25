@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { gitEnv } from "../src/git-env.ts";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -136,7 +137,7 @@ describe("helpers that need the person", () => {
 describe("a helper in a copy of the project", () => {
   const repo = (): string => {
     const dir = mkdtempSync(join(tmpdir(), "navvied-iso-"));
-    const git = (...a: string[]): void => { execFileSync("git", a, { cwd: dir, stdio: "ignore" }); };
+    const git = (...a: string[]): void => { execFileSync("git", a, { cwd: dir, env: gitEnv(), stdio: "ignore" }); };
     git("init", "-q"); git("config", "user.email", "t@example.com"); git("config", "user.name", "t");
     writeFileSync(join(dir, "a.txt"), "one\n"); git("add", "."); git("commit", "-qm", "first");
     return dir;
@@ -147,7 +148,7 @@ describe("a helper in a copy of the project", () => {
     const dir = repo();
     mkdirSync(join(dir, "sub"));
     writeFileSync(join(dir, "sub", "s.txt"), "x\n");
-    execFileSync("git", ["add", "."], { cwd: dir }); execFileSync("git", ["commit", "-qm", "sub"], { cwd: dir });
+    execFileSync("git", ["add", "."], { cwd: dir, env: gitEnv() }); execFileSync("git", ["commit", "-qm", "sub"], { cwd: dir, env: gitEnv() });
     const link = join(mkdtempSync(join(tmpdir(), "navvied-link-")), "project");
     symlinkSync(dir, link, "dir");
     const copy = await isolate(join(link, "sub"));
@@ -170,7 +171,7 @@ describe("a helper in a copy of the project", () => {
     expect(where).toBeDefined();
     expect(readFileSync(join(where!, "made.txt"), "utf8")).toBe("hello\n");
     expect(existsSync(join(dir, "made.txt"))).toBe(false);
-    execFileSync("git", ["worktree", "remove", "--force", where!], { cwd: dir });
+    execFileSync("git", ["worktree", "remove", "--force", where!], { cwd: dir, env: gitEnv() });
     r.cleanup();
   });
 
@@ -179,7 +180,7 @@ describe("a helper in a copy of the project", () => {
     const r = rig((req) => (isMain(req) ? (tools(req).length ? { text: "ok" } : { calls: [{ name: "Agent", args: { prompt: "look", agent: "writer" } }] }) : { text: "nothing to change" }), { agents: [isolated], cwd: dir });
     await r.turn(prompt("go", { mode: "auto" }));
     expect(tools(r.provider.requests.at(-1)!)[0]).toBe("nothing to change");
-    expect(execFileSync("git", ["worktree", "list"], { cwd: dir }).toString().trim().split("\n")).toHaveLength(1);
+    expect(execFileSync("git", ["worktree", "list"], { cwd: dir, env: gitEnv() }).toString().trim().split("\n")).toHaveLength(1);
     r.cleanup();
   });
 

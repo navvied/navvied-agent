@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { gitEnv } from "../../engine/src/git-env.ts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseEvent } from "@navvied/protocol";
@@ -237,7 +238,7 @@ describe("an external command-line agent as the model", () => {
 });
 
 describe("checkpoints", () => {
-  const sh = (cwd: string, ...args: string[]) => { const r = Bun.spawnSync(args, { cwd }); if (r.exitCode !== 0) throw new Error(args.join(" ")); };
+  const sh = (cwd: string, ...args: string[]) => { const r = Bun.spawnSync(args, { cwd, env: gitEnv() }); if (r.exitCode !== 0) throw new Error(args.join(" ")); };
   function repo(work: string) {
     sh(work, "git", "init", "-q"); sh(work, "git", "config", "user.email", "t@t.invalid"); sh(work, "git", "config", "user.name", "t");
     writeFileSync(join(work, "a.txt"), "original\n"); sh(work, "git", "add", "-A"); sh(work, "git", "commit", "-qm", "init");

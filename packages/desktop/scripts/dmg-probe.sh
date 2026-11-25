@@ -72,13 +72,13 @@ attempt() {
       echo "$way fail $((SECONDS - started))" >>"$results"
       if [ ! -e "$work/explained-$way" ]; then
         : >"$work/explained-$way"
-        tail -n 5 "$log" >"$work/$way-tail.txt"
+        tail -n 24 "$log" >"$work/$way-tail.txt"
         annotate warning "disk image probe: the first failure of \"$way\"" "$work/$way-tail.txt"
         bash "$here/dmg-diagnose.sh" "$log"
       fi
     fi
     cleanup
-    rm -rf "$stage" "$image" "$work/h-$way-$i.dmg"
+    rm -rf "$stage" "$image" "$work/clean-$way-$i" "$work/h-$way-$i.dmg"
     i=$((i + 1))
   done
 }
@@ -89,13 +89,33 @@ attempt create plain 'hdiutil create -srcfolder "$stage" -volname probe -fs HFS+
 attempt create-quiet quiet 'hdiutil create -srcfolder "$stage" -volname probe -fs HFS+ -fsargs "-c c=64,a=16,e=16" -format UDRW "$image"'
 # The way the installer now makes it: scripts/make-dmg.sh, from the app alone, never attaching an image.
 attempt script plain 'bash "$here/make-dmg.sh" "$stage/navvied.app" "$image" navvied'
-# That finished download opened the way a person opens it: attached read-only, its contents read, detached; and the app inside still
-# passes the system's own signature check, keeps its link and its extended attribute.
-attempt script-opened plain 'bash "$here/make-dmg.sh" "$stage/navvied.app" "$image" navvied && m=$(mktemp -d "$work/mount.XXXXXX") && hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$m" "$image" >/dev/null && need test -L "$m/Applications" && need cmp "$m/navvied.app/Contents/Resources/program" "$work/parts/program" && need codesign --verify --deep --strict "$m/navvied.app" && need test "$(readlink "$m/navvied.app/Contents/Resources/rest-link")" = rest && need test "$(xattr -p com.navvied.probe "$m/navvied.app/Contents/Resources/rest")" = kept && hdiutil detach "$m"'
+# Opens an image the way a person does and checks the app inside against the one it was made from ($1): the system's own signature
+# check on both (the source is the control), the link, the content, and the extended attribute when $3 says it must survive.
+opened() {
+  src=$1; img=$2; m=$(mktemp -d "$work/mount.XXXXXX"); bad=0
+  need codesign --verify --deep --strict "$src" || return 1
+  hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$m" "$img" >/dev/null || return 1
+  need test -L "$m/Applications" && need cmp "$m/navvied.app/Contents/Resources/program" "$src/Contents/Resources/program" \
+    && need codesign --verify --deep --strict "$m/navvied.app" && need test "$(readlink "$m/navvied.app/Contents/Resources/rest-link")" = rest \
+    && { [ "${3:-}" != xattr ] || need test "$(xattr -p com.navvied.probe "$m/navvied.app/Contents/Resources/rest")" = kept; } || bad=1
+  if [ $bad = 1 ]; then
+    { echo "--- attributes of the app it was made from"; xattr -lr "$src" | grep -E 'com\.apple' | head -6
+      echo "--- attributes of the app in the image"; xattr -lr "$m/navvied.app" | grep -E 'com\.apple' | head -6; } >&2
+  fi
+  hdiutil detach "$m" >/dev/null || bad=1
+  return $bad
+}
+
+# The old way, then opened: tells whether what is lost is lost by every way of making an image or only by the new one.
+attempt create-opened plain 'hdiutil create -srcfolder "$stage" -volname probe -fs HFS+ -fsargs "-c c=64,a=16,e=16" -format UDRW "$image" && opened "$stage/navvied.app" "$image" xattr'
+# That finished download opened the way a person opens it.
+attempt script-opened plain 'bash "$here/make-dmg.sh" "$stage/navvied.app" "$image" navvied && opened "$stage/navvied.app" "$image" xattr'
+# The app copied without resource forks, extended attributes and quarantine marks before the image is made.
+attempt script-clean-opened plain 'c="$work/clean-$way-$i"; mkdir "$c" && ditto --norsrc --noextattr --noqtn "$stage/navvied.app" "$c/navvied.app" && bash "$here/make-dmg.sh" "$c/navvied.app" "$image" navvied && opened "$c/navvied.app" "$image"'
 
 {
   echo "way             images  failed  slowest (s)"
-  for way in create create-quiet script script-opened; do
+  for way in create create-quiet script create-opened script-opened script-clean-opened; do
     awk -v w="$way" '$1 == w {n++; if ($2 == "fail") f++; if ($3 > s) s = $3} END {printf "%-15s %6d  %6d  %11d\n", w, n, f, s}' "$results"
   done
 } >"$work/summary.txt"

@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { gitEnv } from "../src/git-env.ts";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -179,10 +180,10 @@ describe("files and paths", () => {
     const d = tmp(), outside = tmp();
     writeFileSync(join(outside, "secret.txt"), "outside");
     mkdirSync(join(d, ".git"), { recursive: true });
-    for (const args of [["init", "-q"], ["config", "user.email", "t@t.invalid"], ["config", "user.name", "t"]]) Bun.spawnSync(["git", ...args], { cwd: d });
+    for (const args of [["init", "-q"], ["config", "user.email", "t@t.invalid"], ["config", "user.name", "t"]]) Bun.spawnSync(["git", ...args], { env: gitEnv(), cwd: d });
     writeFileSync(join(d, "a.txt"), "one\n");
-    Bun.spawnSync(["git", "add", "-A"], { cwd: d });
-    Bun.spawnSync(["git", "commit", "-qm", "init"], { cwd: d });
+    Bun.spawnSync(["git", "add", "-A"], { env: gitEnv(), cwd: d });
+    Bun.spawnSync(["git", "commit", "-qm", "init"], { env: gitEnv(), cwd: d });
     const c = new Checkpoints({ dir: join(tmp(), "cp"), session: "sym" });
     const cp = c.begin("x", [d]);
     Bun.spawnSync(["ln", "-s", join(outside, "secret.txt"), join(d, "link")]);
