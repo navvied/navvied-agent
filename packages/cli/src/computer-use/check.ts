@@ -51,6 +51,7 @@ try {
   };
   try { const r = await started.client.call("list_apps", {}, 30_000); say("list_apps", `${r.text.split("\n")[0] ?? ""} (first record: ${JSON.stringify((r.structured as { apps?: unknown[] } | undefined)?.apps?.[0] ?? null)})`); } catch (e) { say("list_apps", `no answer: ${e instanceof Error ? e.message : e}`); }
   const windows = await ask("list_windows", {});
+await ask("health_report", {});
   // `--app <name>`: the shape of what the driver reads from one open window (looking only, no input).
   const needle = process.argv.includes("--app") ? process.argv[process.argv.indexOf("--app") + 1] : undefined;
   if (needle) {

@@ -42,8 +42,8 @@ if (first.verdict === "delivered") {
       ok = (again.tree ?? "").includes("pressed");
       say("check", ok ? "the label now says pressed" : "the label did not change");
     }
-  } else if (platform === "win32") {
-    const edit = lines.find((l) => /(edit|document|text)/i.test(l));
+  } else if (platform === "win32" || platform === "darwin") {
+    const edit = lines.find((l) => /(edit|document|text)/i.test(l) && !/ruler|button/i.test(l));
     if (!edit) { say("type", "no text area was in the capture"); ok = false; }
     else {
       await step("type", { action: "type", target: Number(edit.split(" ")[0]), text: "navvied was here" });
@@ -55,4 +55,4 @@ if (first.verdict === "delivered") {
 } else if (platform === "linux") ok = false;
 say("result", ok ? "driven" : "not driven");
 await use.close();
-process.exit(ok || platform === "darwin" ? 0 : 1);
+process.exit(ok ? 0 : 1);

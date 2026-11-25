@@ -64,6 +64,51 @@ describe("looking", () => {
   });
 });
 
+describe("the person stops the turn", () => {
+  test("a stopped turn sends nothing more to the driver, and a wait in progress ends at once", async () => {
+    const { adapter, calls } = make();
+    const stopped = new AbortController(); stopped.abort();
+    expect(await adapter.call({ action: "capture", app: "Notes" }, stopped.signal)).toMatchObject({ verdict: "refused", code: "blocked_by_policy" });
+    expect(calls.length).toBe(0);
+    const c = new AbortController(); const started = Date.now();
+    const waiting = adapter.call({ action: "wait", seconds: 30 }, c.signal);
+    setTimeout(() => c.abort(), 20);
+    await waiting;
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+});
+
+describe("a turn stopped in the middle of a step", () => {
+  test("a driver call that is in flight is let go at once and is unverified, never replayed", async () => {
+    let calls = 0;
+    const { adapter } = make("bypass", { click: () => { calls++; return new Promise<CallResult>(() => undefined); } });
+    await adapter.call({ action: "capture", app: "Notes" });
+    const c = new AbortController();
+    const step = adapter.call({ action: "click", target: 1 }, c.signal);
+    setTimeout(() => c.abort(), 20);
+    expect(await step).toMatchObject({ verdict: "unverified", next: expect.stringContaining("cut off") });
+    expect(calls).toBe(1);
+  });
+  test("a long text is typed in pieces and the typing stops before the next piece when the turn is stopped", async () => {
+    const c = new AbortController();
+    const typed: string[] = [];
+    const { adapter } = make("bypass", { type_text: (a) => { typed.push(String(a.text)); if (typed.length === 2) c.abort(); return ok({ effect: "confirmed" }); } });
+    await adapter.call({ action: "capture", app: "Notes" });
+    const r = await adapter.call({ action: "type", target: 2, text: "x".repeat(500) }, c.signal);
+    expect(typed.map((t) => t.length)).toEqual([120, 120]);
+    expect(r).toMatchObject({ verdict: "unverified", next: expect.stringContaining("cut off") });
+  });
+  test("a short text is one call and a whole long one arrives complete when nobody stops it", async () => {
+    const typed: string[] = [];
+    const { adapter } = make("bypass", { type_text: (a) => { typed.push(String(a.text)); return ok({ effect: "confirmed" }); } });
+    await adapter.call({ action: "capture", app: "Notes" });
+    expect((await adapter.call({ action: "type", target: 2, text: "hi" })).verdict).toBe("delivered");
+    expect((await adapter.call({ action: "type", target: 2, text: "y".repeat(300) })).verdict).toBe("delivered");
+    expect(typed.map((t) => t.length)).toEqual([2, 120, 120, 60]);
+    expect((await adapter.call({ action: "type", target: 2, text: "" })).verdict).toBe("delivered");
+  });
+});
+
 describe("the mode of the conversation", () => {
   test("each call tells the helper the conversation's mode, and a mode that changes is obeyed at once", async () => {
     const f = fake(); const holder = { current: "ask" as PermMode };

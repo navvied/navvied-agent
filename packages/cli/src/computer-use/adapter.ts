@@ -27,6 +27,7 @@ interface Element { token: string; frame?: { x: number; y: number; w: number; h:
 
 const NEXT_GONE = (app: string) => `${app} has no open window. Ask the person to open it, then capture again.`;
 const NEXT_UNKNOWN = "The step was sent and could not be confirmed. Capture the app and look before you act again; do not send it twice.";
+const NEXT_CUT = "The step was cut off when the person stopped the turn, and it is not known how far it got. Capture the app and look before you act again.";
 const NEXT_FAILED = "This could not be done. Capture the app again; if it fails again, tell the person.";
 
 const refused = (code: Refusal & ComputerResult["code"], next: string, extra: Partial<ComputerResult> = {}): ComputerResult => ({ verdict: "refused", code: code as NonNullable<ComputerResult["code"]>, next, ...extra });
@@ -40,6 +41,13 @@ export function refusalOf(r: CallResult): { code: NonNullable<ComputerResult["co
   if (/background_unavailable|wm_chord_unavailable|foreground/.test(said) && r.isError) return { code: "background_unavailable" };
   return undefined;
 }
+
+/** A pause that ends the moment the person stops the turn. */
+const pause = (ms: number, signal?: AbortSignal): Promise<void> => new Promise<void>((resolve) => { const t = setTimeout(resolve, ms); signal?.addEventListener("abort", () => { clearTimeout(t); resolve(); }, { once: true }); });
+
+const TYPE_PIECE = 120;
+const CUT = Symbol("cut");
+const cut = (signal: AbortSignal): Promise<typeof CUT> => new Promise((resolve) => { if (signal.aborted) resolve(CUT); else signal.addEventListener("abort", () => resolve(CUT), { once: true }); });
 
 const words = (keys: string): string[] => keys.split(/\s*[+-]\s*/).map((k) => k.trim().toLowerCase()).filter(Boolean);
 
@@ -57,10 +65,11 @@ export class DriverAdapter implements ComputerHelper {
   /** Everything this conversation was allowed or knew of the screen is dropped. */
   forget(): void { this.i.guard.reset(); this.window = undefined; this.elements.clear(); this.halted = false; }
 
-  async call(c: ComputerCall, _signal?: AbortSignal, consent?: ComputerConsent, mode?: PermMode): Promise<ComputerResult> {
+  async call(c: ComputerCall, signal?: AbortSignal, consent?: ComputerConsent, mode?: PermMode): Promise<ComputerResult> {
     const g = this.i.guard;
     if (mode) this.i.mode.current = mode;
     if (this.halted) return refused("human_has_control", "The person has stopped you. Wait until they let you go on.");
+    if (signal?.aborted) return refused("blocked_by_policy", "The person stopped this turn. Do nothing more on the screen.");
     const d = g.decide({ action: c.action, ...(c.app ? { app: c.app } : {}), ...(c.text !== undefined ? { text: c.text } : {}), ...(c.keys ? { keys: c.keys } : {}) });
     if (d.kind === "refuse") return refused(d.code as never, d.next);
     if (d.kind === "ask") {
@@ -74,18 +83,18 @@ export class DriverAdapter implements ComputerHelper {
     const app = c.app?.trim() || this.window?.app;
     this.i.indicator?.(app);
     try {
-      const r = await this.run(c, app, consent);
+      const r = await this.run(c, app, consent, signal);
       g.settle({ action: c.action, ...(app ? { app } : {}), ...(c.text !== undefined ? { text: c.text } : {}), ...(c.keys ? { keys: c.keys } : {}) }, r.verdict === "delivered");
       return r;
     } finally { this.i.indicator?.(undefined); }
   }
 
-  private async run(c: ComputerCall, app: string | undefined, consent?: ComputerConsent): Promise<ComputerResult> {
+  private async run(c: ComputerCall, app: string | undefined, consent?: ComputerConsent, signal?: AbortSignal): Promise<ComputerResult> {
     switch (c.action) {
-      case "wait": { await (this.i.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms))))(clampWait((c.seconds ?? 0.5) * 1000)); return { verdict: "delivered" }; }
+      case "wait": { await (this.i.sleep ?? ((ms) => pause(ms, signal)))(clampWait((c.seconds ?? 0.5) * 1000)); return { verdict: "delivered" }; }
       case "list": return this.list(c.app);
       case "capture": return this.capture(app!, c.mode ?? "ax");
-      default: return this.input(c, app, consent);
+      default: return this.input(c, app, consent, "background", signal);
     }
   }
 
@@ -135,7 +144,7 @@ export class DriverAdapter implements ComputerHelper {
     return x !== undefined && y !== undefined ? { x, y } : undefined;
   }
 
-  private async input(c: ComputerCall, app: string | undefined, consent?: ComputerConsent, delivery: "background" | "foreground" = "background"): Promise<ComputerResult> {
+  private async input(c: ComputerCall, app: string | undefined, consent?: ComputerConsent, delivery: "background" | "foreground" = "background", signal?: AbortSignal): Promise<ComputerResult> {
     const win = this.window;
     if (!win || !app) return refused("input_target_mismatch", "Capture an app first.");
     const base = { pid: win.pid, window_id: win.windowId, delivery_mode: delivery };
@@ -155,14 +164,14 @@ export class DriverAdapter implements ComputerHelper {
         name = "drag"; args = { ...base, from_x: from.x, from_y: from.y, to_x: to.x, to_y: to.y, ...held };
         break;
       }
-      case "type": name = "type_text"; args = { ...base, text: c.text ?? "", ...(element ? { element_token: element.token } : {}) }; break;
+      case "type": return this.typeText(base, element, c.text ?? "", app, signal);
       case "key": name = "hotkey"; args = { ...base, keys: words(c.keys ?? "") }; break;
       case "scroll": name = "scroll"; args = { ...base, direction: c.direction ?? "down", amount: Math.max(1, Math.min(50, c.amount ?? 3)), by: "line", ...(element ? { element_token: element.token } : {}) }; break;
       default: return refused("blocked_by_policy", "This step does not exist.");
     }
-    const r = await this.safe(name, args, true);
+    const r = await this.safe(name, args, true, signal);
     if ("fail" in r) {
-      if (r.fail.code === "background_unavailable" && delivery === "background" && consent && (await consent({ app, about: "foreground" })) !== "no") return this.input(c, app, consent, "foreground");
+      if (r.fail.code === "background_unavailable" && delivery === "background" && consent && (await consent({ app, about: "foreground" })) !== "no") return this.input(c, app, consent, "foreground", signal);
       return r.fail;
     }
     const effect = (r.ok.structured as { effect?: unknown } | undefined)?.effect;
@@ -170,11 +179,27 @@ export class DriverAdapter implements ComputerHelper {
     return { verdict: "delivered", app };
   }
 
+  /** Text goes in pieces, so a person who stops the turn stops the typing at the next piece: what was already typed stays, and the answer says it is not known how far it got. */
+  private async typeText(base: Record<string, unknown>, element: Element | undefined, text: string, app: string, signal?: AbortSignal): Promise<ComputerResult> {
+    for (let at = 0; at === 0 || at < text.length; at += TYPE_PIECE) {
+      if (at > 0 && signal?.aborted) return { verdict: "unverified", next: NEXT_CUT, app };
+      const r = await this.safe("type_text", { ...base, text: text.slice(at, at + TYPE_PIECE), ...(element ? { element_token: element.token } : {}) }, true, signal);
+      if ("fail" in r) return r.fail;
+      const effect = (r.ok.structured as { effect?: unknown } | undefined)?.effect;
+      if (typeof effect === "string" && /unconfirmed|unknown|not_confirmed/.test(effect)) return { verdict: "unverified", next: NEXT_UNKNOWN, app };
+    }
+    return { verdict: "delivered", app };
+  }
+
   /** One call of the driver. A failure the driver names becomes a refusal; one that leaves it unknown whether the step happened becomes `unverified`, for input, and is never repeated. */
-  private async safe(name: string, args: Record<string, unknown>, input = false): Promise<{ ok: CallResult } | { fail: ComputerResult }> {
+  private async safe(name: string, args: Record<string, unknown>, input = false, signal?: AbortSignal): Promise<{ ok: CallResult } | { fail: ComputerResult }> {
     if (this.halted) return { fail: refused("human_has_control", "The person has stopped you. Wait until they let you go on.") };
     try {
-      const r = await this.i.driver.call(name, args, 30_000);
+      const sent = this.i.driver.call(name, args, 30_000);
+      sent.catch(() => undefined);
+      // A stopped turn does not wait for the driver: the call is let go, and whether it happened is not known.
+      const r = signal ? await Promise.race([sent, cut(signal)]) : await sent;
+      if (r === CUT) return { fail: input ? { verdict: "unverified", next: NEXT_CUT } : refused("blocked_by_policy", "The person stopped this turn. Do nothing more on the screen.") };
       if (!r.isError) return { ok: r };
       const known = refusalOf(r);
       if (known) return { fail: refused(known.code, known.code === "permission_missing" ? `The person must allow ${known.which ?? "it"} in the system settings. Tell them and stop.` : refusalNext(known.code), known.which ? { which: known.which } : {}) };
