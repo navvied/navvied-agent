@@ -59,6 +59,12 @@ describe("what the driver is given", () => {
     expect(env).toEqual({ PATH: "/bin", HOME: "/h", DISPLAY: ":0", CUA_DRIVER_EMBEDDED: "1", CUA_DRIVER_PERMISSION_MODE: "standard", CUA_DRIVER_HOST_BUNDLE_ID: PIN.bundleId });
     expect(JSON.stringify(env)).not.toMatch(/unrestricted/i);
   });
+  test("on Linux it is given the session bus and the runtime folder: without them it looks for programs on another bus and sees none of their controls", () => {
+    const env = driverEnv({ DISPLAY: ":0", DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1/bus", XDG_RUNTIME_DIR: "/run/user/1", PROVIDER_API_KEY: "k" }, PIN);
+    expect(env.DBUS_SESSION_BUS_ADDRESS).toBe("unix:path=/run/user/1/bus");
+    expect(env.XDG_RUNTIME_DIR).toBe("/run/user/1");
+    expect(env.PROVIDER_API_KEY).toBeUndefined();
+  });
   test("a driver missing a needed tool or property is not the pinned one", () => {
     expect(missingFrom(PIN, [])).toEqual(["click", "type_text"]);
     expect(missingFrom(PIN, [{ name: "click", inputSchema: { properties: { pid: {} } } }, { name: "type_text", inputSchema: { properties: { pid: {}, text: {}, delivery_mode: {} } } }])).toEqual(["click.delivery_mode"]);

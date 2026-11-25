@@ -16,8 +16,8 @@ export interface Child {
 export type Spawn = (cmd: string, args: string[], env: Record<string, string>) => Child;
 export type Probe = (cmd: string, args: string[], env: Record<string, string>) => Promise<boolean>;
 
-/** What a driver may see of this program's environment: where programs are and who the person is, never a key or a token. */
-const KEEP = ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP", "DISPLAY", "XAUTHORITY", "SYSTEMROOT", "WINDIR", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "COMSPEC", "PATHEXT"];
+/** What a driver may see of this program's environment: where programs are, who the person is, and (on Linux) which screen and which session bus the programs it drives are on, never a key or a token. */
+const KEEP = ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP", "DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "SYSTEMROOT", "WINDIR", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "COMSPEC", "PATHEXT"];
 
 export function driverEnv(base: Record<string, string | undefined>, pin: Pin): Record<string, string> {
   const env: Record<string, string> = {};
