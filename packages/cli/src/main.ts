@@ -18,9 +18,14 @@ import { a2aCommand, serveA2aCommand } from "./commands/a2a.ts";
 import { HELP, VERSION } from "./help.ts";
 import { configPath, loadConfig } from "./config.ts";
 import { processIO, type IO } from "./io.ts";
+import { runSandboxHelper, useSandboxHelper } from "@navvied/engine";
+import { selfArgv } from "./create.ts";
 import { resolveTheme, setTheme } from "./theme.ts";
 
 export async function main(argv: readonly string[], io: IO = processIO()): Promise<number> {
+  // Not a command a person types: how a command is confined on Windows (the engine starts this program again for it).
+  if (argv[0] === "sandbox-run") return runSandboxHelper(argv.slice(1));
+  if (process.platform === "win32") useSandboxHelper(selfArgv());
   const parsed = parseArgs(argv);
   if (!parsed.ok) { io.stderr.write(`error: ${parsed.error}\n`); return EXIT.usage; }
   const { command, prompt, options } = parsed;

@@ -1,0 +1,17 @@
+{
+  "id": "edit-aligned-spaces",
+  "title": "Edit lines the file aligns with extra spaces",
+  "kind": "fix",
+  "level": 1,
+  "lang": "ts",
+  "requires": [
+    "bun"
+  ],
+  "prompt": "In src/sizes.ts set the small size to 12 and keep everything else. Do not change the tests.",
+  "check": "bun test",
+  "protect": [
+    "tests/**"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 300
+}

@@ -43,10 +43,10 @@ export function isTimeZone(zone: string): boolean {
   try { new Intl.DateTimeFormat("en-US", { timeZone: zone }); return true; } catch { return false; }
 }
 
-interface Wall { year: number; month: number; day: number; hour: number; minute: number; dow: number }
+export interface Wall { year: number; month: number; day: number; hour: number; minute: number; dow: number }
 
 /** The wall clock of an instant: in `zone`, or in the runtime's own time when there is none. */
-function wall(t: number, zone?: string): Wall {
+export function wall(t: number, zone?: string): Wall {
   if (!zone) { const d = new Date(t); return { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(), hour: d.getHours(), minute: d.getMinutes(), dow: d.getDay() }; }
   let f = formats.get(zone);
   if (!f) { f = new Intl.DateTimeFormat("en-US", { timeZone: zone, hourCycle: "h23", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", weekday: "short" }); formats.set(zone, f); }

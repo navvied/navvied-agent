@@ -1,0 +1,18 @@
+{
+  "id": "sandbox-git-commit",
+  "title": "Commit the work in a git repository (git writes only inside the project)",
+  "kind": "terminal",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "git"
+  ],
+  "prompt": "This folder is a git repository with changes that are not committed. Commit all of them in one commit with the message \"add notes and config\".",
+  "check": "test \"$(git log --format=%s | head -1)\" = \"add notes and config\" && test \"$(git log --oneline | wc -l | tr -d ' ')\" = 2 && test \"$(git show --name-only --format= HEAD | grep -c -e notes.txt -e config.ini)\" = 2",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 600,
+  "setup": "git config user.email bench@example.com && git config user.name bench && printf 'notes\\n' > notes.txt && printf 'a=1\\n' > config.ini"
+}

@@ -1,0 +1,24 @@
+{
+  "id": "browser-drag",
+  "title": "Drag a card to where it belongs",
+  "kind": "web",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun",
+    "browser"
+  ],
+  "prompt": "Open http://127.0.0.1:{port}/board in the browser. Drag the task card onto Done, and write the board code the page then shows into ANSWER.txt",
+  "check": "bun \"$BENCH_FIXTURES/web-check.ts\" browser-drag",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 24,
+  "timeoutSeconds": 600,
+  "setup": "bun \"$BENCH_FIXTURES/start-web.ts\"",
+  "teardown": "bun \"$BENCH_FIXTURES/stop-web.ts\"",
+  "env": {
+    "NAVVIED_ALLOW_PRIVATE_NETWORK": "1"
+  }
+}

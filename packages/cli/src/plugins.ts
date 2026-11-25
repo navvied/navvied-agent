@@ -50,20 +50,19 @@ export const projectSkillDirs = (cwd: string): string[] => projectDirs(cwd).flat
 
 /**
  * Which skills that come with a project the person has accepted. A skill is accepted as it is: the fingerprint of its text is
- * what is kept, so a changed text asks again. With `confirm` off every project skill counts as accepted (and nothing is asked).
+ * what is kept, so a changed text asks again. A project is never trusted unasked, the same as for a plugin.
  */
 export class SkillTrust {
-  constructor(private readonly file: string, readonly confirm: boolean) {}
+  constructor(private readonly file: string) {}
   #read(): { allowed: string[]; denied: string[] } {
     try { const raw = JSON.parse(readFileSync(this.file, "utf8")) as { allowed?: unknown; denied?: unknown }; const list = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []); return { allowed: list(raw.allowed), denied: list(raw.denied) }; } catch { return { allowed: [], denied: [] }; }
   }
   readonly key = (s: Pick<SkillInfo, "name" | "hash">): string => `${s.name}:${s.hash}`;
-  accepted = (s: Pick<SkillInfo, "name" | "hash">): boolean => !this.confirm || this.#read().allowed.includes(this.key(s));
-  /** Whether the person said yes to exactly this, whatever `confirm` says: for what runs commands (a plugin), a project is never trusted unasked. */
+  /** Whether the person said yes to exactly this. */
   said = (s: Pick<SkillInfo, "name" | "hash">): boolean => this.#read().allowed.includes(this.key(s));
   refused = (s: Pick<SkillInfo, "name" | "hash">): boolean => this.#read().denied.includes(this.key(s));
   /** Skills waiting for an answer: not accepted and not refused. */
-  waiting(skills: readonly SkillInfo[]): SkillInfo[] { const { denied } = this.#read(); return skills.filter((s) => s.source === "project" && !this.accepted(s) && !denied.includes(this.key(s))); }
+  waiting(skills: readonly SkillInfo[]): SkillInfo[] { const { denied } = this.#read(); return skills.filter((s) => s.source === "project" && !this.said(s) && !denied.includes(this.key(s))); }
   answer(s: Pick<SkillInfo, "name" | "hash">, allow: boolean): void {
     const now = this.#read(), k = this.key(s);
     const next = { allowed: now.allowed.filter((x) => x !== k), denied: now.denied.filter((x) => x !== k) };
@@ -77,8 +76,8 @@ export class SkillTrust {
   }
 }
 
-/** The skills in effect, less the ones switched off (and, when the person asked to be asked, the project skills not yet accepted). */
-export const activeSkills = (state: PluginState, dirs: Parameters<typeof loadSkills>[0], trust?: SkillTrust): SkillInfo[] => { const off = state.disabled(); return loadSkills({ ...dirs, ...(trust ? { trusted: trust.accepted } : {}) }).filter((s) => !off.has(skillId(s.name))); };
+/** The skills in effect, less the ones switched off (and the project skills not yet accepted). */
+export const activeSkills = (state: PluginState, dirs: Parameters<typeof loadSkills>[0], trust: SkillTrust): SkillInfo[] => { const off = state.disabled(); return loadSkills({ ...dirs, trusted: trust.said }).filter((s) => !off.has(skillId(s.name))); };
 
 /** Hooks less the ones switched off, keeping the others in their order. */
 export function activeHooks(state: PluginState, hooks: HookConfig | undefined): HookConfig | undefined {

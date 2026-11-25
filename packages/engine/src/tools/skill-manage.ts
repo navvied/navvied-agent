@@ -26,7 +26,7 @@ export const skillManage: Tool = {
   async run(a, ctx) {
     const book = ctx.skillBook;
     if (!book) return "Error: skills cannot be changed here.";
-    const known = ctx.skills?.() ?? [];
+    const known = (ctx.skills?.() ?? []).filter((s) => s.trusted);
     const action = str(a.action), name = str(a.name).trim();
     if (!["list", "view", "create", "patch", "delete"].includes(action)) return 'Error: action is one of list, view, create, patch, delete. Example: {"action":"list"}';
     if (action === "list") return known.length ? known.map((s) => `- ${s.name} (${s.source}): ${s.description.slice(0, 100)}`).join("\n") : "There are no skills yet.";

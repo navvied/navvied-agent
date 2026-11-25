@@ -81,7 +81,10 @@ export const grep: Tool = {
       const found = await searchHere(root, directory, search, ctx.signal);
       if (typeof found === "string") return found;
       ({ lines, partial } = found);
-      note = "\n[searched without ripgrep: patterns follow JavaScript's rules, which differ a little from ripgrep's]";
+      // Said once per conversation: the model does not need the same sentence after every search.
+      const told = ctx.keep?.("grep-without-ripgrep", () => ({ said: false, close() {} }));
+      if (!told?.said) note = "\n[searched without ripgrep: patterns follow JavaScript's rules, which differ a little from ripgrep's]";
+      if (told) told.said = true;
     } else {
       // The search runs in the folder searched, on ".", so each line starts with a short path of its own: a long temporary or project path in every line
       // would fill the output the search is allowed (400,000 characters) with nothing but paths, and the count of what was left out would be wrong.

@@ -179,7 +179,7 @@ describe("the engine runs a $ line for a model that cannot call tools", () => {
     r.cleanup();
     const native = rig((req) => (req.messages.some((m) => m.role === "tool") ? { text: "ok" } : { text: "Trying:\n$ echo no", calls: [{ name: "Bash", args: { command: "echo yes" } }] }));
     await native.turn(prompt("go"));
-    expect(native.of("tool").filter((e) => e.status === "done").map((e) => e.output)).toEqual(["yes"]);
+    expect(native.of("tool").filter((e) => e.status === "done").map((e) => e.output?.split("\n")[0])).toEqual(["yes"]);
     native.cleanup();
   });
 });

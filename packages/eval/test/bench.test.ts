@@ -5,10 +5,13 @@ import { join } from "node:path";
 import { readFileSync, writeFileSync } from "node:fs";
 import { main } from "../src/main.ts";
 import { loadTasks, parseAdapter, runTask, startMeter, startMock, type Behaviour, type Meter, type Mock, type Task } from "../src/index.ts";
+import { hasSeveralParts } from "../../engine/src/tools/todo.ts";
 import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 /** The system text names the folder the task runs in, which lies under this computer's temporary folder: a long one (macOS) is not a heavier prompt. */
 const PATH_ROOM = tmpdir().length;
+/** A request that states a lasting fact ("Do not change the tests") is told, on that request only, which note is being saved. */
+const NOTED = 120;
 
 const TASKS = join(import.meta.dir, "../tasks");
 const CLI = join(import.meta.dir, "../../cli/src/main.ts");
@@ -22,7 +25,7 @@ beforeAll(() => { mock = startMock(tasks, () => behaviour); meter = startMeter(m
 afterAll(hook("bench removes what it made", async () => { meter.stop(); mock.stop(); await removeTree(home); }), HOOK_MS);
 
 const world = { HOME: home, XDG_STATE_HOME: home, XDG_CONFIG_HOME: home, NAVVIED_MODEL: "scripted", NAVVIED_WINDOW: "100000", NAVVIED_RETRIES: "0" };
-const run = (task: Task, how: Behaviour) => { behaviour = how; mock.requests.length = 0; return runTask(task, { command: ["bun", CLI], label: `mock:${how}`, env: world, meter, agentEnv: (base) => ({ NAVVIED_BASE_URL: base }) }); };
+const run = (task: Task, how: Behaviour, env: Record<string, string> = world) => { behaviour = how; mock.requests.length = 0; return runTask(task, { command: ["bun", CLI], label: `mock:${how}`, env, meter, agentEnv: (base) => ({ NAVVIED_BASE_URL: base }) }); };
 /** What still runs by this name once the system has had a moment to remove what was killed (it is waited for, not guessed at). */
 async function gone(name: string): Promise<string> {
   let left = "";
@@ -31,6 +34,10 @@ async function gone(name: string): Promise<string> {
 }
 /** A model that is not small is always offered Remember when notes can be kept: its text and the line that names it (a small model is not offered it, and its budget in engine/test/small-profile.test.ts is unchanged). */
 const REMEMBER_TOOL = 650;
+/** Once earlier conversations exist (every task of the loop below leaves one) a model that is not small is also offered Recall: one more tool and its text. */
+const RECALL_TOOL = 450;
+/** A request with several parts is offered the task list from the first step: its text and the line that names it, and one tool. */
+const TODO_TOOL = 450;
 const pick = (id: string): Task => tasks.find((t) => t.id === id)!;
 
 describe("every task can be solved by an agent run, not only by the validator", () => {
@@ -52,8 +59,9 @@ describe("every task can be solved by an agent run, not only by the validator", 
       const peers = task.a2a ? 1 : 0;
       // A task about timing also offers the scheduling tool (about 670 characters).
       const timed = task.id.startsWith("schedule-") ? 700 : 0;
-      expect(r.prompt!.systemChars + r.prompt!.toolChars, task.id).toBeLessThanOrEqual((task.id === "web-script-page" || task.id.startsWith("browser-") ? 5800 : skills ? 4900 : 4600) + REMEMBER_TOOL + PATH_ROOM + connected * 250 + timed + screen + peers * 400);
-      expect(r.prompt!.tools, task.id).toBeLessThanOrEqual((web ? 10 : 9) + 1 + connected + peers);
+      const listed = hasSeveralParts(task.prompt) ? 1 : 0;
+      expect(r.prompt!.systemChars + r.prompt!.toolChars, task.id).toBeLessThanOrEqual(listed * TODO_TOOL + (task.id === "web-script-page" || task.id.startsWith("browser-") ? 6050 : skills ? 4900 : 4600) + REMEMBER_TOOL + RECALL_TOOL + PATH_ROOM + connected * 250 + timed + screen + peers * 400);
+      expect(r.prompt!.tools, task.id).toBeLessThanOrEqual((web ? 10 : 9) + 2 + connected + peers + listed);
     }
   }, 240_000);
 });
@@ -80,9 +88,11 @@ describe("what is measured per run", () => {
 
 describe("how heavy the first request is", () => {
   test("the system prompt and the tool definitions together are at most 4,000 characters plus the Remember tool, and at most nine tools are offered (the six of the work, the helper tool and the question tool; a long request adds the task list)", async () => {
-    const r = await run(pick("fix-off-by-one"), "oracle");
+    // A computer with no earlier conversations: Recall is not offered yet.
+    const fresh = join(home, "fresh");
+    const r = await run(pick("fix-off-by-one"), "oracle", { ...world, HOME: fresh, XDG_STATE_HOME: fresh, XDG_CONFIG_HOME: fresh });
     expect(r.prompt!.tools).toBeLessThanOrEqual(9);
-    expect(r.prompt!.systemChars + r.prompt!.toolChars).toBeLessThanOrEqual(4000 + REMEMBER_TOOL + PATH_ROOM);
+    expect(r.prompt!.systemChars + r.prompt!.toolChars).toBeLessThanOrEqual(4000 + REMEMBER_TOOL + PATH_ROOM + NOTED);
   }, 60_000);
 });
 

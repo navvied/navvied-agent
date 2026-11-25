@@ -48,11 +48,29 @@ export interface Answer { optionId: string; input?: string; pattern?: string }
 
 type Row = { choice: Choice } & ({ option: Approval["options"][number] } | { pattern: string });
 
+/** The consent to use one application on the screen, in the words of the page: the question, one line of why, and what each answer means. */
+export function screenRequest(screen: NonNullable<Approval["screen"]>): { title: string; body: string; labels: { once: string; always?: string; no: string } } {
+  const app = screen.app;
+  if (screen.about === "foreground") return { title: `Let navvied bring ${app} to the front?`, body: `${app} is hidden. To work in it, navvied has to show it on top of what you are doing.`, labels: { once: "Allow once", no: "Do not allow" } };
+  if (screen.about === "input") return { title: `Let navvied type and click in ${app}?`, body: `It will use the keyboard and the mouse in ${app} only.`, labels: { once: "Allow for this task", always: `Always allow ${app}`, no: "Do not allow" } };
+  return { title: `Let navvied use ${app}?`, body: `It wants to look at the window of ${app}.`, labels: { once: "Allow for this task", always: `Always allow ${app}`, no: "Do not allow" } };
+}
+
+/** The question about one application on the screen: the options are the ones the engine offers, with the page's labels. */
+async function askScreen(io: IO, e: Approval & { screen: NonNullable<Approval["screen"]> }, deny: Answer): Promise<Answer> {
+  const words = screenRequest(e.screen);
+  const rows = e.options.map((o) => ({ option: o, label: o.kind === "reject_once" || o.kind === "reject_always" ? words.labels.no : o.kind === "allow_always" ? (words.labels.always ?? words.labels.once) : words.labels.once }));
+  const answer = await io.choose?.(words.title, rows.map((r) => ({ label: r.label })), 0, { heading: [paint(io.color, "cyan", paint(io.color, "bold", "Computer Use")), words.body] });
+  const picked = typeof answer === "number" ? rows[answer] : undefined;
+  return picked ? { optionId: picked.option.optionId } : deny;
+}
+
 /** Asks the person, with arrow keys, whether the agent may go ahead. Escape, or any way out, means no. A command can be changed first, where there is a way to type.
  * For a plain command (nothing that cannot be undone), a pattern taken from its own start can be remembered for next time, one row per part of a combined command. */
 export async function askApproval(io: IO, e: Approval, asked: Asked, cwd: string, width: number): Promise<Answer> {
   const deny = { optionId: e.options.find((o) => o.kind === "reject_once" || o.kind === "reject_always")?.optionId ?? "deny" };
   if (!io.choose) return deny;
+  if (e.screen) return askScreen(io, e as Approval & { screen: NonNullable<Approval["screen"]> }, deny);
   const request = describeRequest(asked, e.title, cwd, io.color, width);
   const shown = e.options.filter((o) => !o.editable || io.text);
   const heading = [paint(io.color, "cyan", paint(io.color, "bold", request.heading)), ...request.lines];

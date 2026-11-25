@@ -96,14 +96,19 @@ function convert(got: Got): { title: string; body: string } | string {
   return { title: page.title, body };
 }
 
-/** A part of the page that ends where a line or a paragraph does. */
+/**
+ * A part of the page that ends where a line or a paragraph does. The rest of the page is divided evenly into as many parts as the budget
+ * needs, so no part is a few lines that cost a whole call; the next call divides what is left the same way and gets the same size.
+ */
 function slice(page: Page, offset: number, budget: number): string {
   const total = page.text.length;
   if (offset >= total && total > 0) return `Error: offset ${offset} is past the end: the page has ${total} characters.`;
-  let end = Math.min(total, offset + budget);
+  const left = total - offset;
+  const size = Math.ceil(left / Math.max(1, Math.ceil(left / budget)));
+  let end = Math.min(total, offset + size);
   if (end < total) {
     const edge = Math.max(page.text.lastIndexOf("\n\n", end), page.text.lastIndexOf("\n", end));
-    if (edge > offset + budget * 0.6) end = edge;
+    if (edge > offset + size * 0.6) end = edge;
   }
   const head = `Page ${page.url}${page.title ? ` "${page.title}"` : ""}`;
   const more = end < total ? `\n[characters ${offset}–${end} of ${total}; the rest: ${call("WebFetch", { url: page.url, offset: end })}]` : "";

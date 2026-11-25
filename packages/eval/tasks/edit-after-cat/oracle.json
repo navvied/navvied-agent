@@ -1,0 +1,16 @@
+[
+  {
+    "tool": "Bash",
+    "args": {
+      "command": "cat src/limits.ts"
+    }
+  },
+  {
+    "tool": "Edit",
+    "args": {
+      "file_path": "src/limits.ts",
+      "old_string": "limit = 10",
+      "new_string": "limit = 50"
+    }
+  }
+]

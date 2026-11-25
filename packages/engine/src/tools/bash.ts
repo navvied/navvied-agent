@@ -1,8 +1,12 @@
-import { existsSync } from "node:fs";
+import type { Launch } from "../sandbox/index.ts";
+import { existsSync, readFileSync } from "node:fs";
+import { wrote } from "./file-state.ts";
+import { printedFiles } from "./shell-reads.ts";
 import { localBackend } from "../backend.ts";
 import { shellFor } from "../platform.ts";
 import type { Jobs } from "../jobs.ts";
-import type { Tool } from "../types.ts";
+import type { Tool, ToolContext } from "../types.ts";
+import { splitBackground } from "./shell-bg.ts";
 import { relative, resolve } from "node:path";
 import { redact } from "../redact.ts";
 import { endedIn, inside, realPath, remembering, type ShellState } from "./shell-state.ts";
@@ -34,10 +38,26 @@ export const bash: Tool = {
     required: ["command"],
   },
   title: (a) => `Run command: ${str(a.command).slice(0, 300)}`,
-  async run(a, ctx) {
-    // A job already runs apart from the turn: an `&` at the end would only make its shell end at once and leave the real program outside the job, where BashOutput and KillShell cannot reach it.
+  run: runPieces,
+};
+
+/**
+ * A statement the shell would send to the background with `&` becomes a job, flag or not: left to the shell it is a program outside the job list, where BashOutput and KillShell cannot
+ * reach it and nothing stops it. What the person redirected stays as written; otherwise its output goes to the job's own log.
+ */
+async function runPieces(a: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+  // A job already runs apart from the turn: an `&` at its end would only make its shell end at once and leave the real program outside it.
+  if (a.interactive === true || a.run_in_background === true) return runOne(a, ctx, a.run_in_background === true && /(?<![&\\])&\s*$/.test(str(a.command)));
+  const pieces = splitBackground(str(a.command));
+  if (!pieces.some((p) => p.background)) return runOne(a, ctx, false);
+  const out: string[] = [];
+  for (const p of pieces) out.push(await runOne(p.background ? { ...a, command: p.text, run_in_background: true } : { ...a, command: p.text }, ctx, p.background));
+  return out.filter((o) => o && o !== "(no output)").join("\n") || "(no output)";
+}
+
+async function runOne(a: Record<string, unknown>, ctx: ToolContext, stripped: boolean): Promise<string> {
+  {
     const given = str(a.command);
-    const stripped = a.run_in_background === true && /(?<![&\\])&\s*$/.test(given);
     const command = stripped ? given.replace(/\s*&\s*$/, "") : given;
     if (!command.trim()) return `Error: empty command, nothing was run. Retry: ${example({ command: "ls -la" })}`;
     let where: ReturnType<typeof localBackend.prepare>;
@@ -51,13 +71,22 @@ export const bash: Tool = {
       else if (keep?.dir) { if (existsSync(keep.dir)) start = keep.dir; else keep.dir = undefined; }
       where = (ctx.backend ?? localBackend).prepare(command, start, ctx.cwd);
     } catch (e) { return `Error: ${e instanceof Error ? e.message : String(e)}`; }
-    const argv = (capture: boolean): string[] => (keep ? [...where.argv.slice(0, -1), remembering(command, keep, capture)] : where.argv);
+    // On this computer a command is confined unless the person turned that off or allowed this one outside; what really was done is said at the end of the result.
+    let launch: Launch = { confined: false };
+    const argv = (capture: boolean): string[] => {
+      const plain = keep ? [...where.argv.slice(0, -1), remembering(command, keep, capture)] : where.argv;
+      if (!ctx.sandbox || ctx.unconfined || (ctx.backend && ctx.backend.id !== "local")) return plain;
+      launch = ctx.sandbox.confine(plain, { root: ctx.cwd, cwd: where.cwd, detached: a.run_in_background === true });
+      return launch.confined ? launch.argv : plain;
+    };
+    const current = (): Launch => launch;
+    const withLine = (text: string): string => { const l = current().line; return l ? `${text}\n${l}` : text; };
     if (a.interactive === true || a.run_in_background === true) { const full = ctx.jobs.room(); if (full) return full; }
     if (a.interactive === true) {
       if (ctx.backend && ctx.backend.id !== "local") return `Error: a program you type to runs on this computer only, and commands are set to run elsewhere. Retry without interactive: ${example({ command })}`;
       const job = ctx.jobs.start(argv(false), where.cwd, str(a.description) || command.slice(0, 80), undefined, true);
       ctx.report?.({ background: true });
-      return `Started ${job.id}, a program you can type to. See what it prints with BashOutput (job_id "${job.id}", wait 2), type to it with BashInput, stop it with KillShell.`;
+      return withLine(`Started ${job.id}, a program you can type to. See what it prints with BashOutput (job_id "${job.id}", wait 2), type to it with BashInput, stop it with KillShell.`);
     }
     if (a.run_in_background === true) {
       const notify = str(a.notify).trim();
@@ -65,7 +94,7 @@ export const bash: Tool = {
       ctx.report?.({ background: true });
       const read = `BashOutput (job_id "${job.id}") reads what it prints, and KillShell stops it.`;
       const wake = !ctx.jobs.wakes ? `Read what it prints with BashOutput (job_id "${job.id}"), stop it with KillShell.` : notify === "off" ? `It will not wake you. ${read}` : `You are woken when it ends${notify ? ` or prints a line with "${notify.slice(0, 60)}"` : ""}: do other work or answer, do not poll. ${read}`;
-      return `Started ${job.id} in the background.${stripped ? " The trailing & was left out: a job already runs apart from this turn." : ""} ${wake}`;
+      return withLine(`Started ${job.id} in the background.${stripped ? " The trailing & was left out: a job already runs apart from this turn." : ""} ${wake}`);
     }
     // `timeout` is how long the command may be silent; a command that goes on printing is working. Whatever it does, 10 minutes is the most
     // it holds this turn. Past either it is not killed: it goes on as a job, and what it printed so far is not lost.
@@ -74,20 +103,28 @@ export const bash: Tool = {
     const title = str(a.description) || command.slice(0, 80);
     const r = await run(argv(keep !== undefined && !explicit), { cwd: where.cwd, signal: ctx.signal, idleMs: seconds * 1000, timeoutMs: 600_000, ...(ctx.env ? { env: ctx.env } : {}), ...(ctx.live ? { onChunk: ctx.live } : {}), onTimeout: (child, printed) => { handedOn = ctx.jobs.adopt(child, title, printed).id; return true; } });
     const budget = outputBudget(ctx.window);
-    const full = redact(cleanOutput(r.output)).trimEnd();
+    const cleaned = cleanOutput(r.output);
+    const full = redact(cleaned).trimEnd();
+    // A command that only prints a file, whole and unaltered, is a read of it: the edit guard needs no second Read.
+    if (r.code === 0 && !r.adopted && !r.interrupted && !r.timedOut && full.length <= budget && !r.file && full === cleaned.trimEnd() && (!ctx.backend || ctx.backend.id === "local")) {
+      for (const f of printedFiles(command, where.cwd)) { try { place(ctx, f); wrote(ctx, f, readFileSync(f)); } catch { /* outside the folder this conversation may use, or gone: not a read */ } }
+    }
     ctx.report?.({ code: r.code, truncated: full.length > budget, timedOut: r.timedOut && !r.adopted, ...(r.adopted ? { background: true } : {}) });
     // Whole output kept in a file (not in a conversation held to a folder, which may not read outside it). The end matters most: it gets the larger share.
     const saved = ctx.root ? undefined : r.file ?? (full.length > budget ? spill(full) : undefined);
     const body = clip(full, budget, 0.3) + (saved ? `\n[the whole output is saved in ${saved}: read the part you need with Read]` : "");
     if (r.interrupted) return `${body}\n[interrupted]`;
-    if (r.adopted && handedOn) return `${body}${body ? "\n" : ""}[still running as ${handedOn} after ${r.ranOut === "time" ? "10 minutes" : `${seconds}s without output`}: BashOutput job_id "${handedOn}" shows what it prints next (until:"text" waits for a line), KillShell stops it]`;
+    if (r.adopted && handedOn) return withLine(`${body}${body ? "\n" : ""}[still running as ${handedOn} after ${r.ranOut === "time" ? "10 minutes" : `${seconds}s without output`}: BashOutput job_id "${handedOn}" shows what it prints next (until:"text" waits for a line), KillShell stops it]`);
+    const ran = current();
+    const denied = ran.confined && r.code !== 0 ? ran.denial(full, where.cwd) : undefined;
+    if (denied) ctx.report?.({ denied });
     // An exit of 0 is not said: it is what no news means. Another code is, with what it means for the programs where it means something.
     const said = r.code === 0 ? maskedNote(command, r.code, full) : `[${r.code === null && r.signal ? r.signal : `exit ${r.code}`}${exitNote(command, r.code, full, r.signal)}]`;
     const moved = keep && !explicit ? whereNow(keep, ctx.cwd) : "";
-    const lines = [body, moved, said].filter(Boolean);
+    const lines = [body, moved, said, current().line].filter(Boolean);
     return lines.length ? lines.join("\n") : "(no output)";
-  },
-};
+  }
+}
 
 /** Where the next command starts, said only when the remembered folder changed; a folder outside the working folder is not kept. It says that navvied wrote it: a model took the bare note for output of the user's shell. */
 function whereNow(state: ShellState, working: string): string {

@@ -105,15 +105,20 @@ describe("the tools of the agent", () => {
 });
 
 describe("the agent can look through earlier conversations", () => {
+  /** A computer that already had one conversation, then a new one with `text`: what the model was offered in it. */
   const ask = async (text: string, window = "100000"): Promise<string[]> => {
     const state = tempDir(), work = tempDir(); dirs.push(state, work);
     const env = { HOME: state, XDG_STATE_HOME: state, XDG_CONFIG_HOME: state, NAVVIED_BASE_URL: mock.url, NAVVIED_MODEL: "mock-model", NAVVIED_WINDOW: window };
-    const hub = createHub({ json: false, yes: false, thinking: false, cwd: work } as never, fakeIO({ env }).io, { watch: false });
-    const got: { ev: string }[] = [];
-    hub.attach({ send: (line) => { got.push(JSON.parse(String(line))); } }, 0);
-    hub.command(JSON.stringify({ cmd: "prompt", text, qid: "q1" }), () => undefined);
-    await until(() => got.some((e) => e.ev === "done"));
-    await hub.stop();
+    const talk = async (said: string): Promise<void> => {
+      const hub = createHub({ json: false, yes: false, thinking: false, cwd: work } as never, fakeIO({ env }).io, { watch: false });
+      const got: { ev: string }[] = [];
+      hub.attach({ send: (line) => { got.push(JSON.parse(String(line))); } }, 0);
+      hub.command(JSON.stringify({ cmd: "prompt", text: said, qid: "q1" }), () => undefined);
+      await until(() => got.some((e) => e.ev === "done"));
+      await hub.stop();
+    };
+    await talk("an earlier conversation");
+    await talk(text);
     return ((mock.requests.at(-1)?.body.tools ?? []) as { function: { name: string } }[]).map((t) => t.function.name);
   };
   test("the tool is given to a model that is not small whatever the request says, in any language", async () => {

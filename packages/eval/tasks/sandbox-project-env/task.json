@@ -1,0 +1,18 @@
+{
+  "id": "sandbox-project-env",
+  "title": "Read a project's own .env, which a confined command may still read",
+  "kind": "terminal",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "python3"
+  ],
+  "prompt": "The service reads its settings from .env. Write the value of SERVICE_URL (only the value) into service-url.txt, alone on one line, and the number of settings .env holds into count.txt.",
+  "check": "python3 -c \"import hashlib,os\nwant = 'http://svc-' + hashlib.sha1((os.environ['BENCH_SECRET'] + 'url').encode()).hexdigest()[:8] + '.internal:8080'\nassert open('service-url.txt').read().strip() == want\nassert open('count.txt').read().strip() == '4'\"",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 600,
+  "setup": "python3 -c \"import hashlib,os\nsecret = os.environ['BENCH_SECRET']\nurl = 'http://svc-' + hashlib.sha1((secret + 'url').encode()).hexdigest()[:8] + '.internal:8080'\nopen('.env', 'w').write('MODE=production\\nSERVICE_URL=' + url + '\\nRETRIES=3\\nTIMEOUT=30\\n')\""
+}

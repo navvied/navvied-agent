@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { QuestionItem } from "@navvied/protocol";
@@ -31,12 +31,14 @@ let fake: FakeBrowser;
 let dir: string;
 const shown: Part[] = [];
 const asked: QuestionItem[][] = [];
-type Ctx = { vision?: boolean; ask?: boolean; credentials?: { secrets: string[]; origins: string[] }; root?: boolean; priv?: boolean };
+const reports: unknown[] = [];
+type Ctx = { folder?: boolean; vision?: boolean; ask?: boolean; credentials?: { secrets: string[]; origins: string[] }; root?: boolean; priv?: boolean };
 const ctxFor = (o: Ctx = {}): never => ({
   cwd: dir, ...(o.root ? { root: dir } : {}), signal: new AbortController().signal, emit() {}, allowPrivateNetwork: o.priv ?? true,
   ...(o.vision !== undefined ? { vision: o.vision } : {}), show: (p: Part) => { shown.push(p); },
   ...(o.ask ? { ask: async (q: QuestionItem[]) => { asked.push(q); return "The person answered: stop"; } } : {}),
   ...(o.credentials ? { credentials: () => o.credentials } : {}),
+  ...(o.folder ? { folder: (tool: string) => join(dir, "tools", tool) } : {}), report: (m: unknown) => { reports.push(m); },
 }) as never;
 const run = (a: Record<string, unknown>, o: Ctx = {}): Promise<string> => browser.run(a, ctxFor(o));
 const open = async (url = HOME, o: Ctx = {}): Promise<string> => run({ action: "open", url }, o);
@@ -48,7 +50,7 @@ beforeEach(() => {
   fake.site("https://shop.test/about", about);
   process.env.NAVVIED_BROWSER_ENDPOINT = fake.endpoint;
   dir = mkdtempSync(join(tmpdir(), "navvied-fake-browser-"));
-  shown.length = 0; asked.length = 0;
+  shown.length = 0; asked.length = 0; reports.length = 0;
 });
 afterEach(() => { closeBrowser(); fake.stop(); delete process.env.NAVVIED_BROWSER_ENDPOINT; });
 
@@ -115,7 +117,8 @@ describe("numbers that no longer stand for anything", () => {
 
   test("a click needs a number, and says what is wrong when it has none or a wrong one", async () => {
     await open();
-    expect(await run({ action: "click" })).toContain("there is no control 0");
+    expect(await run({ action: "click" })).toContain("say what to aim at");
+    expect(await run({ action: "click", ref: 0 })).toContain("there is no control 0");
     expect(await run({ action: "click", ref: 99 })).toContain("there is no control 99 on this page now");
   });
 });
@@ -208,6 +211,26 @@ describe("pictures", () => {
     expect(shown[0]).toMatchObject({ type: "image", mime: "image/jpeg" });
     expect(out).toContain("shown to you in the next message");
     expect(fake.calls("Page.captureScreenshot")[0]!.params).toMatchObject({ format: "jpeg" });
+  });
+
+  test("with a folder for the tool the picture is also a file there, and the step says where, how big and how many pixels; the model's text is the same", async () => {
+    await open();
+    const plain = await run({ action: "screenshot" }, { vision: true });
+    expect(reports).toEqual([]);
+    const out = await run({ action: "screenshot" }, { vision: true, folder: true });
+    expect(out).toBe(plain);
+    const { picture } = reports[0] as { picture: { path: string; bytes: number; width: number; height: number; mime: string } };
+    expect(picture.path.startsWith(join(dir, "tools", "browser"))).toBe(true);
+    expect(picture).toMatchObject({ width: 1280, height: 800, mime: "image/jpeg" });
+    expect(statSync(picture.path).size).toBe(picture.bytes);
+    expect(picture.bytes).toBeGreaterThan(0);
+  });
+
+  test("a model that cannot see gets no file", async () => {
+    await open();
+    await run({ action: "screenshot" }, { vision: false, folder: true });
+    expect(reports).toEqual([]);
+    expect(existsSync(join(dir, "tools"))).toBe(false);
   });
 
   test("a control can be pictured alone, scaled to fit", async () => {

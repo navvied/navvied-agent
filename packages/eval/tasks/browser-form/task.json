@@ -1,0 +1,24 @@
+{
+  "id": "browser-form",
+  "title": "Fill in a whole form of several kinds of control",
+  "kind": "web",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun",
+    "browser"
+  ],
+  "prompt": "Open http://127.0.0.1:{port}/signup in the browser and sign up as Mira Ode on the Team plan, accepting the terms. Write the signup code the page then shows into ANSWER.txt",
+  "check": "bun \"$BENCH_FIXTURES/web-check.ts\" browser-form",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 24,
+  "timeoutSeconds": 600,
+  "setup": "bun \"$BENCH_FIXTURES/start-web.ts\"",
+  "teardown": "bun \"$BENCH_FIXTURES/stop-web.ts\"",
+  "env": {
+    "NAVVIED_ALLOW_PRIVATE_NETWORK": "1"
+  }
+}

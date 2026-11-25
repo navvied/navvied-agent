@@ -3,7 +3,7 @@ import type { Provider } from "@navvied/engine";
 import type { ResolvedModel } from "../src/config.ts";
 import { LiveProvider } from "../src/live-provider.ts";
 
-const model = (apiKey: string, window = 1000): ResolvedModel => ({ name: "m", window, provider: { baseUrl: "https://x.test", model: "m", apiKey } });
+const model = (apiKey: string, window = 1000): ResolvedModel => ({ name: "m", window, small: false, provider: { baseUrl: "https://x.test", model: "m", apiKey } });
 const reply = { content: "ok", calls: [], finish: "stop" };
 
 function fixture() {

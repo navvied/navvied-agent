@@ -1,0 +1,28 @@
+[
+  {
+    "tool": "Read",
+    "args": {
+      "file_path": "VERSION"
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "VERSION",
+      "content": "1.4.0\n"
+    }
+  },
+  {
+    "tool": "Read",
+    "args": {
+      "file_path": "CHANGELOG.md"
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "CHANGELOG.md",
+      "content": "# Changelog\n\n## 1.4.0\n- Release 1.4.0.\n\n## 1.3.2\n- Fix the rounding of totals.\n"
+    }
+  }
+]

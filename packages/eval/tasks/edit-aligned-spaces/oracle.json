@@ -1,0 +1,16 @@
+[
+  {
+    "tool": "Read",
+    "args": {
+      "file_path": "src/sizes.ts"
+    }
+  },
+  {
+    "tool": "Edit",
+    "args": {
+      "file_path": "src/sizes.ts",
+      "old_string": "small: 8,",
+      "new_string": "small: 12,"
+    }
+  }
+]

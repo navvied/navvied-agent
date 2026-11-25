@@ -1,8 +1,9 @@
-import { CloudSchedule, type ScheduleBackend, type ScheduleInput, type ScheduleJob, type ScheduleRun, type Timing } from "@navvied/engine";
-import { MOST_JOBS, ScheduleStore, UNATTENDED, nextDue, timingText, type Job, type RunRecord } from "./schedules.ts";
+import { CloudSchedule, type ScheduleBackend, type ScheduleInput, type ScheduleJob, type ScheduleRun } from "@navvied/engine";
+import { scheduledDir } from "./config.ts";
+import { JobRunner } from "./schedule-run.ts";
+import { MOST_JOBS, ScheduleStore, fieldsOf as fields, UNATTENDED, nextDue, timingText, type Job, type RunRecord } from "./schedules.ts";
 
 const plain = (text: string): string => `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
-const fields = (t: Timing): { cron: string } | { every: number } | { at: number } => (t.kind === "cron" ? { cron: t.cron } : t.kind === "every" ? { every: t.ms } : { at: t.at });
 const outcome = (r: RunRecord): ScheduleRun["outcome"] => (r.code === undefined ? "running" : r.code === 0 ? "ok" : "failed");
 
 /** The Schedule tool's jobs on this computer: the file of tasks the person's own list and the `navvied schedule` command use. */
@@ -10,7 +11,7 @@ export class ComputerSchedule implements ScheduleBackend {
   readonly about = "It runs only while navvied is open on this computer.";
   readonly maxJobs = MOST_JOBS;
 
-  constructor(private readonly store: ScheduleStore, private readonly o: { cwd: string; chat: boolean; /** False inside a run nobody started by hand: it may look, never change. */ canChange: boolean; now?: () => number; /** Said after the list changed, so a window showing it can draw it again. */ changed?: () => void }) {}
+  constructor(private readonly store: ScheduleStore, private readonly runner: JobRunner, private readonly o: { cwd: string; chat: boolean; /** False inside a run nobody started by hand: it may look, never change. */ canChange: boolean; now?: () => number; /** Said after the list changed, so a window showing it can draw it again. */ changed?: () => void }) {}
 
   get canChange(): boolean { return this.o.canChange; }
   now = (): number => (this.o.now ?? Date.now)();
@@ -48,12 +49,24 @@ export class ComputerSchedule implements ScheduleBackend {
   async runs(id: string): Promise<ScheduleRun[] | string> {
     const j = this.store.list().find((x) => x.id === id);
     if (!j) return "That job was not found.";
-    return (j.runs ?? []).slice(0, 5).map((r) => ({ at: r.at, outcome: outcome(r), ...(r.due !== undefined ? { due: r.due } : {}), ...(r.file ? { note: `what it said is kept in ${r.file}` } : r.code === null ? { note: "it could not start" } : {}) }));
+    return (j.runs ?? []).slice(0, 5).map((r) => ({ at: r.at, outcome: outcome(r), ...(r.due !== undefined ? { due: r.due } : {}), ...(r.cancelled ? { note: "it was stopped before it finished" } : r.file ? { note: `what it said is kept in ${r.file}` } : r.code === null ? { note: "it could not start" } : {}) }));
+  }
+
+  async run(id: string): Promise<true | string> {
+    const job = this.store.list().find((x) => x.id === id);
+    if (!job) return "That job was not found.";
+    if (!this.runner.start(job)) return "That job is already running.";
+    return true;
+  }
+
+  async cancel(id: string): Promise<true | string> {
+    return this.runner.cancel(id) ? true : "That job is not running here.";
   }
 }
 
 /** Where a conversation keeps its scheduled jobs: the cloud's for a hosted session, this computer's own file otherwise (and inside a run nobody started, only to look at). */
-export function scheduleFor(o: { env: Record<string, string | undefined>; file: string; webProxy?: { url: string; token: string } | undefined; cwd: string; chat: boolean; changed?: (() => void) | undefined }): ScheduleBackend {
+export function scheduleFor(o: { env: Record<string, string | undefined>; file: string; webProxy?: { url: string; token: string } | undefined; cwd: string; chat: boolean; changed?: (() => void) | undefined; /** The hub's runs; a program without a hub keeps its own. */ runner?: (() => JobRunner) | undefined }): ScheduleBackend {
   if (o.webProxy) return new CloudSchedule(o.webProxy);
-  return new ComputerSchedule(new ScheduleStore(o.file), { cwd: o.cwd, chat: o.chat, canChange: o.env[UNATTENDED] !== "1", ...(o.changed ? { changed: o.changed } : {}) });
+  const store = new ScheduleStore(o.file);
+  return new ComputerSchedule(store, o.runner?.() ?? new JobRunner(store, { env: o.env, where: scheduledDir(o.env), ...(o.changed ? { changed: o.changed } : {}) }), { cwd: o.cwd, chat: o.chat, canChange: o.env[UNATTENDED] !== "1", ...(o.changed ? { changed: o.changed } : {}) });
 }

@@ -103,4 +103,16 @@ describe("TodoWrite", () => {
     expect(offered("fix it")).toBe(false);
     expect(offered("1. a\n2. b", true)).toBe(false);
   });
+
+  test("it is offered at the first step when the request has several parts, in any language, and not for one task", () => {
+    const offered = (userText: string, small = false): boolean => todo.offeredWhen!({ small, userText, jobs: 0, steps: 0 });
+    expect(offered("Fix the login bug, add a test for it, and update the changelog")).toBe(true);
+    expect(offered("Rename the module; update the imports; run the tests")).toBe(true);
+    expect(offered("修复登录错误，添加一个测试，更新更改日志，然后运行全部测试")).toBe(true);
+    expect(offered("The tests in this project fail. Find the bug in the source code and fix it. Do not change the tests.")).toBe(false);
+    expect(offered("In app.py, line 3, change the name")).toBe(false);
+    expect(offered("Fix the login bug in src/auth.ts and add a test for it")).toBe(false);
+    expect(offered("Read https://example.com/a.b/c.d and summarise it")).toBe(false);
+    expect(offered("Fix the login bug, add a test, update the changelog", true)).toBe(false);
+  });
 });

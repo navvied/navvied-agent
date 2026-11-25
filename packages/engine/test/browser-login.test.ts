@@ -1,4 +1,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { FileSessionStore } from "../src/store.ts";
 import { closeBrowser } from "../src/tools/browser.ts";
 import { FakeBrowser, type Site } from "./fake-cdp.ts";
 import { cleanupAll, prompt, rig } from "./helpers.ts";
@@ -37,5 +41,27 @@ describe("a login in the person's message", () => {
     expect(fake.typed.size).toBe(0);
     expect(toolText(r)).toContain("Not typed: this page is https://evil.test");
     expect(JSON.stringify(r.events.filter((e) => e.ev === "tool"))).not.toContain(SECRET);
+  }, 40_000);
+
+  test("typed in a step with parallel calls (one waiting its turn), it is in no event of any kind and not in the saved session", async () => {
+    fake.site("https://bank.test/login", LOGIN);
+    const saved = mkdtempSync(join(tmpdir(), "navvied-session-"));
+    const r = rig((_q, n) => (n === 0 ? { calls: [{ name: "Browser", args: { action: "open", url: "https://bank.test/login" } }] }
+      : n === 1 ? { calls: [{ name: "Browser", args: { action: "type", ref: 1, text: "ann@example.com" } }, { name: "Browser", args: { action: "type", ref: 2, nested: { again: [SECRET] } } }, { name: "Browser", args: { action: "type", ref: 2, text: SECRET, submit: true } }] }
+      : { text: "Signed in." }), { store: new FileSessionStore(saved) });
+    try {
+      await r.turn(prompt(`Sign in at https://bank.test/login as ann@example.com, the password is ${SECRET}`, { mode: "auto" }), 30_000);
+      expect(fake.typed.get(2)).toBe(SECRET);
+      const queued = r.events.filter((e) => e.ev === "tool" && e.queued);
+      expect(queued.length).toBe(2);
+      // Every event the engine emitted, whatever its kind, and the file the session was saved in.
+      expect(JSON.stringify(r.events)).not.toContain(SECRET);
+      const files = readdirSync(saved).filter((f) => f.endsWith(".json"));
+      expect(files.length).toBe(1);
+      const file = readFileSync(join(saved, files[0]!), "utf8");
+      expect(file).not.toContain(SECRET);
+      expect(file).toContain("[hidden:");
+      expect(JSON.parse(file).messages.length).toBeGreaterThan(3);
+    } finally { r.cleanup(); rmSync(saved, { recursive: true, force: true }); }
   }, 40_000);
 });

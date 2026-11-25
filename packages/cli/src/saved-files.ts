@@ -1,4 +1,5 @@
 import { dirname } from "node:path";
+import type { PictureInfo } from "@navvied/protocol";
 
 /** A file a step saved: a picture, a sound, a video or a download. */
 export interface SavedFile { path: string; size: string }
@@ -15,6 +16,9 @@ export function savedFile(output: string): SavedFile | undefined {
   const got = DOWNLOADED.exec(output);
   return got ? { path: got[1]!, size: sizeWords(Number(got[2])) } : undefined;
 }
+
+/** A picture the step saved, with its size in pixels, the way the page says it: "1024 × 1024, 1.4 MB". */
+export const pictureFile = (p: PictureInfo): SavedFile => ({ path: p.path, size: `${p.width} × ${p.height}, ${sizeWords(p.bytes)}` });
 
 /** The files this conversation made, newest last, for `/open`. */
 export class SavedFiles {

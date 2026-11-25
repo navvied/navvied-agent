@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { QuestionItem } from "@navvied/protocol";
 import { browser, closeBrowser, findChrome } from "../src/tools/browser.ts";
+import { startGuardProxy } from "../src/tools/browser/guard-proxy.ts";
+import { launch } from "../src/tools/browser/launch.ts";
+import { jpegSize } from "../src/tools/browser/page.ts";
 import { web } from "../src/tools/web-guard.ts";
 import { stopAllJobs } from "../src/index.ts";
 import { until } from "./helpers.ts";
@@ -39,6 +42,13 @@ const site: import("bun").Server<{ id: number }> = Bun.serve<{ id: number }>({
     if (u.pathname === "/redirect") return new Response(null, { status: 302, headers: { location: `http://127.0.0.1:${deadPort()}/inside` } });
     if (u.pathname === "/jump") return page("<button onclick=\"setTimeout(() => { location.href = '/about'; }, 400)\">Leave</button><a href='/'>Home</a>", "Jump");
     if (u.pathname === "/dialogs") return page(`<button onclick="alert('Saved!')">Alert</button><button onclick="document.title = confirm('Sure?') ? 'yes' : 'no'">Confirm</button><button onclick="document.title = 'hi ' + prompt('Name?', 'Ann')">Prompt</button><p id="t">dialogs</p>`, "Dialogs");
+    if (u.pathname === "/inner") return page(`<button onclick="document.getElementById('r').textContent = 'inner clicked'">Inner button</button><input aria-label="Inner field" oninput="document.getElementById('r').textContent = 'typed ' + this.value"><p id="r">waiting</p>`, "Inner");
+    if (u.pathname === "/frames") return page(`<h1>Frames</h1><button onclick="document.getElementById('o').textContent = 'outer clicked'">Outer button</button><p id="o">outer waiting</p><iframe title="Same site" style="position:absolute;left:100px;top:260px;width:400px;height:150px" src="${inside}/inner"></iframe><iframe title="Other site" style="position:absolute;left:100px;top:460px;width:400px;height:150px" src="http://localhost:${site.port}/inner"></iframe>`, "Frames");
+    if (u.pathname === "/hover") return page(`<div role="button" aria-label="Menu" tabindex="0" style="width:120px;height:40px;background:#ccc" onmouseover="document.getElementById('t').textContent = 'menu open'">Menu</div><p id="t">closed</p>`, "Hover");
+    if (u.pathname === "/dnd") return page(`<div role="button" aria-label="Card" draggable="true" style="width:80px;height:40px;background:#9cf" ondragstart="event.dataTransfer.setData('text/plain', 'card-7')">Card</div><div role="button" aria-label="Zone" style="width:160px;height:80px;background:#fc9;margin-top:20px" ondragover="event.preventDefault()" ondrop="event.preventDefault(); document.getElementById('t').textContent = 'dropped ' + event.dataTransfer.getData('text/plain')">Zone</div><p id="t">nothing dropped</p>`, "Drag");
+    if (u.pathname === "/knob") return page(`<div id="k" role="button" aria-label="Knob" style="position:absolute;left:20px;top:100px;width:40px;height:40px;background:#c33"></div><p id="t" style="position:absolute;top:200px">idle</p><script>let sx = null; k.onmousedown = (e) => { sx = e.clientX; }; addEventListener("mouseup", (e) => { if (sx !== null) { t.textContent = "knob moved " + Math.round(e.clientX - sx); sx = null; } });</script>`, "Knob");
+    if (u.pathname === "/coords") return page(`<button style="position:absolute;left:200px;top:300px;width:100px;height:50px" onclick="document.getElementById('t').textContent = 'coordinate click'">Target</button><p id="t">not clicked</p>`, "Coords");
+    if (u.pathname === "/form") return page(`<label>Name <input id="n"></label><label>Color <select id="c"><option value="r">Red</option><option value="b">Blue</option></select></label><label><input id="t" type="checkbox"> Terms</label><label>Note <textarea id="m"></textarea></label>`, "Form");
     if (u.pathname === "/popup") return page("<a href='/about' target='_blank'>Open about</a>", "Popup");
     if (u.pathname === "/file.txt") return new Response("file body", { headers: { "content-type": "text/plain", "content-disposition": 'attachment; filename="notes.txt"' } });
     if (u.pathname === "/files") return page("<a href='/file.txt'>Get notes</a>", "Files");
@@ -288,4 +298,102 @@ describe.skipIf(!chrome)("every connection the browser makes is looked at, WebSo
     await run({ action: "open", url: publicSite("/private-ok") }, { priv: true });
     await until(() => seen("/secret-image") && seen("/secret-fetch"));
   }, 30_000);
+});
+
+describe.skipIf(!chrome)("a browser nobody has asked anything of", () => {
+  // What this Chrome still asks for by itself after every switch that turns its background traffic off was tried (the component updater, the
+  // list of signed-in accounts, the eligibility of its search-box assistant): none has a switch of its own in this version. A host that is
+  // not in this list is new traffic, and fails here.
+  const OWN = ["update.googleapis.com", "accounts.google.com", "www.google.com"];
+
+  test("asks nothing of the network by itself in the first seconds, apart from the few services of its own that have no switch", async () => {
+    const was = { addresses: web.addresses, dial: web.dial };
+    const reached: string[] = [];
+    web.addresses = async (host: string) => { reached.push(host); throw new Error("cannot be looked up"); };
+    web.dial = (address, port, socket, data) => { reached.push(address); return was.dial(address, port, socket, data); };
+    const proxy = startGuardProxy(() => false, () => undefined);
+    const launched = await launch(chrome!, proxy.port);
+    try { await new Promise((r) => setTimeout(r, 6_000)); } finally { launched.stop(); proxy.close(); web.addresses = was.addresses; web.dial = was.dial; }
+    expect([...new Set(reached)].filter((h) => !OWN.includes(h))).toEqual([]);
+  }, 60_000);
+});
+
+describe.skipIf(!chrome)("reaching more of a page", () => {
+  const allRefs = (out: string, pattern: RegExp): number[] => [...out.matchAll(new RegExp(`\\[(\\d+)\\] ${pattern.source}`, "g"))].map((m) => Number(m[1]));
+
+  test("a frame of the same site and a frame of another site are read with the page, and used by their numbers", async () => {
+    const out = await run({ action: "open", url: at("frames") });
+    expect(out).toContain(`frame "Same site": http://127.0.0.1:${site.port}/inner`);
+    expect(out).toContain(`frame "Other site": http://localhost:${site.port}/inner`);
+    // The page is quiet once its frames have loaded: a request of a frame of another site that never ended would hold every later step for the whole of the wait.
+    const t0 = Date.now();
+    await run({ action: "hover", ref: refOf(out, /button "Outer button"/) });
+    expect(Date.now() - t0).toBeLessThan(4_000);
+    const [same, other] = allRefs(out, /button "Inner button"/);
+    expect(same).toBeDefined();
+    expect(other).toBeGreaterThan(same!);
+    const clicked = await run({ action: "click", ref: other! });
+    // The text lands under the frame of the other site, and the frame of the same site is as it was.
+    expect(clicked.slice(clicked.indexOf("Other site"))).toContain("inner clicked");
+    expect(clicked.slice(0, clicked.indexOf("Other site"))).not.toContain("inner clicked");
+    const typed = await run({ action: "type", ref: allRefs(clicked, /textbox "Inner field"/)[0]!, text: "hello" });
+    expect(typed.slice(0, typed.indexOf("Other site"))).toContain("typed hello");
+    const outer = await run({ action: "click", ref: refOf(typed, /button "Outer button"/) });
+    expect(outer).toContain("outer clicked");
+  }, 60_000);
+
+  test("hover opens what only a pointer over a control opens", async () => {
+    const page = await run({ action: "open", url: at("hover") });
+    expect(page).toContain("closed");
+    expect(await run({ action: "hover", ref: refOf(page, /button "Menu"/) })).toContain("menu open");
+  }, 45_000);
+
+  test("a drag and drop of the browser's own kind carries what was dragged to where it was dropped", async () => {
+    const page = await run({ action: "open", url: at("dnd") });
+    const out = await run({ action: "drag", ref: refOf(page, /button "Card"/), to: refOf(page, /button "Zone"/) });
+    expect(out).toContain("dropped card-7");
+  }, 45_000);
+
+  test("a drag that only uses the mouse moves a control by a place the model names", async () => {
+    const page = await run({ action: "open", url: at("knob") });
+    // The knob's middle is at 40, 120.
+    expect(await run({ action: "drag", ref: refOf(page, /button "Knob"/), x2: 190, y2: 120 })).toContain("knob moved 150");
+  }, 45_000);
+
+  test("a click at a place in the screenshot hits the control that is there, whatever the size of the picture", async () => {
+    await run({ action: "open", url: at("coords") });
+    shown.length = 0;
+    await run({ action: "screenshot" }, { vision: true });
+    const size = jpegSize((shown[0] as { data: string }).data)!;
+    const window = JSON.parse(/\[[\d,]+\]/.exec(await run({ action: "eval", text: "JSON.stringify([innerWidth, innerHeight])" }))![0]) as number[];
+    // The button's middle is at 250, 325 in the window.
+    const out = await run({ action: "click", x: Math.round((250 * size.width) / window[0]!), y: Math.round((325 * size.height) / window[1]!) });
+    expect(out).toContain("coordinate click");
+  }, 45_000);
+
+  test("a whole form is filled in one call: text, a list, a box and a long text", async () => {
+    const page = await run({ action: "open", url: at("form") });
+    const fields = { [refOf(page, /textbox "Name"/)]: "Ann", [refOf(page, /combobox "Color"/)]: "Blue", [refOf(page, /checkbox "Terms"/)]: "yes", [refOf(page, /textbox "Note"/)]: "two\nlines" };
+    const out = await run({ action: "fill", fields });
+    expect(out).toContain('checkbox "Terms" (checked)');
+    const values = await run({ action: "eval", text: "JSON.stringify([n.value, c.value, t.checked, m.value])" });
+    expect(values).toContain('["Ann","b",true,"two\\nlines"]');
+  }, 45_000);
+
+  test("a login is filled in one call on the site the person named, and not on another", async () => {
+    const creds = { secrets: [PASSWORD], origins: [`http://127.0.0.1:${site.port}`] };
+    posted.length = 0;
+    const form = await run({ action: "open", url: at("login") }, { creds });
+    const fields = { [refOf(form, /textbox "Email"/)]: "ann@example.com", [refOf(form, /textbox "Password"/)]: PASSWORD };
+    const filled = await run({ action: "fill", fields }, { creds });
+    expect(filled).not.toContain(PASSWORD);
+    const out = await run({ action: "click", ref: refOf(filled, /button "Sign in"/) }, { creds });
+    expect(out).toContain("Welcome back, ann");
+    expect(new URLSearchParams(posted[0]!.split(" ")[1]).get("password")).toBe(PASSWORD);
+    const moved = await run({ action: "open", url: at("gate-login") }, { creds });
+    const refused = await run({ action: "fill", fields: { [refOf(moved, /textbox "Password"/)]: PASSWORD } }, { creds });
+    expect(refused).toContain("Not typed");
+    expect(refused).not.toContain(PASSWORD);
+    expect(posted).toHaveLength(1);
+  }, 90_000);
 });

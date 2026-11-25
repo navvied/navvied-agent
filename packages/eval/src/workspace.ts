@@ -57,17 +57,18 @@ export const scriptEnv = (secret: Record<string, string>): Record<string, string
  * never read or written. For other agents to ask, their address is the port the setup left in the workspace `where`, and their path. Nothing is written for a task with none of them.
  */
 export function agentConfig(task: Task, where?: string): { env: Record<string, string>; remove(): void } {
-  if (!task.mcp && !task.hooks && !task.media?.length && !task.a2a) return { env: {}, remove: () => undefined };
+  if (!task.mcp && !task.hooks && !task.media?.length && !task.a2a && !task.embeddings) return { env: {}, remove: () => undefined };
   const dir = mkdtempSync(join(tmpdir(), "navvied-eval-config-"));
-  const mcp = task.mcp ? Object.fromEntries(Object.entries(task.mcp).map(([name, s]) => [name, { command: process.execPath, args: [join(FIXTURES, s.fixture)] }])) : undefined;
+  const mcp = task.mcp ? Object.fromEntries(Object.entries(task.mcp).map(([name, s]) => [name, { command: process.execPath, args: [join(FIXTURES, s.fixture)], ...(s.sampling ? { sampling: s.sampling } : {}), ...(s.elicitation ? { elicitation: s.elicitation } : {}) }])) : undefined;
   const hooks = Object.fromEntries(Object.entries(task.hooks ?? {}).map(([event, list]) => [event, list.map((h) => ({ ...(h.matcher ? { matcher: h.matcher } : {}), command: `"${process.execPath.replaceAll("\\", "/")}" "${join(FIXTURES, h.fixture).replaceAll("\\", "/")}"` }))]));
   const program = (name: string): string => join(FIXTURES, "media", name);
   const engines = { stt: { bin: program("whisper-cli"), model: program("model.bin") }, tts: { bin: program("piper"), model: program("model.bin") }, image: { bin: program("sd"), model: program("model.bin") } };
   const media = task.media?.length ? { ...Object.fromEntries(task.media.map((k) => [k, engines[k]])), ffmpeg: program("ffmpeg") } : undefined;
   const port = where && existsSync(join(where, ".bench-port")) ? readFileSync(join(where, ".bench-port"), "utf8").trim() : "";
   const peers = task.a2a ? Object.fromEntries(Object.entries(task.a2a).map(([name, path]) => [name, { url: `http://127.0.0.1:${port}${path}` }])) : undefined;
+  const memory = task.embeddings ? { embeddings: { baseUrl: `http://127.0.0.1:${port}${task.embeddings.api === "chat" ? "/v1" : ""}`, model: "fixture-embed", api: task.embeddings.api } } : undefined;
   const path = join(dir, "config.json");
-  writeFileSync(path, JSON.stringify({ models: {}, guestModels: false, ...(mcp ? { mcp } : {}), ...(task.hooks ? { hooks } : {}), ...(media ? { media } : {}), ...(peers ? { a2a: { peers } } : {}) }), { mode: 0o600 });
+  writeFileSync(path, JSON.stringify({ models: {}, guestModels: false, ...(mcp ? { mcp } : {}), ...(task.hooks ? { hooks } : {}), ...(media ? { media } : {}), ...(peers ? { a2a: { peers } } : {}), ...(memory ? { memory } : {}) }), { mode: 0o600 });
   return { env: { NAVVIED_CONFIG: path }, remove: () => rmSync(dir, { recursive: true, force: true }) };
 }
 

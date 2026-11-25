@@ -65,6 +65,23 @@ describe("a page becomes text a small model can read", () => {
     expect(asked).toHaveLength(1);
   });
 
+  test("a page is divided evenly into the calls it needs, so no call is left with a few lines", async () => {
+    for (const lines of [160, 161, 170, 190]) {
+      const text = Array.from({ length: lines }, (_, i) => `<p>Line ${i} ${"x".repeat(60)}</p>`).join("");
+      answer = () => html(`<html><body><main>${text}</main></body></html>`);
+      const url = `https://docs.example.com/even${lines}`;
+      const sizes: number[] = [];
+      let at = 0, total = 0;
+      for (let i = 0; i < 20; i++) {
+        const m = /\[characters (\d+)–(\d+) of (\d+); the rest/.exec(await fetchIt(url, { offset: at }, ctx({ window: 16_000 })));
+        if (!m) { sizes.push(total - at); break; }
+        total = Number(m[3]); sizes.push(Number(m[2]) - at); at = Number(m[2]);
+      }
+      expect(sizes.length, String(lines)).toBeGreaterThan(1);
+      expect(Math.min(...sizes), String(lines)).toBeGreaterThan(Math.max(...sizes) * 0.5);
+    }
+  });
+
   test("a page is kept for 15 minutes, and then it is visited again", async () => {
     answer = () => html("<html><body><main><p>one</p></main></body></html>");
     let now = 1_000_000;

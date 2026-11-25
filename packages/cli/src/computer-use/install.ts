@@ -40,10 +40,10 @@ export async function checkSigner(run: Run, signer: Signer, entry: string, platf
   if (signer.kind === "apple") {
     if (platform !== "darwin") return undefined;
     const ok = await run("codesign", ["--verify", "--strict", entry]);
-    if (ok.code !== 0) return "The driver's signature is not valid.";
+    if (ok.code !== 0) return `The driver's signature is not valid (${(ok.out + ok.err).trim().slice(0, 150)}).`;
     const shown = await run("codesign", ["-dv", "--verbose=4", entry]);
     const team = /TeamIdentifier=(\S+)/.exec(`${shown.out}\n${shown.err}`)?.[1];
-    return team && signer.teamIds.includes(team) ? undefined : "The driver is not signed by the expected publisher.";
+    return team && signer.teamIds.includes(team) ? undefined : `The driver is not signed by the expected publisher (found ${team ?? "no team"}).`;
   }
   if (platform !== "win32") return undefined;
   const quoted = entry.replace(/'/g, "''");

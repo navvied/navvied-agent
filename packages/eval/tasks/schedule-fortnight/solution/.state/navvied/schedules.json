@@ -1,0 +1,17 @@
+{
+  "jobs": [
+    {
+      "id": "a1b2c3",
+      "prompt": "Write a short status report of this project. Only read; change nothing.",
+      "cwd": ".",
+      "mode": "plan",
+      "cron": "",
+      "every": 1209600000,
+      "start": 1700190000000,
+      "tz": "Asia/Jakarta",
+      "title": "fortnight",
+      "created": 1700000000000,
+      "lastRun": 1700000000000
+    }
+  ]
+}

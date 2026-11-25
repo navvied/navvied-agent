@@ -1,0 +1,15 @@
+[
+  {
+    "tool": "Remember",
+    "args": {
+      "action": "list"
+    }
+  },
+  {
+    "tool": "Bash",
+    "args": {
+      "command": "printf '周五\\n' > ANSWER.txt",
+      "description": "write the day"
+    }
+  }
+]

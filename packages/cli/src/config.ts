@@ -2,12 +2,13 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { expandEndpointModel, modelNames, endpointModel, type EndpointRecord } from "./endpoints.ts";
 import { expandLocalModel } from "./local-entry.ts";
 import { parseMedia, type MediaConfig } from "./media-config.ts";
+import { parseEmbeddings, type EmbeddingSettings } from "./meaning-config.ts";
 import { PROVIDERS } from "./presets.ts";
 import { expandModel, type SavedProvider } from "./providers.ts";
 import { dirname, posix, win32 } from "node:path";
-import { HOOK_EVENTS, hasRules, parseRules, type ChatCompletionsConfig, type HookConfig, type HookEvent, type RuleSet } from "@navvied/engine";
+import { HOOK_EVENTS, SMALL_WINDOW, hasRules, parseRules, type ChatCompletionsConfig, type HookConfig, type HookEvent, type RuleSet } from "@navvied/engine";
 import { EFFORTS, isBaseAddress, type Effort, type Result } from "@navvied/protocol";
-import { parseA2a, type A2aConfig } from "./a2a-config.ts";
+import { DEFAULT_LIMITS, parseA2a, type A2aConfig } from "./a2a-config.ts";
 import { DEFAULT_SERVER, GUEST_PREFIX, HOSTED_PREFIX, guestEntries, hostedEntries, readAccount, readHostedModels } from "./account.ts";
 
 export type Env = Record<string, string | undefined>;
@@ -48,6 +49,8 @@ export interface ModelEntry {
   /** Name of an environment variable that holds the key (preferred over `apiKey`). */
   apiKeyEnv?: string;
   window?: number;
+  /** The model is a small one (a few billion parameters): few tools and a short prompt. Absent: a model that runs on this computer with a small window is, any other is not. */
+  small?: boolean;
   /** The model can see pictures (absent: not known). */
   vision?: boolean;
   /** The service reads a PDF given as a file (messages API only). */
@@ -65,13 +68,21 @@ export interface ModelEntry {
   display?: { name?: string; brand?: string; badge?: string; blurb?: string; /** Shown but not usable now, such as a model that needs a plan. */ locked?: boolean };
 }
 /** A program that gives the agent more tools (an MCP server): the command that starts it. */
-export interface McpEntry { command?: string; args?: string[]; env?: Record<string, string>; cwd?: string; /** A server reached over the web instead of a program started here. */ url?: string; headers?: Record<string, string>; /** For a server on the web that signs in by itself but cannot register navvied on its own. */ oauth?: { clientId?: string; clientSecret?: string; scope?: string } }
+/** What a connected program may ask of the model and the person, from its entry; a word that is not understood is a reason in words. */
+function mcpAsks(value: Record<string, unknown>): Pick<McpEntry, "sampling" | "elicitation" | "maxTokens" | "maxPerTurn"> | string {
+  if (value.sampling !== undefined && value.sampling !== "ask" && value.sampling !== "allow" && value.sampling !== "off") return 'sampling must be "ask", "allow" or "off"';
+  if (value.elicitation !== undefined && value.elicitation !== "ask" && value.elicitation !== "off") return 'elicitation must be "ask" or "off"';
+  for (const k of ["maxTokens", "maxPerTurn"] as const) if (value[k] !== undefined && !(typeof value[k] === "number" && Number.isInteger(value[k]) && (value[k] as number) > 0)) return `${k} must be a whole number above 0`;
+  return { ...(value.sampling ? { sampling: value.sampling as "ask" | "allow" | "off" } : {}), ...(value.elicitation ? { elicitation: value.elicitation as "ask" | "off" } : {}), ...(value.maxTokens ? { maxTokens: value.maxTokens as number } : {}), ...(value.maxPerTurn ? { maxPerTurn: value.maxPerTurn as number } : {}) };
+}
+
+export interface McpEntry { command?: string; args?: string[]; env?: Record<string, string>; cwd?: string; /** A server reached over the web instead of a program started here. */ url?: string; headers?: Record<string, string>; /** For a server on the web that signs in by itself but cannot register navvied on its own. */ oauth?: { clientId?: string; clientSecret?: string; scope?: string }; /** What the program may ask of the model (`ask` by default, `allow`, `off`), of the person (`elicitation`: `ask` or `off`), and the limits of the first (tokens per request, requests per turn). */ sampling?: "ask" | "allow" | "off"; elicitation?: "ask" | "off"; maxTokens?: number; maxPerTurn?: number }
 
 /** Where the Bash tool may run its commands besides this computer. The host and the image are set here, never from a page. */
 /** `env`: names of environment variables a command may keep although they look like secrets (the keys navvied itself uses are never passed on). */
 export interface TerminalConfig { docker?: { image?: string }; ssh?: { host: string; user?: string; dir?: string }; env?: string[] }
-export interface ConfigFile { default?: string; terminal?: TerminalConfig; /** Folders an agent may be started in, besides the one the program starts in and the ones worked in lately. Added here, never from a page. */ folders?: string[]; /** `false`: do not use the free models of navvied.com without an account (the default is to use them, as listed by the server). */ guestModels?: boolean; /** `list` (default): every step is one line, a failure or a change shows more. `fold`: steps that went well are folded away. `all`: everything every step printed. */ steps?: "list" | "fold" | "all"; /** Whether the model is offered the `apply_patch` tool: `auto` (default: when its window is not small), `on` or `off`. */ applyPatch?: "auto" | "on" | "off"; /** Models to use, in this order, when the one chosen cannot be reached (names of entries in `models`). */ fallback?: string[]; theme?: string; accent?: string; autoUpdate?: boolean; /** Where a hosted session reaches the web, and the token to ask with. Written by the service that runs the session. */ webProxy?: { url: string; token: string }; /** The engines for speech, pictures and looking at media on this computer (see media-setup.ts). */ media?: MediaConfig; models: Record<string, ModelEntry>; /** What this computer keeps for the providers a person has a key of their own for (see providers.ts). Never sent anywhere. */ providers?: Record<string, SavedProvider>; /** The servers of the person's own that were added from a page (see endpoints.ts). Never sent anywhere, keys included. */ endpoints?: Record<string, EndpointRecord>; mcp?: Record<string, McpEntry>; hooks?: HookConfig; /** `false` keeps this computer's conversations off the account (default: they are kept there while signed in) */ syncConversations?: boolean; /** allow / ask / deny rules; see docs/CLI.md */ permissions?: RuleSet; /** `approval`: a skill the agent makes or changes waits for the person (`ask`) or is made and can be undone (`auto`, the default). `trust: "confirm"`: a skill that comes with a project is not offered to the model until the person accepts it. */ skills?: { approval?: "ask" | "auto"; trust?: "confirm" }; /** `extract`: notes that fill themselves after a turn: `rules` (default, what the person stated outright), `model` (also one short call to the model in use, secrets hidden), `off`. */ memory?: { extract?: "off" | "rules" | "model" }; }
-export interface ConfigFile { default?: string; /** Agent-to-agent calls: the peers this computer may ask and the server it may offer. Off until written. */ a2a?: A2aConfig; terminal?: TerminalConfig; /** Folders an agent may be started in, besides the one the program starts in and the ones worked in lately. Added here, never from a page. */ folders?: string[]; /** `false`: do not use the free models of navvied.com without an account (the default is to use them, as listed by the server). */ guestModels?: boolean; /** `list` (default): every step is one line, a failure or a change shows more. `fold`: steps that went well are folded away. `all`: everything every step printed. */ steps?: "list" | "fold" | "all"; /** Whether the model is offered the `apply_patch` tool: `auto` (default: when its window is not small), `on` or `off`. */ applyPatch?: "auto" | "on" | "off"; /** Models to use, in this order, when the one chosen cannot be reached (names of entries in `models`). */ fallback?: string[]; theme?: string; accent?: string; autoUpdate?: boolean; /** Where a hosted session reaches the web, and the token to ask with. Written by the service that runs the session. */ webProxy?: { url: string; token: string }; models: Record<string, ModelEntry>; /** What this computer keeps for the providers a person has a key of their own for (see providers.ts). Never sent anywhere. */ providers?: Record<string, SavedProvider>; /** The servers of the person's own that were added from a page (see endpoints.ts). Never sent anywhere, keys included. */ endpoints?: Record<string, EndpointRecord>; mcp?: Record<string, McpEntry>; hooks?: HookConfig; /** `false` keeps this computer's conversations off the account (default: they are kept there while signed in) */ syncConversations?: boolean; /** allow / ask / deny rules; see docs/CLI.md */ permissions?: RuleSet; /** `approval`: a skill the agent makes or changes waits for the person (`ask`) or is made and can be undone (`auto`, the default). `trust: "confirm"`: a skill that comes with a project is not offered to the model until the person accepts it. */ skills?: { approval?: "ask" | "auto"; trust?: "confirm" }; }
+export interface ConfigFile { default?: string; terminal?: TerminalConfig; /** Folders an agent may be started in, besides the one the program starts in and the ones worked in lately. Added here, never from a page. */ folders?: string[]; /** `false`: do not use the free models of navvied.com without an account (the default is to use them, as listed by the server). */ guestModels?: boolean; /** `list` (default): every step is one line, a failure or a change shows more. `fold`: steps that went well are folded away. `all`: everything every step printed. */ steps?: "list" | "fold" | "all"; /** Whether the model is offered the `apply_patch` tool: `auto` (default: when its window is not small), `on` or `off`. */ applyPatch?: "auto" | "on" | "off"; /** Models to use, in this order, when the one chosen cannot be reached (names of entries in `models`). */ fallback?: string[]; theme?: string; accent?: string; autoUpdate?: boolean; /** Where a hosted session reaches the web, and the token to ask with. Written by the service that runs the session. */ webProxy?: { url: string; token: string }; /** The engines for speech, pictures and looking at media on this computer (see media-setup.ts). */ media?: MediaConfig; models: Record<string, ModelEntry>; /** What this computer keeps for the providers a person has a key of their own for (see providers.ts). Never sent anywhere. */ providers?: Record<string, SavedProvider>; /** The servers of the person's own that were added from a page (see endpoints.ts). Never sent anywhere, keys included. */ endpoints?: Record<string, EndpointRecord>; mcp?: Record<string, McpEntry>; hooks?: HookConfig; /** `false` keeps this computer's conversations off the account (default: they are kept there while signed in) */ syncConversations?: boolean; /** allow / ask / deny rules; see docs/CLI.md */ permissions?: RuleSet; /** `approval`: a skill the agent makes or changes waits for the person (`ask`) or is made and can be undone (`auto`, the default). A skill that comes with a project is never offered to the model until the person accepts it; the older `trust: "confirm"` is still read and changes nothing. */ skills?: { approval?: "ask" | "auto" }; /** `extract`: notes that fill themselves after a turn: `rules` (default, what the person stated outright), `model` (also one short call to the model in use, secrets hidden), `off`. */ memory?: { extract?: "off" | "rules" | "model"; /** A server of the person's own that turns text into vectors, so notes and earlier conversations are found by meaning too. Off unless set (see meaning-config.ts). */ embeddings?: EmbeddingSettings }; }
+export interface ConfigFile { default?: string; /** Agent-to-agent calls: the peers this computer may ask and the server it may offer. Off until written. */ a2a?: A2aConfig; terminal?: TerminalConfig; /** `"off"` runs commands on this computer as they are; `{ "network": false }` also cuts the network of a confined command. The default is confined, network on (see docs/CLI.md). */ sandbox?: "on" | "off" | { network?: boolean }; /** Folders an agent may be started in, besides the one the program starts in and the ones worked in lately. Added here, never from a page. */ folders?: string[]; /** `false`: do not use the free models of navvied.com without an account (the default is to use them, as listed by the server). */ guestModels?: boolean; /** `list` (default): every step is one line, a failure or a change shows more. `fold`: steps that went well are folded away. `all`: everything every step printed. */ steps?: "list" | "fold" | "all"; /** Whether the model is offered the `apply_patch` tool: `auto` (default: when its window is not small), `on` or `off`. */ applyPatch?: "auto" | "on" | "off"; /** Models to use, in this order, when the one chosen cannot be reached (names of entries in `models`). */ fallback?: string[]; theme?: string; accent?: string; autoUpdate?: boolean; /** Where a hosted session reaches the web, and the token to ask with. Written by the service that runs the session. */ webProxy?: { url: string; token: string }; models: Record<string, ModelEntry>; /** What this computer keeps for the providers a person has a key of their own for (see providers.ts). Never sent anywhere. */ providers?: Record<string, SavedProvider>; /** The servers of the person's own that were added from a page (see endpoints.ts). Never sent anywhere, keys included. */ endpoints?: Record<string, EndpointRecord>; mcp?: Record<string, McpEntry>; hooks?: HookConfig; /** `false` keeps this computer's conversations off the account (default: they are kept there while signed in) */ syncConversations?: boolean; /** allow / ask / deny rules; see docs/CLI.md */ permissions?: RuleSet; /** `approval`: a skill the agent makes or changes waits for the person (`ask`) or is made and can be undone (`auto`, the default). A skill that comes with a project is never offered to the model until the person accepts it; the older `trust: "confirm"` is still read and changes nothing. */ skills?: { approval?: "ask" | "auto" }; }
 
 export interface ResolvedModel {
   name: string;
@@ -88,6 +99,8 @@ export interface ResolvedModel {
   efforts?: Effort[];
   vision?: boolean;
   pdf?: boolean;
+  /** Gets few tools and a short prompt; see `ModelEntry.small`. */
+  small: boolean;
 }
 
 type Platform = NodeJS.Platform;
@@ -115,11 +128,14 @@ export const searchIndexPath = (env: Env, platform: Platform = process.platform)
 /** The tasks the person scheduled, and where what each one produced is kept. */
 /** Where commands run (this computer, a container, another machine) and how many times each tool was used, kept in the computer's own state. */
 export const terminalStatePath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "terminal.json");
+export const sandboxStatePath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "sandbox.json");
 /** Where background commands keep their whole output and the record a restart finds them by. */
 export const jobsDir = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "jobs");
 export const draftsPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "drafts.json");
 export const toolUsagePath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "tool-usage.json");
 export const schedulesPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "schedules.json");
+/** Where each tool keeps what it makes: one folder under it by the tool's name (the pictures of the Browser tool). */
+export const toolFilesDir = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "tools");
 export const scheduledDir = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "scheduled");
 /** Where the files attached to conversations are kept, one folder per session. */
 export const attachmentsDir = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "attachments");
@@ -150,6 +166,8 @@ export const hostedModelsPath = (env: Env, platform: Platform = process.platform
 const dirnameOf = (path: string, platform: Platform): string => (platform === "win32" ? win32.dirname(path) : posix.dirname(path));
 /** The tokens of the agents that may call this computer (only their hashes). */
 export const a2aTokensPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "a2a-tokens.json");
+/** The file of the token this computer was given for an agent it asks (one for each name). */
+export const a2aPeerTokenPath = (env: Env, name: string, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "a2a-peers", `${name}.token`);
 export const a2aAuditPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "a2a-audit.jsonl");
 export const devicesPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "devices.json");
 export const checkpointsDir = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "checkpoints");
@@ -205,6 +223,7 @@ function entry(name: string, raw: unknown): Result<ModelEntry> {
   if (typeof raw.apiKey === "string") out.apiKey = raw.apiKey;
   if (typeof raw.apiKeyEnv === "string") out.apiKeyEnv = raw.apiKeyEnv;
   if (typeof raw.window === "number") out.window = raw.window;
+  if (typeof raw.small === "boolean") out.small = raw.small;
   if (typeof raw.vision === "boolean") out.vision = raw.vision;
   if (typeof raw.pdf === "boolean") out.pdf = raw.pdf;
   if (typeof raw.catalog === "string" && raw.catalog) out.catalog = raw.catalog;
@@ -287,12 +306,14 @@ function loadConfigFile(path: string): Result<ConfigFile | null> {
   if (raw.skills !== undefined) {
     const k = raw.skills as { approval?: unknown; trust?: unknown } | null;
     if (!k || typeof k !== "object" || Array.isArray(k) || (k.approval !== undefined && k.approval !== "ask" && k.approval !== "auto") || (k.trust !== undefined && k.trust !== "confirm")) return { ok: false, error: `${path}: "skills" may have "approval" ("ask" or "auto") and "trust" ("confirm")` };
-    config.skills = { ...(k.approval ? { approval: k.approval as "ask" | "auto" } : {}), ...(k.trust ? { trust: "confirm" as const } : {}) };
+    config.skills = { ...(k.approval ? { approval: k.approval as "ask" | "auto" } : {}) };
   }
   if (raw.memory !== undefined) {
-    const k = raw.memory as { extract?: unknown } | null;
-    if (!k || typeof k !== "object" || Array.isArray(k) || (k.extract !== undefined && k.extract !== "off" && k.extract !== "rules" && k.extract !== "model")) return { ok: false, error: `${path}: "memory" may have "extract" ("off", "rules" or "model")` };
-    config.memory = k.extract ? { extract: k.extract as "off" | "rules" | "model" } : {};
+    const k = raw.memory as { extract?: unknown; embeddings?: unknown } | null;
+    if (!k || typeof k !== "object" || Array.isArray(k) || (k.extract !== undefined && k.extract !== "off" && k.extract !== "rules" && k.extract !== "model")) return { ok: false, error: `${path}: "memory" may have "extract" ("off", "rules" or "model") and "embeddings"` };
+    const embeddings = k.embeddings === undefined ? undefined : parseEmbeddings(k.embeddings);
+    if (typeof embeddings === "string") return { ok: false, error: `${path}: ${embeddings}` };
+    config.memory = { ...(k.extract ? { extract: k.extract as "off" | "rules" | "model" } : {}), ...(embeddings ? { embeddings } : {}) };
   }
   if (raw.steps !== undefined) {
     if (raw.steps !== "list" && raw.steps !== "fold" && raw.steps !== "all") return { ok: false, error: `${path}: "steps" must be "list", "fold" or "all"` };
@@ -357,6 +378,12 @@ function loadConfigFile(path: string): Result<ConfigFile | null> {
     }
     if (Object.keys(endpoints).length) config.endpoints = endpoints;
   }
+  if (raw.sandbox !== undefined) {
+    const s = raw.sandbox as unknown;
+    const shaped = s === "on" || s === "off" || (typeof s === "object" && s !== null && !Array.isArray(s) && ((s as { network?: unknown }).network === undefined || typeof (s as { network?: unknown }).network === "boolean"));
+    if (!shaped) return { ok: false, error: `${path}: "sandbox" must be "on", "off" or { "network": true or false }` };
+    config.sandbox = s as ConfigFile["sandbox"] & {};
+  }
   if (raw.applyPatch !== undefined) {
     if (raw.applyPatch !== "auto" && raw.applyPatch !== "on" && raw.applyPatch !== "off") return { ok: false, error: `${path}: "applyPatch" must be "auto", "on" or "off"` };
     config.applyPatch = raw.applyPatch;
@@ -387,14 +414,16 @@ function loadConfigFile(path: string): Result<ConfigFile | null> {
       const hasUrl = typeof value.url === "string" && value.url, hasCommand = typeof value.command === "string" && value.command;
       if (!hasUrl && !hasCommand) return { ok: false, error: `${path}: connected program "${name}" needs a command (a program on this computer) or a url (a server on the web)` };
       if (hasUrl && hasCommand) return { ok: false, error: `${path}: connected program "${name}": use either command or url, not both` };
+      const asks = mcpAsks(value);
+      if (typeof asks === "string") return { ok: false, error: `${path}: connected program "${name}": ${asks}` };
       if (hasUrl) {
         if (!/^https?:\/\//.test(value.url as string)) return { ok: false, error: `${path}: connected program "${name}": url must start with http:// or https://` };
         const oauth = isObj(value.oauth) ? Object.fromEntries((["clientId", "clientSecret", "scope"] as const).flatMap((k) => (typeof (value.oauth as Record<string, unknown>)[k] === "string" ? [[k, (value.oauth as Record<string, string>)[k]]] : []))) : undefined;
-        mcp[name] = { url: value.url as string, ...(isObj(value.headers) ? { headers: Object.fromEntries(Object.entries(value.headers).filter((e): e is [string, string] => typeof e[1] === "string")) } : {}), ...(oauth && Object.keys(oauth).length ? { oauth } : {}) };
+        mcp[name] = { url: value.url as string, ...(isObj(value.headers) ? { headers: Object.fromEntries(Object.entries(value.headers).filter((e): e is [string, string] => typeof e[1] === "string")) } : {}), ...(oauth && Object.keys(oauth).length ? { oauth } : {}), ...asks };
         continue;
       }
       if (value.args !== undefined && !(Array.isArray(value.args) && value.args.every((a) => typeof a === "string"))) return { ok: false, error: `${path}: connected program "${name}": args must be an array of strings` };
-      mcp[name] = { command: value.command as string, ...(Array.isArray(value.args) ? { args: value.args as string[] } : {}), ...(isObj(value.env) ? { env: Object.fromEntries(Object.entries(value.env).filter((e): e is [string, string] => typeof e[1] === "string")) } : {}), ...(typeof value.cwd === "string" ? { cwd: value.cwd } : {}) };
+      mcp[name] = { command: value.command as string, ...(Array.isArray(value.args) ? { args: value.args as string[] } : {}), ...(isObj(value.env) ? { env: Object.fromEntries(Object.entries(value.env).filter((e): e is [string, string] => typeof e[1] === "string")) } : {}), ...(typeof value.cwd === "string" ? { cwd: value.cwd } : {}), ...asks };
     }
     if (Object.keys(mcp).length) config.mcp = mcp;
   }
@@ -406,15 +435,21 @@ function loadConfigFile(path: string): Result<ConfigFile | null> {
 }
 
 const DEFAULT_WINDOW = 128_000;
+export const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0"]);
+/** Whether a model is a small one: as its entry says, else when it runs on this computer with a small window. The window of a hosted model says nothing about its size. */
+export function isSmall(e: Pick<ModelEntry, "small">, baseUrl: string | undefined, window: number): boolean {
+  if (e.small !== undefined) return e.small;
+  try { return window <= SMALL_WINDOW && LOCAL_HOSTS.has(new URL(baseUrl ?? "").hostname); } catch { return false; }
+}
 const DEFAULT_EFFORTS: Effort[] = ["low", "medium", "high"];
 const toResolved = (name: string, e: ModelEntry, env: Env): ResolvedModel => {
   if (e.command) {
-    return { name, window: e.window ?? DEFAULT_WINDOW, ...(e.efforts?.length ? { efforts: e.efforts } : {}), cli: { command: e.command, args: e.args ?? [], ...(e.model ? { model: e.model } : {}), env: e.env ?? {}, ...(e.adapter ? { adapter: e.adapter } : {}), ...(e.models?.length ? { models: e.models } : {}) } };
+    return { name, window: e.window ?? DEFAULT_WINDOW, ...(e.efforts?.length ? { efforts: e.efforts } : {}), small: false, cli: { command: e.command, args: e.args ?? [], ...(e.model ? { model: e.model } : {}), env: e.env ?? {}, ...(e.adapter ? { adapter: e.adapter } : {}), ...(e.models?.length ? { models: e.models } : {}) } };
   }
   const apiKey = (e.apiKeyEnv ? env[e.apiKeyEnv] : undefined) ?? e.apiKey;
   const provider: ChatCompletionsConfig = { baseUrl: e.baseUrl ?? "", model: e.model ?? "", ...(apiKey ? { apiKey } : {}), ...(e.reasoning ? { reasoning: e.reasoning } : {}), ...(e.headers ? { headers: e.headers } : {}) };
   const efforts = e.efforts ?? (e.reasoning === "effort" ? DEFAULT_EFFORTS : undefined);
-  return { name, provider, window: e.window ?? DEFAULT_WINDOW, ...(e.api ? { api: e.api } : {}), ...(e.signIn ? { signIn: e.signIn } : {}), ...(e.adc ? { adc: e.adc } : {}), ...(efforts?.length ? { efforts } : {}), ...(e.vision !== undefined ? { vision: e.vision } : {}), ...(e.pdf ? { pdf: true } : {}) };
+  return { name, provider, window: e.window ?? DEFAULT_WINDOW, small: isSmall(e, provider.baseUrl, e.window ?? DEFAULT_WINDOW), ...(e.api ? { api: e.api } : {}), ...(e.signIn ? { signIn: e.signIn } : {}), ...(e.adc ? { adc: e.adc } : {}), ...(efforts?.length ? { efforts } : {}), ...(e.vision !== undefined ? { vision: e.vision } : {}), ...(e.pdf ? { pdf: true } : {}) };
 };
 
 /** Pick the model to use: `--model`, else the file's default, else its only entry, else the NAVVIED_* environment. */
@@ -468,6 +503,32 @@ export function updateConfig(path: string, patch: { theme?: string; accent?: str
   return { ok: true, value: config };
 }
 
+/** Changes the agent-to-agent part of the configuration file (made with its defaults when there is none) and keeps the rest as it is. */
+export function saveA2a(path: string, change: (a2a: A2aConfig) => void): Result<ConfigFile> {
+  const existing = loadConfig(path);
+  if (!existing.ok) return existing;
+  const config: ConfigFile = existing.value ?? { models: {} };
+  const a2a: A2aConfig = config.a2a ?? { mode: "plan", peers: {}, limits: { ...DEFAULT_LIMITS } };
+  change(a2a);
+  config.a2a = a2a;
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return { ok: true, value: config };
+}
+
+/** Sets how the agent looks through what the person said for lasting facts (`memory.extract`), keeping the rest of the file. */
+export function saveMemoryExtract(path: string, mode: "off" | "rules" | "model"): Result<ConfigFile> {
+  const existing = loadConfig(path);
+  if (!existing.ok) return existing;
+  const config: ConfigFile = existing.value ?? { models: {} };
+  config.memory = { ...config.memory, extract: mode };
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return { ok: true, value: config };
+}
+
 /** Remembers a command pattern ("git status *") as always allowed from now on, in every session: added to the configuration file's own rules, not just this run. */
 export function rememberBashPattern(path: string, pattern: string): Result<ConfigFile> {
   const existing = loadConfig(path);
@@ -502,6 +563,18 @@ export function saveModel(path: string, name: string, entry: ModelEntry): Result
   if (!existing.ok) return existing;
   const config: ConfigFile = existing.value ?? { models: {} };
   config.models = { ...config.models, [name]: entry };
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return { ok: true, value: config };
+}
+
+/** Keeps what the setup of a media tool found (the programs and files of an engine) in the `media` part of the file, next to what is already there. */
+export function saveMedia(path: string, patch: MediaConfig): Result<ConfigFile> {
+  const existing = loadConfig(path);
+  if (!existing.ok) return existing;
+  const config: ConfigFile = existing.value ?? { models: {} };
+  config.media = { ...config.media, ...patch };
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   chmodSync(path, 0o600);

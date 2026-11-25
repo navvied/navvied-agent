@@ -1,0 +1,14 @@
+{
+  "id": "schedule-fortnight",
+  "title": "Schedule a job that repeats every two weeks on a weekday in a time zone",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": ["bun"],
+  "prompt": "Set up a scheduled job named fortnight that runs every 2 weeks on Friday at 10:00 in the Asia/Jakarta time zone and writes a short status report of this project. It must only read.",
+  "check": "bun \"$BENCH_FIXTURES/schedule-check.ts\" fortnight",
+  "protect": ["README.md"],
+  "env": { "XDG_STATE_HOME": "{dir}/.state" },
+  "maxSteps": 20,
+  "timeoutSeconds": 120
+}

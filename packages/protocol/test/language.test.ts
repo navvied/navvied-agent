@@ -9,7 +9,8 @@ import { relative } from "node:path";
 import { ROOT, repoFiles } from "./repo-files.ts";
 
 // password-words.ts holds the words for "password" in many languages on purpose, so a typed secret is found in any of them; quantifier-words.ts those for "each/every/all" (a cue that a request is about many things).
-const SKIP_FILES = new Set(["language.test.ts", "quantifier-words.ts", "password-words.ts", "export-public.sh", "bun.lock", "bun.lockb", "Cargo.lock"]);
+// memory-words.ts holds the sentences that state a lasting fact in other languages, and memory-words.test.ts one example of each, so the notes fill themselves in any language.
+const SKIP_FILES = new Set(["language.test.ts", "quantifier-words.ts", "password-words.ts", "memory-words.ts", "memory-words.test.ts", "export-public.sh", "bun.lock", "bun.lockb", "Cargo.lock"]);
 
 const WORDS = [
   "tuan", "bos", "yang", "tidak", "untuk", "dengan", "adalah", "sudah", "belum", "jangan", "kamu", "saya", "karena", "sebelum", "setelah",

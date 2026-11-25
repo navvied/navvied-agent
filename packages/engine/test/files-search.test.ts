@@ -140,6 +140,16 @@ describe("Grep", () => {
     writeFileSync(join(d, "f.txt"), "x\n");
     expect(await only([], () => grep.run({ pattern: "x" }, conversation(d)))).toContain("[searched without ripgrep: patterns follow JavaScript's rules");
   });
+  test("the note about the search done in the program itself is said once in a conversation, not after every search", async () => {
+    const d = workdir();
+    writeFileSync(join(d, "f.txt"), "x\n");
+    const kept = new Map<string, { close(): void }>();
+    const here = { ...conversation(d), keep: (k: string, make: () => any) => { if (!kept.has(k)) kept.set(k, make()); return kept.get(k) as any; } };
+    const a = await only([], () => grep.run({ pattern: "x" }, here)), b = await only([], () => grep.run({ pattern: "x" }, here));
+    expect(a).toContain("[searched without ripgrep");
+    expect(b).not.toContain("searched without ripgrep");
+    expect(await only([], () => grep.run({ pattern: "x" }, conversation(d)))).toContain("[searched without ripgrep");
+  });
   // The stand-in for ripgrep is a shell script, which Windows cannot run; what is checked is the list of options, the same on every system.
   test.skipIf(process.platform === "win32")("the options are passed to ripgrep as it takes them", async () => {
     const d = workdir(), bin = workdir();

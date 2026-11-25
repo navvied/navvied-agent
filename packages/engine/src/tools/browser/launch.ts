@@ -54,6 +54,17 @@ function extraFlags(): string[] {
   } catch { return []; }
 }
 
+/**
+ * The browser makes requests of its own (updates, safe browsing, sync, translation, a search for its start page). They are the person's
+ * traffic as much as a page's, and the guard would have to answer for each; a page the person asked for is the only reason to connect.
+ */
+const QUIET = [
+  "--disable-background-networking", "--disable-component-update", "--disable-component-extensions-with-background-pages", "--disable-background-mode", "--disable-search-engine-choice-screen", "--disable-field-trial-config", "--no-service-autorun", "--disable-default-apps", "--disable-client-side-phishing-detection",
+  "--disable-domain-reliability", "--metrics-recording-only", "--safebrowsing-disable-auto-update", "--disable-breakpad", "--no-pings",
+  "--disable-composebox-from-aimntp", "--disable-updater-scheduler", "--disable-delta-updates",
+  "--disable-features=Translate,OptimizationHints,MediaRouter,NetworkTimeServiceQuerying,SafeBrowsingHashPrefixRealTimeLookups",
+];
+
 class StoppedAtStart extends Error {}
 
 export interface Launched { endpoint: string; stop(): void }
@@ -70,7 +81,7 @@ export async function launch(chrome: string, proxyPort: number): Promise<Launche
 async function start(chrome: string, proxyPort: number): Promise<Launched> {
   // The long form of the folder: a short 8.3 name (RUNNER~1) in a profile path is one more thing for a browser on Windows to trip over.
   const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "navvied-browser-")));
-  const child: ChildProcess = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${dir}`, `--proxy-server=http://127.0.0.1:${proxyPort}`, "--proxy-bypass-list=<-loopback>", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync", "--disable-background-networking", "--disable-component-update", "--disable-default-apps", "--no-pings", "--mute-audio", "--hide-scrollbars", "--window-size=1280,900", ...(process.platform === "win32" ? ["--disable-gpu"] : []), ...(process.getuid?.() === 0 || process.env.NAVVIED_BROWSER_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), ...extraFlags(), "about:blank"], { detached: usesProcessGroups(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+  const child: ChildProcess = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${dir}`, `--proxy-server=http://127.0.0.1:${proxyPort}`, "--proxy-bypass-list=<-loopback>", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync", ...QUIET, "--mute-audio", "--hide-scrollbars", "--window-size=1280,900", ...(process.platform === "win32" ? ["--disable-gpu"] : []), ...(process.getuid?.() === 0 || process.env.NAVVIED_BROWSER_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), ...extraFlags(), "about:blank"], { detached: usesProcessGroups(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
   let said = "", stopped: number | null | undefined, over = false;
   child.stderr?.on("data", (d: Buffer) => { said = (said + d.toString("utf8")).slice(-600); });
   child.on("exit", (code) => { stopped = code; });

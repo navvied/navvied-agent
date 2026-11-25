@@ -12,7 +12,10 @@ import type { LocalConfig } from "@navvied/engine";
  *     "ffmpeg": "/usr/bin/ffmpeg", "pdftoppm": "/usr/bin/pdftoppm"
  *   }
  */
-export interface MediaConfig extends LocalConfig { vision?: { model: string }; pdftoppm?: string }
+export interface MediaConfig extends LocalConfig { vision?: { model: string } | { local: LocalVisionConfig }; pdftoppm?: string }
+
+/** A model that looks at pictures and runs on this computer: the program that serves it, the model file and the file that lets it read pictures. Written by the setup of the Vision tool. */
+export interface LocalVisionConfig { server: string; model: string; mmproj: string }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const text = (o: Record<string, unknown>, key: string): string | undefined => (typeof o[key] === "string" && o[key] ? (o[key] as string) : undefined);
@@ -27,7 +30,10 @@ export function parseMedia(raw: unknown): MediaConfig | string {
     if (!isObj(e) || !text(e, "bin") || !text(e, "model")) return `"media.${kind}" needs a program in "bin" and a file in "model"`;
     const extra = (key: string): string | undefined => text(e, key);
     if (kind === "stt") out.stt = { bin: extra("bin")!, model: extra("model")!, ...(extra("language") ? { language: extra("language")! } : {}) };
-    else if (kind === "image") out.image = { bin: extra("bin")!, model: extra("model")! };
+    else if (kind === "image") {
+      for (const k of ["steps", "cfg"] as const) if (e[k] !== undefined && (typeof e[k] !== "number" || !((e[k] as number) >= 0) || (k === "steps" && !Number.isInteger(e[k])))) return `"media.image.${k}" must be a number`;
+      out.image = { bin: extra("bin")!, model: extra("model")!, ...(typeof e.steps === "number" && e.steps > 0 ? { steps: e.steps } : {}), ...(typeof e.cfg === "number" ? { cfg: e.cfg } : {}) };
+    }
     else {
       if (e.engine !== undefined && e.engine !== "piper" && e.engine !== "kokoro") return `"media.tts.engine" must be "piper" or "kokoro"`;
       if (e.engine === "kokoro" && !extra("voices")) return `"media.tts" with "kokoro" needs the voices file in "voices"`;
@@ -35,8 +41,15 @@ export function parseMedia(raw: unknown): MediaConfig | string {
     }
   }
   if (raw.vision !== undefined) {
-    if (!isObj(raw.vision) || !text(raw.vision, "model")) return `"media.vision" needs the name of a model in "model"`;
-    out.vision = { model: text(raw.vision, "model")! };
+    const v = raw.vision;
+    if (isObj(v) && isObj(v.local)) {
+      const l = v.local;
+      if (!text(l, "server") || !text(l, "model") || !text(l, "mmproj")) return `"media.vision.local" needs "server", "model" and "mmproj" (paths)`;
+      out.vision = { local: { server: text(l, "server")!, model: text(l, "model")!, mmproj: text(l, "mmproj")! } };
+    } else {
+      if (!isObj(v) || !text(v, "model")) return `"media.vision" needs the name of a model in "model"`;
+      out.vision = { model: text(v, "model")! };
+    }
   }
   for (const key of ["ffmpeg", "pdftoppm"] as const) {
     if (raw[key] === undefined) continue;

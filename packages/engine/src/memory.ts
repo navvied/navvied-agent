@@ -12,7 +12,9 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { EngineEvent } from "@navvied/protocol";
+import { fuse } from "./embeddings.ts";
 import { clean, scanText } from "./text-scan.ts";
+import { alike, terms } from "./text-match.ts";
 
 export const MEMORY_FILE = "memory.md";
 export const PROJECT_MEMORY = join(".navvied", MEMORY_FILE);
@@ -50,8 +52,6 @@ export function parseEntries(raw: string): Entry[] {
 const lineOf = (e: Pick<Entry, "id" | "date" | "text" | "origin">): string => `- ${e.date}: ${e.text} <!--${e.id}${e.origin === "user" ? "" : ` ${e.origin}`}-->`;
 const label = (e: Entry): string => `${e.id}: ${e.text.length > 70 ? `${e.text.slice(0, 69)}…` : e.text}`;
 const words = (t: string): Set<string> => new Set(t.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
-/** The share of the first set's words that the second has. */
-const shared = (a: Set<string>, b: Set<string>): number => { let n = 0; for (const w of a) if (b.has(w)) n++; return n / Math.max(1, a.size); };
 const overlap = (a: Set<string>, b: Set<string>): number => { let n = 0; for (const w of a) if (b.has(w)) n++; return n / Math.max(1, a.size + b.size - n); };
 
 export function readNotes(file: string | undefined): string {
@@ -96,7 +96,11 @@ function find(entries: Entry[], target: string): Entry | string {
   const hits = entries.filter((e) => e.text.toLowerCase().includes(t.toLowerCase()) && t.length >= 2);
   if (hits.length === 1) return hits[0]!;
   if (hits.length > 1) return `Error: "${t}" matches ${hits.length} notes. Use the id of one: ${hits.slice(0, 4).map(label).join("; ")}.`;
-  const close = entries.map((e) => [shared(words(t), words(e.text)), e] as const).filter(([s]) => s >= 0.4).sort((a, b) => b[0] - a[0]).slice(0, 3);
+  // Words with a slip in them ("stagng server") still point at the one note they are closest to, when it is clearly the closest.
+  const asked = keywords(t);
+  const ranked = entries.map((e) => [asked.size ? matched(asked, keywords(e.text)) / asked.size : 0, e] as const).sort((a, b) => b[0] - a[0]);
+  if (ranked[0] && ranked[0][0] >= 0.6 && ranked[0][0] > (ranked[1]?.[0] ?? 0)) return ranked[0][1];
+  const close = ranked.filter(([s]) => s >= 0.4).slice(0, 3);
   return `Error: no note matches "${t}".${close.length ? ` Closest: ${close.map(([, e]) => label(e)).join("; ")}.` : entries.length ? ` Ids: ${entries.slice(-4).map(label).join("; ")}.` : " Nothing is kept there yet."}`;
 }
 
@@ -173,14 +177,24 @@ export function resolvePending(paths: MemoryPaths, id: string, accept: boolean, 
 }
 
 /** One note as it is put in front of the model: no id, and a mark on what came from the web. A note that fails the scan is not shown. */
-const noteText = (e: Entry): string => {
+const plainText = (e: Entry): string => {
   const found = scanText(e.text);
-  return found.length ? `[hidden: ${found[0]}; ask the person to check the notes file]` : `${clean(e.text)}${e.origin === "web" ? " (from a web page)" : ""}`;
+  return found.length ? `[hidden: ${found[0]}; ask the person to check the notes file]` : clean(e.text);
 };
+const noteText = (e: Entry): string => `${plainText(e)}${e.origin === "web" && !scanText(e.text).length ? " (from a web page)" : ""}`;
 const shown = (e: Entry): string => `- ${e.date}: ${noteText(e)}`;
 
 /** The words of a text that can tell one note from another (a one-letter word says nothing). */
-const keywords = (t: string): Set<string> => new Set([...words(t)].filter((w) => w.length >= 2));
+const keywords = (t: string): Set<string> => new Set(terms(t).filter((w) => w.length >= 2));
+/** How many of the words asked are in the note, as the same word, its start, or one slip away from it. */
+const matched = (asked: ReadonlySet<string>, note: ReadonlySet<string>): number => [...asked].filter((a) => [...note].some((w) => alike(a, w))).length;
+
+/** The text of every note of both places, as `memoryText` takes it into account. */
+export const noteTexts = (paths: MemoryPaths): string[] => (["user", "project"] as const).flatMap((s) => parseEntries(readNotes(fileOf(paths, s))).map((e) => e.text));
+
+/** Every note of both places as a page lists them: the text the model is shown, without its mark for the web (a note that fails the scan is hidden), and the id to edit or forget it by. */
+export const noteItems = (paths: MemoryPaths, scope?: Scope): { id: string; scope: Scope; date: string; text: string; origin: Origin }[] =>
+  (["user", "project"] as const).filter((s) => !scope || s === scope).flatMap((s) => parseEntries(readNotes(fileOf(paths, s))).map((e) => ({ id: e.id, scope: s, date: e.date, text: plainText(e), origin: e.origin })));
 
 /** Every note of both places, as `list` shows them to the model: the id to replace or forget it by, and where it is kept. */
 export function listNotes(paths: MemoryPaths, scope?: Scope): string {
@@ -191,11 +205,12 @@ export function listNotes(paths: MemoryPaths, scope?: Scope): string {
 /**
  * The notes as they are put in front of the model. Without a request: the newest that fit, from the start of a conversation.
  * With the request: at most NOTES_PER_TURN notes in NOTES_BUDGET characters, the ones that share the most words with it (newest first
- * among equals), so a long list of notes never fills the prompt; the others are one `Remember` call away.
+ * among equals), so a long list of notes never fills the prompt; the others are one `Remember` call away. `meaning` is, when a server that
+ * reads meaning is set up, how alike each note's text is to the request; it is fused with the words and does not replace them.
  */
-export function memoryText(paths: MemoryPaths, request?: string): string | undefined {
+export function memoryText(paths: MemoryPaths, request?: string, meaning?: ReadonlyMap<string, number>): string | undefined {
   const parts = [["Notes you kept for every project", paths.user], ["Notes you kept for this project", paths.project]] as const;
-  if (request !== undefined) return relevantText(parts, request);
+  if (request !== undefined) return relevantText(parts, request, meaning);
   const blocks = parts.flatMap(([title, file]) => {
     const rows = parseEntries(readNotes(file)).map(shown);
     if (!rows.length) return [];
@@ -207,13 +222,16 @@ export function memoryText(paths: MemoryPaths, request?: string): string | undef
   return blocks.length ? blocks.join("\n\n") : undefined;
 }
 
-function relevantText(parts: readonly (readonly [string, string | undefined])[], request: string): string | undefined {
+function relevantText(parts: readonly (readonly [string, string | undefined])[], request: string, meaning?: ReadonlyMap<string, number>): string | undefined {
   const asked = keywords(request);
-  const all = parts.flatMap(([title, file]) => parseEntries(readNotes(file)).map((e, at) => ({ title, row: shown(e), score: [...keywords(e.text)].filter((w) => asked.has(w)).length, at })));
+  const all = parts.flatMap(([title, file]) => parseEntries(readNotes(file)).map((e, at) => ({ title, row: shown(e), words: matched(asked, keywords(e.text)), like: meaning?.get(e.text), at })));
   if (!all.length) return undefined;
+  const ids = (xs: readonly (typeof all)[number][]): string[] => xs.map((x) => String(all.indexOf(x)));
+  const fused = fuse([ids(all.filter((n) => n.words > 0).sort((a, b) => b.words - a.words || b.at - a.at)), ids(all.filter((n) => n.like !== undefined).sort((a, b) => b.like! - a.like!))]);
+  const score = (n: (typeof all)[number]): number => fused.get(String(all.indexOf(n))) ?? 0;
   const chosen: typeof all = [];
   let used = 0;
-  for (const n of [...all].sort((a, b) => b.score - a.score || b.at - a.at)) {
+  for (const n of [...all].sort((a, b) => score(b) - score(a) || b.at - a.at)) {
     if (chosen.length >= NOTES_PER_TURN || (used + n.row.length > NOTES_BUDGET && chosen.length)) break;
     chosen.push(n);
     used += n.row.length + 1;

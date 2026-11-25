@@ -18,6 +18,9 @@ interface Side {
   head: Buffer;
   held: Buffer[];
   done?: boolean;
+  /** A refusal was queued: once it is all written the socket ends (and what the browser still sends is read and dropped, so closing is not a reset that destroys the refusal). */
+  finishing?: boolean;
+  quiet?: ReturnType<typeof setTimeout>;
 }
 
 const side = (peer?: Socket<Side>): Side => ({ queue: [], phase: "open", head: Buffer.alloc(0), held: [], ...(peer ? { peer } : {}) });
@@ -26,23 +29,34 @@ const flush = (s: Socket<Side>): void => {
   const q = s.data.queue;
   while (q.length) {
     const n = s.write(q[0]!);
-    if (n < 0) { q.length = 0; return; }
+    if (n < 0) { q.length = 0; break; }
     if (n < q[0]!.length) { q[0] = q[0]!.subarray(n); return; }
     q.shift();
   }
+  if (s.data.finishing) settle(s);
 };
+/** The refusal is written: the socket ends once the browser has stopped sending for a moment, because closing with its bytes unread is a reset, and a reset can destroy the refusal on its way. */
+function settle(s: Socket<Side>): void {
+  clearTimeout(s.data.quiet);
+  s.data.quiet = setTimeout(() => hangUp(s), QUIET_MS);
+}
+const QUIET_MS = 150;
 const send = (s: Socket<Side>, chunk: Uint8Array): void => { s.data.queue.push(chunk); flush(s); };
 const hangUp = (s: Socket<Side>): void => { if (s.data.done) return; s.data.done = true; try { s.end(); } catch { /* gone */ } if (s.data.peer) hangUp(s.data.peer); };
 
 const END = Buffer.from("\r\n\r\n");
-const deny = (s: Socket<Side>, why: string): void => { send(s, Buffer.from(`HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain\r\nconnection: close\r\ncontent-length: ${Buffer.byteLength(why)}\r\n\r\n${why}`)); hangUp(s); };
+const deny = (s: Socket<Side>, why: string): void => {
+  s.data.finishing = true;
+  send(s, Buffer.from(`HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain\r\nconnection: close\r\ncontent-length: ${Buffer.byteLength(why)}\r\n\r\n${why}`));
+  // The browser may still be sending (an oversized request): it is let finish, but not for long.
+  setTimeout(() => hangUp(s), 2_000).unref();
+};
 
 export interface GuardProxy { readonly port: number; close(): void }
 
 /**
- * `allowPrivate` is asked at each connection (the host's choice can change between calls); `refused` hears why a connection to `host` was not made,
- * for the sentence that tells the person a page could not be opened; the browser's own background traffic comes through here too, so
- * the listener must match the host against what a page asked for.
+ * `allowPrivate` is asked at each connection (the host's choice can change between calls); `refused` hears why a connection to a host was not made,
+ * for the sentence that tells the person a page could not be opened.
  */
 export function startGuardProxy(allowPrivate: () => boolean, refused: (why: string, host: string) => void): GuardProxy {
   const upstreamHandlers: SocketHandler<Side> = {
@@ -100,6 +114,7 @@ export function startGuardProxy(allowPrivate: () => boolean, refused: (why: stri
       error: hangUp,
       data(s, chunk) {
         const d = s.data;
+        if (d.finishing) { if (!d.queue.length) settle(s); return; }
         if (d.phase === "open") { if (d.peer) send(d.peer, chunk); return; }
         if (d.phase === "connecting") { d.held.push(Buffer.from(chunk)); return; }
         const all = Buffer.concat([d.head, chunk]);

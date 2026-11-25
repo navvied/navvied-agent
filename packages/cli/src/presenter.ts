@@ -6,7 +6,7 @@
 import type { EngineEvent, FileNote } from "@navvied/protocol";
 import { mark } from "./banner.ts";
 import { refusalWords } from "./screen-words.ts";
-import { SavedFiles, savedFile } from "./saved-files.ts";
+import { SavedFiles, pictureFile, savedFile } from "./saved-files.ts";
 import type { IO } from "./io.ts";
 import { Markdown } from "./markdown.ts";
 import { paint, retryLine, type Renderer } from "./render.ts";
@@ -447,7 +447,7 @@ export class Presenter {
     const notes = [...(e.truncated ? ["TRUNCATED"] : []), ...((known as Running & { edited?: boolean }).edited ? ["EDITED"] : [])];
     const what = (): string => step.done;
     // A step stays on the screen when something went wrong or when it changed a file: those are what a person needs to see.
-    const attention = (e.outcome !== undefined && e.outcome !== "background" && e.outcome !== "skipped" && e.outcome !== "redirected") || e.status === "error" || (e.code !== undefined && e.code !== null && e.code !== 0) || failed(e.output ?? "") || e.screen?.verdict === "refused" || savedFile(e.output ?? "") !== undefined || e.name === "Edit" || e.name === "Write";
+    const attention = (e.outcome !== undefined && e.outcome !== "background" && e.outcome !== "skipped" && e.outcome !== "redirected") || e.status === "error" || (e.code !== undefined && e.code !== null && e.code !== 0) || failed(e.output ?? "") || e.screen?.verdict === "refused" || e.picture !== undefined || savedFile(e.output ?? "") !== undefined || e.name === "Edit" || e.name === "Write";
     if (e.outcome === "denied") { this.#counts.denied++; this.#group.denied++; this.#row(paint(this.io.color, "dim", "−"), paint(this.io.color, "dim", `You said no: ${what()}`), right, notes); }
     else if (e.outcome === "blocked") {
       this.#counts.failed++; this.#group.failed++;
@@ -484,7 +484,7 @@ export class Presenter {
           for (const n of bash.notes) this.#line(`    ${paint(this.io.color, "faint", n)}`);
         }
         if (e.name === "Edit") this.#diff(input as Record<string, unknown>, output);
-        const saved = savedFile(output);
+        const saved = e.picture ? pictureFile(e.picture) : savedFile(output);
         if (saved) {
           this.files.add(saved);
           for (const l of [saved.path, saved.size]) this.#line(`    ${paint(this.io.color, "faint", "⎿")} ${paint(this.io.color, "dim", l)}`);

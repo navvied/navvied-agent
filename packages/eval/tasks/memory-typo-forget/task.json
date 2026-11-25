@@ -1,0 +1,17 @@
+{
+  "id": "memory-typo-forget",
+  "title": "Forget a note by words that have a slip in them",
+  "kind": "terminal",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "bun"
+  ],
+  "prompt": "The staging server moved from alpha.example.test to beta.example.test. Forget the old staging note and keep the new fact; leave the other notes alone. Then write the new staging host into ANSWER.txt, alone on one line.",
+  "check": "test \"$(tr -d '[:space:]' < ANSWER.txt)\" = \"beta.example.test\" && bun \"$BENCH_FIXTURES/skills-check.ts\" typo-forgotten",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 600
+}

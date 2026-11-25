@@ -1,0 +1,3 @@
+[
+  { "tool": "Schedule", "args": { "action": "create", "name": "fortnight", "prompt": "Write a short status report of this project. Only read; change nothing.", "when": "every 2 weeks on friday at 10:00", "tz": "Asia/Jakarta" } }
+]

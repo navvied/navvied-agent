@@ -2,9 +2,27 @@
 export interface Change { from: string; to: string; all: boolean }
 export type Applied = { text: string; line: number; count: number; note?: string } | { error: string };
 
-/** Characters a model types plainly where a file has the typographic one (and the other way round); each maps to one character, so positions stay. */
-const PLAIN: Record<string, string> = { "“": '"', "”": '"', "„": '"', "‘": "'", "’": "'", "‚": "'", "–": "-", "—": "-", "−": "-", " ": " ", "‑": "-" };
-const plain = (s: string): string => s.replace(/[“”„‘’‚–—− ‑]/g, (c) => PLAIN[c]!);
+/** Typographic characters a model types plainly where a file has them (and the other way round), and what each stands for. A long dash is read as one hyphen or as two. */
+const PLAIN: Record<string, string> = { "“": '"', "”": '"', "„": '"', "‘": "'", "’": "'", "‚": "'", "–": "-", "−": "-", "‑": "-", "…": "...", " ": " ", " ": " ", " ": " ", " ": " ", " ": " ", " ": " ", " ": " ", " ": " ", " ": " ", " ": " ", " ": " ", " ": " ", " ": " ", " ": " ", "　": " " };
+
+/** A text rewritten piece by piece, with the part of the original each rewritten character came from, so a match in it can be put back on the original. */
+interface Folded { s: string; from: number[]; to: number[] }
+
+function fold(text: string, rewrite: (piece: string) => string, runs?: RegExp): Folded {
+  const f: Folded = { s: "", from: [], to: [] };
+  for (let i = 0; i < text.length;) {
+    let piece = String.fromCodePoint(text.codePointAt(i)!);
+    if (runs) { runs.lastIndex = i; const m = runs.exec(text); if (m) piece = m[0]; }
+    for (const c of rewrite(piece)) { f.s += c; f.from.push(i); f.to.push(i + piece.length); }
+    i += piece.length;
+  }
+  return f;
+}
+
+type Folder = (text: string) => Folded;
+const collapsed: Folder = (text) => fold(text, (p) => (/^[ \t]+$/.test(p) ? " " : p), /[ \t]+/y);
+const typed = (twoDashes: boolean): Folder => (text) => fold(text, (p) => (p === "—" ? (twoDashes ? "--" : "-") : (PLAIN[p] ?? p)));
+const plain = (s: string): string => typed(false)(s).s;
 
 /** The line numbers of a copied `cat -n` gutter ("   12\t") when every line has one. */
 const GUTTER = /^ *\d+\t/;
@@ -19,28 +37,56 @@ const lineOf = (text: string, index: number): number => text.slice(0, index).spl
 
 interface Span { start: number; end: number; to: string }
 
-/** Where `from` is in `text`, trying exact text, then the same lines whatever their indentation, then the same text with plain quotes and dashes. */
+/** Every place where `c.from` is in `text` once both are folded, cut at whole characters of the original (never inside what one character became). */
+function foldedSpans(text: string, f: Folder, c: Change): Span[] {
+  const hay = f(text), want = f(c.from).s;
+  if (!want || (hay.s === text && want === c.from)) return [];
+  const out: Span[] = [];
+  for (const s of places(hay.s, want)) {
+    const e = s + want.length;
+    if ((s > 0 && hay.from[s - 1] === hay.from[s]) || (e < hay.s.length && hay.from[e - 1] === hay.from[e])) continue;
+    out.push({ start: hay.from[s]!, end: hay.to[e - 1]!, to: c.to });
+  }
+  return out;
+}
+
+/** Windows of whole lines of `text` that equal the lines of `c.from` once each is rewritten by `norm`; the new text takes the file's indentation. */
+function byLines(text: string, c: Change, norm: (line: string) => string): Span[] {
+  const lines = text.split("\n"), want = c.from.replace(/\n$/, "").split("\n").map(norm);
+  if (!want.some(Boolean)) return [];
+  const offsets: number[] = [];
+  let at = 0;
+  for (const l of lines) { offsets.push(at); at += l.length + 1; }
+  const spans: Span[] = [];
+  for (let i = 0; i + want.length <= lines.length; i++) {
+    if (!want.every((w, k) => norm(lines[i + k]!) === w)) continue;
+    const end = offsets[i + want.length - 1]! + lines[i + want.length - 1]!.length + (c.from.endsWith("\n") ? 1 : 0);
+    spans.push({ start: offsets[i]!, end, to: reindent(c, lines.slice(i, i + want.length)) });
+    i += want.length - 1;
+  }
+  return spans;
+}
+
+const TYPOGRAPHIC = "matched with plain quotes and dashes where the file has typographic ones";
+
+/**
+ * Where `from` is in `text`. In order: exactly; without a copied gutter; the same lines whatever their indentation; with runs of spaces read as one; with plain
+ * quotes, dashes and spaces for typographic ones; and both of those last two at once on whole lines. Every step only rewrites characters, none guesses at what is similar.
+ */
 function find(text: string, c: Change): { spans: Span[]; note?: string } {
   const exact = places(text, c.from);
   if (exact.length) return { spans: exact.map((start) => ({ start, end: start + c.from.length, to: c.to })) };
   const gutterless = withoutGutter(c.from);
   if (gutterless !== c.from) { const r = find(text, { ...c, from: gutterless, to: withoutGutter(c.to) }); if (r.spans.length) return { ...r, note: "the line numbers at the start of the lines were left out" }; }
-  const lines = text.split("\n"), want = c.from.replace(/\n$/, "").split("\n").map((l) => l.trim());
-  if (want.some(Boolean)) {
-    const offsets: number[] = [];
-    let at = 0;
-    for (const l of lines) { offsets.push(at); at += l.length + 1; }
-    const spans: Span[] = [];
-    for (let i = 0; i + want.length <= lines.length; i++) {
-      if (!want.every((w, k) => lines[i + k]!.trim() === w)) continue;
-      const end = offsets[i + want.length - 1]! + lines[i + want.length - 1]!.length + (c.from.endsWith("\n") ? 1 : 0);
-      spans.push({ start: offsets[i]!, end, to: reindent(c, lines.slice(i, i + want.length)) });
-      i += want.length - 1;
-    }
-    if (spans.length) return { spans, note: "matched the lines ignoring differences in indentation and spaces at the ends of lines" };
+  const trimmed = byLines(text, c, (l) => l.trim());
+  if (trimmed.length) return { spans: trimmed, note: "matched the lines ignoring differences in indentation and spaces at the ends of lines" };
+  const steps: [Folder, string][] = [[collapsed, "matched with runs of spaces and tabs read as one space"], [typed(false), TYPOGRAPHIC], [typed(true), TYPOGRAPHIC]];
+  for (const [f, note] of steps) {
+    const spans = foldedSpans(text, f, c);
+    if (spans.length) return { spans, note };
   }
-  const folded = places(plain(text), plain(c.from));
-  if (folded.length) return { spans: folded.map((start) => ({ start, end: start + c.from.length, to: c.to })), note: "matched with plain quotes and dashes where the file has typographic ones" };
+  const both = byLines(text, c, (l) => plain(l).replace(/[ \t]+/g, " ").trim());
+  if (both.length) return { spans: both, note: "matched the lines ignoring indentation and spacing, with plain quotes and dashes where the file has typographic ones" };
   return { spans: [] };
 }
 

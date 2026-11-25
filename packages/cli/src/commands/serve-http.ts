@@ -17,6 +17,7 @@ import { configPath, loadConfig } from "../config.ts";
 import { discover, listModels, saveModel, useModel } from "../model-setup.ts";
 import { createHub, type Hub } from "./hub.ts";
 import { startA2a } from "./a2a.ts";
+import { A2aRelay } from "../a2a-relay.ts";
 import { RelayHost } from "../relay-host.ts";
 import { DEFAULT_SITE } from "./web.ts";
 import { VERSION } from "../help.ts";
@@ -36,7 +37,7 @@ interface PendingAsk { deviceId: string; origin: string; code: string; resolve: 
  * the device that asked it, or left too long, in which case it is refused by itself, the same as the terminal's own
  * `askToPair` would eventually time out a person who never looks at it.
  */
-function createRelayBridge(hub: Hub, store: DeviceStore, io: IO, site: string, publish: (line: string) => void, waitMs = RELAY_ASK_WAIT_MS) {
+function createRelayBridge(hub: Hub, store: DeviceStore, io: IO, site: string, publish: (line: string) => void, a2a: () => A2aRelay | undefined, waitMs = RELAY_ASK_WAIT_MS) {
   let host: RelayHost | undefined;
   const pendingAsks = new Map<string, PendingAsk>();
 
@@ -58,7 +59,7 @@ function createRelayBridge(hub: Hub, store: DeviceStore, io: IO, site: string, p
     });
 
   const relay = (): RelayHost =>
-    (host ??= new RelayHost({ url: io.env.NAVVIED_RELAY_URL ?? relayUrlFor(site), site, hub, store, ask, replaced: () => publish(JSON.stringify({ relay: "replaced" })) }));
+    (host ??= new RelayHost({ url: io.env.NAVVIED_RELAY_URL ?? relayUrlFor(site), site, hub, store, ask, a2a, replaced: () => publish(JSON.stringify({ relay: "replaced" })) }));
 
   // A device paired before (by this process or an earlier one, since the store is a file) reconnects by itself.
   if (store.list().some((d) => d.kind === "relay")) void relay().start().catch(() => undefined);
@@ -86,6 +87,7 @@ function createRelayBridge(hub: Hub, store: DeviceStore, io: IO, site: string, p
       settle(id, choice);
       return true;
     },
+    a2aChanged() { host?.a2aChanged(); },
     stop() {
       // Nothing is left waiting on an answer that will now never come (the timer is unref'd, so it was never
       // what kept the process alive, but the promise itself would otherwise hang until it fires on its own).
@@ -131,6 +133,8 @@ export interface HttpServer {
   url: string;
   port: number;
   token: string;
+  /** Lets agents on the web reach this computer through the relay (or stops it, with nothing). They are carried by the computer's signed-in channel, so nothing happens on a computer that has none. */
+  a2a(relay: A2aRelay | undefined): void;
   stop(): Promise<void>;
 }
 
@@ -166,7 +170,8 @@ export async function startHttpServer(options: Options, io: IO, deps: HttpDeps =
   const pairing = createPairing({ store, allowed, ask: deps.ask ?? (async () => "no") });
   let publishRelay: (line: string) => void = () => undefined;
   const relaySite = deps.relaySite ?? options.site ?? io.env.NAVVIED_WEB_URL ?? DEFAULT_SITE;
-  const relay = createRelayBridge(hub, store, io, relaySite, (line) => publishRelay(line), deps.relayAskWaitMs);
+  let a2aRelay: A2aRelay | undefined;
+  const relay = createRelayBridge(hub, store, io, relaySite, (line) => publishRelay(line), () => a2aRelay, deps.relayAskWaitMs);
 
   const loopbackOnly = LOOPBACK.has(host);
   const hostOk = (req: Request): boolean => {
@@ -400,7 +405,9 @@ export async function startHttpServer(options: Options, io: IO, deps: HttpDeps =
       url: `http://${shown.includes(":") ? `[${shown}]` : shown}:${server.port}/?token=${token}`,
       port: server.port ?? 0,
       token,
+      a2a(next) { a2aRelay?.stop(); a2aRelay = next; relay.a2aChanged(); },
       async stop() {
+        a2aRelay?.stop();
         relay.stop();
         await server.stop(true);
         if (!deps.hub) await hub.stop();
@@ -417,7 +424,11 @@ export async function serveHttpCommand(options: Options, io: IO): Promise<number
   const cfg = loadConfig(configPath(io.env, options.config), io.env);
   const a2a = options.a2a || (cfg.ok && cfg.value?.a2a?.serve) ? startA2a(options, io, cfg.ok ? cfg.value?.a2a?.port ?? 8788 : 8788) : undefined;
   if (a2a && !a2a.ok) io.stderr.write(`error: agent-to-agent calls did not start: ${a2a.error}\n`);
-  if (a2a?.ok) io.stderr.write(`Other agents can ask this computer at ${a2a.server.url}/ in ${a2a.config.mode} mode.\n`);
+  if (a2a?.ok) {
+    io.stderr.write(`Other agents can ask this computer at ${a2a.server.url}/ in ${a2a.config.mode} mode.\n`);
+    const { tokens } = a2a;
+    server.a2a(new A2aRelay({ handle: tokens.handle(), server: a2a.server, hashes: () => tokens.list().map((t) => t.hash) }));
+  }
   if (options.readyLine) io.stderr.write(`navvied-ready ${JSON.stringify({ port: server.port })}\n`);
   else {
     io.stderr.write(`navvied is listening.\n\n  ${server.url}\n\nOpen that address in a browser. The token in it is the key; keep it private.\n`);
@@ -428,7 +439,7 @@ export async function serveHttpCommand(options: Options, io: IO): Promise<number
     const off = io.onInterrupt(() => { off(); resolveStop(); });
     if (options.exitWhenStdinCloses) void (async () => { try { for await (const _ of io.stdin) { /* nothing is expected: only the end matters */ } } catch { /* a broken pipe is an end too */ } off(); resolveStop(); })();
   });
-  if (a2a?.ok) await a2a.server.stop();
+  if (a2a?.ok) { server.a2a(undefined); await a2a.server.stop(); }
   await server.stop();
   return EXIT.ok;
 }

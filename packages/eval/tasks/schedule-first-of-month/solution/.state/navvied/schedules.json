@@ -1,0 +1,14 @@
+{
+  "jobs": [
+    {
+      "id": "a1b2c3",
+      "prompt": "List the unpaid invoices mentioned in this project. Only read; change nothing.",
+      "cwd": ".",
+      "mode": "plan",
+      "cron": "30 8 1 * *",
+      "tz": "Europe/Berlin",
+      "title": "invoices",
+      "created": 1700000000000
+    }
+  ]
+}

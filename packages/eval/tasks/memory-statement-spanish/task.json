@@ -1,0 +1,17 @@
+{
+  "id": "memory-statement-spanish",
+  "title": "A convention stated in Spanish is kept as a note without being asked",
+  "kind": "terminal",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "bun"
+  ],
+  "prompt": "Siempre escribe las etiquetas de despliegue como zx-build-N, donde N es el numero de build. Escribe en ANSWER.txt la etiqueta del build 37, sola en una linea.",
+  "check": "test \"$(tr -d '[:space:]' < ANSWER.txt)\" = \"zx-build-37\" && bun \"$BENCH_FIXTURES/skills-check.ts\" note-added",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 600
+}

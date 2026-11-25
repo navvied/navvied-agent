@@ -3,16 +3,19 @@
  * and a program on standard input all attach here: each gets what the engine says, and each can send it commands.
  * The session lives in this process, so a client that comes back with the last number it saw receives what it missed.
  */
-import { EventEncoder, parseCommand, type Command, type EngineEvent, type HistoryItem, type ScheduleInfo, type SearchHit, type SessionInfo, type SessionKind } from "@navvied/protocol";
-import { historyOf } from "@navvied/engine";
+import { EventEncoder, parseCommand, type Command, type EngineEvent, type HistoryItem, type PermMode, type ComputerPermissionId, type ComputerState, type ScheduleInfo, type SearchHit, type SessionInfo, type SessionKind } from "@navvied/protocol";
+import { historyOf, MediaShelf } from "@navvied/engine";
+import { pageCommand } from "../page-commands.ts";
 import type { Options } from "../args.ts";
-import { FileSessionStore, OAuthStore, findChrome, SkillBook, forgetCheckpoints, loadSkills, type Recall } from "@navvied/engine";
+import { FileSessionStore, OAuthStore, findChrome, SkillBook, forgetCheckpoints, loadSkills } from "@navvied/engine";
 import { createEngine, modelInfoOf, resolved, visionFor, type Created } from "../create.ts";
 import { mediaFor, ROW_NEED } from "../media-setup.ts";
+import { mediaSetups } from "../media-hub.ts";
+import { closeLocalVisions } from "../media-vision.ts";
 import { checkTarget, handedOver, otherKind, transcriptOf } from "../handover.ts";
 import { FolderBook, folderId } from "../folders.ts";
-import { ScheduleStore, dueAt, nextDue, timingText, type Job } from "../schedules.ts";
-import { runJob } from "../schedule-run.ts";
+import { ScheduleStore, dueAt, fieldsOf, nextDue, runInfos, timingText, whenOf, type Job } from "../schedules.ts";
+import { JobRunner, runJob } from "../schedule-run.ts";
 import { PluginState, SkillTrust, listPlugins, pluginPlaces, projectSkillDirs, readPacks } from "../plugins.ts";
 import { answerMemory, answerSkill, memoryPending, rollbackSkill, skillReview, type Review } from "../review.ts";
 import { memoryPathsFor } from "../memory-ui.ts";
@@ -20,6 +23,7 @@ import { ArtifactBook, scanFolder } from "../artifacts.ts";
 import { ToolUsage, type Availability, listEntries, listSets, listTools, resolveRow, switchRow } from "../tools-info.ts";
 import { CATEGORIES, rowOf } from "../tool-table.ts";
 import { TerminalState, listBackends } from "../terminal.ts";
+import { SandboxState, sandboxInfo, sandboxSetting } from "../sandbox.ts";
 import { DraftStore } from "../drafts.ts";
 import { checkCredentialFile, findCredentialFile } from "../adc.ts";
 import { accounts } from "../accounts.ts";
@@ -30,7 +34,7 @@ import { askModels, detectApi, newEndpointId, reportEndpoints, type EndpointReco
 import { API_STYLES, MODEL_HUB, PROVIDERS, authHeaders } from "../presets.ts";
 import { ONLY_ON_A_COMPUTER, baseOf, entryName, headersOf, listModels, mergeSaved, modelEntryOf, reportOf, type ListedRoute } from "../providers.ts";
 import { refreshHosted } from "../hosted-refresh.ts";
-import { accountPath, mcpAuthPath, hostedModelsPath, chatFilesDir, chatJournalDir, chatSearchIndexPath, chatSessionsDir, configPath, foldersPath, localDir, journalDir, loadConfig, runsInCloud, saveEndpoint, removeModel, saveModel, saveProvider, pluginStatePath, skillLedgerPath, skillTrustPath, terminalStatePath, toolUsagePath, draftsPath, checkpointsDir, scheduledDir, schedulesPath, searchIndexPath, sessionsDir } from "../config.ts";
+import { accountPath, mcpAuthPath, hostedModelsPath, chatFilesDir, chatSessionsDir, configPath, foldersPath, localDir, loadConfig, runsInCloud, saveEndpoint, removeModel, saveModel, saveProvider, pluginStatePath, skillLedgerPath, skillTrustPath, terminalStatePath, sandboxStatePath, toolUsagePath, draftsPath, checkpointsDir, scheduledDir, schedulesPath, sessionsDir } from "../config.ts";
 import { SearchIndex } from "../search-index.ts";
 import { DEFAULT_SERVER, readAccount, type Account } from "../account.ts";
 import { deleteConversation, getConversation, listComputers, listConversations, type AccountComputer } from "../account-client.ts";
@@ -38,6 +42,7 @@ import { talkToComputer } from "../relay-client.ts";
 import { relayUrlFor } from "../computer.ts";
 import { SessionMetaFile } from "../session-meta.ts";
 import { computerName } from "../computer.ts";
+import { Conversations } from "../conversations.ts";
 import { Journal, messagesOf, titleOf, withQids } from "../journal.ts";
 import type { IO } from "../io.ts";
 import { VERSION } from "../help.ts";
@@ -51,7 +56,12 @@ const WATCH_MS = 1000;
 
 export interface Client { send(text: string): unknown; /** True: this window shows the agent's questions and can answer them. A window that does not say so (a page whose question card is not built yet) is not counted as someone who can be asked. */ answers?: true }
 
+/** What the desktop app's native side gives the hub for computer use: where turning it on stands, asking the system for a grant, and the switch. It calls `changed` whenever a grant or the switch changes without a command (the person granted it in the system's settings). */
+export interface ComputerPort { state(): Promise<ComputerState>; request(id: ComputerPermissionId): Promise<void>; turn(on: boolean): Promise<void>; /** The person takes the screen (`person`: the helper refuses every step with `human_has_control`) or gives it back (`agent`). It reports the one who has it as `control` of `state()`, and calls `changed` when the person takes it by using the screen themselves. Without it the hub says the person cannot take over from here. */ control?(who: "person" | "agent"): Promise<void> }
+
 export interface HubOptions {
+  /** The native side of computer use (the desktop app gives it); without it `computer.state` says `unavailable`. */
+  computer?: (changed: () => void) => ComputerPort;
   /** Run the scheduled tasks while this hub is up (a server wants this; the interactive app runs them itself). Default false. */
   schedule?: boolean;
   /** How a scheduled task is run (a test gives its own). */
@@ -133,8 +143,7 @@ interface Lane {
   /** Files named by tool steps still running, and (for a chat) what its folder held when the turn began. */
   writing: Map<string, string>;
   folderBefore?: Map<string, string>;
-  indexPath: string;
-  index?: SearchIndex;
+  conversations: Conversations;
   created?: Created;
   error: string;
   running: boolean;
@@ -150,6 +159,8 @@ interface Lane {
 
 export function createHub(options: Options, io: IO, hubOptions: HubOptions = {}): Hub {
   const encoder = new EventEncoder();
+  /** The pictures, sounds and videos the steps of every conversation made, which a page fetches with `media.read`. */
+  const shelf = new MediaShelf();
   /** What was said, in order. `starts` marks the first event of a conversation (a new one, or one opened), so a window that arrives fresh can be given only the current one of each kind. */
   const history: { seq: number; line: string; kind: SessionKind; starts: boolean; caps: boolean }[] = [];
   const clients = new Set<Client>();
@@ -179,9 +190,6 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   let runningLocal = (): string | undefined => undefined;
   const lanes = new Map<SessionKind, Lane>();
   const projectName = (): string | undefined => { try { return basename(lanes.get("agent")?.created?.cwd ?? resolve(options.cwd ?? process.cwd())) || undefined; } catch { return undefined; } };
-  const newJournal = (lane: Lane): Journal => new Journal(lane.kind === "chat" ? chatJournalDir(io.env) : journalDir(io.env), (id, items) => {
-    try { searchIndexOf(lane)?.put(id, titleOf(items), Date.now(), items); } catch { /* searching is a convenience: it never stops a conversation */ }
-  }, lane.kind === "agent" ? projectName : () => undefined);
   const laneFor = (kind: SessionKind): Lane => {
     const had = lanes.get(kind);
     if (had) return had;
@@ -190,31 +198,18 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     const lane: Lane = {
       kind, options: own, error: "", running: false, turn: [],
       storeDir: kind === "chat" ? chatSessionsDir(io.env) : sessionsDir(io.env),
-      indexPath: kind === "chat" ? chatSearchIndexPath(io.env) : searchIndexPath(io.env),
+      conversations: new Conversations(kind, io.env, projectName, options.config),
       artifacts: new ArtifactBook(join(dirname(kind === "chat" ? chatSessionsDir(io.env) : sessionsDir(io.env)), "artifacts.json")),
       writing: new Map(),
       meta: new SessionMetaFile(join(dirname(kind === "chat" ? chatSessionsDir(io.env) : sessionsDir(io.env)), "sessions-meta.json")),
       journal: undefined as never,
     };
-    lane.journal = newJournal(lane);
+    lane.journal = lane.conversations.journal();
     lanes.set(kind, lane);
     return lane;
   };
-  /** The search index is opened when first needed; a computer that never searches never makes one until a conversation is saved. */
-  const searchIndexOf = (lane: Lane): SearchIndex | undefined => { try { return (lane.index ??= new SearchIndex(lane.indexPath)); } catch { return undefined; } };
-  /** The first time, everything already kept is put into the index. */
-  const fillIndex = (lane: Lane, db: SearchIndex): void => {
-    if (!db.empty) return;
-    const store = new FileSessionStore(lane.storeDir);
-    for (const s of lane.journal.list(500)) { const items = lane.journal.items(s.id); if (items) db.put(s.id, s.title, s.updated, items); }
-    for (const s of store.list(500)) { if (lane.journal.items(s.id)) continue; const m = store.load(s.id); if (m) db.put(s.id, s.title, s.updated, historyOf(m, 400)); }
-  };
-  /** The agent's own way to look through earlier conversations (the Recall tool): the same index and records as the `search` command. */
-  const recallFor = (lane: Lane): Recall => ({
-    search: (query, limit) => { const db = searchIndexOf(lane); if (!db) return []; fillIndex(lane, db); const hits = db.search(query, limit); return hits.length ? hits : db.search(query, limit, true); },
-    read: (id) => { const items = lane.journal.items(id); if (items) return items; const m = new FileSessionStore(lane.storeDir).load(id); return m ? historyOf(m, 400) : undefined; },
-    recent: (limit) => { const db = searchIndexOf(lane); if (!db) return []; fillIndex(lane, db); return db.recent(limit); },
-  });
+  const searchIndexOf = (lane: Lane): SearchIndex | undefined => lane.conversations.index;
+  const meaningOf = (lane: Lane) => lane.conversations.meaning;
 
   /** Which files a conversation wrote: the ones its Write and Edit steps named, and, for a chat, the ones that are new or changed in its folder after a turn. */
   const noteFiles = (lane: Lane, e: EngineEvent): void => {
@@ -275,7 +270,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     if (e.ev === "caps") { lane.engineModels = new Set((e.models ?? []).map((m) => m.id)); lane.engineCaps = e; }
     const more = e.ev === "caps" ? otherKinds(lane) : [];
     const gone = e.ev === "caps" ? removedModels(lane) : new Set<string>();
-    const said: EngineEvent = e.ev === "caps" ? { ...e, ...(more.length || gone.size ? { models: [...(e.models ?? []).filter((m) => m.current || !gone.has(m.id)), ...more] } : {}), manage: true, rowActions: true, schedule: true, plugins: true, memory: true, skillReview: true, toolList: true, drafts: true, artifacts: true, scheduleNote: "Tasks run only while this computer is on and navvied is running.", ...(folders ? { folders } : {}) } : e;
+    const said: EngineEvent = e.ev === "caps" ? { ...e, ...(more.length || gone.size ? { models: [...(e.models ?? []).filter((m) => m.current || !gone.has(m.id)), ...more] } : {}), manage: true, rowActions: true, schedule: true, plugins: true, memory: true, memoryNotes: true, media: true, a2a: true, mcpBrowse: true, pluginInstall: true, skillReview: true, toolList: true, drafts: true, artifacts: true, scheduleNote: "Tasks run only while this computer is on and navvied is running.", ...(folders ? { folders } : {}) } : e;
     noteFiles(lane, e);
     // Each answer moves its conversation up the list: told just before the end of the turn, so that the end is still the last word of it.
     if (e.ev === "done" && lane.created) say(lane, { ev: "sessions", items: listSessions(lane) });
@@ -336,7 +331,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     slot.writing = lane.writing;
     asideSlots.add(slot);
     lane.created = undefined; lane.slot = undefined; lane.running = false; lane.turn = []; lane.writing = new Map(); lane.folderBefore = undefined;
-    lane.journal = newJournal(lane);
+    lane.journal = lane.conversations.journal();
     tellBackground();
     say(lane, { ev: "sessions", items: listSessions(lane) });
     return true;
@@ -361,11 +356,14 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     say(lane, { ev: "sessions", items: listSessions(lane) });
     return true;
   };
+  // Scheduled tasks: kept in the computer's own file, listed to every window, and (where asked) run while this hub is up.
+  const schedules = new ScheduleStore(schedulesPath(io.env));
+  const runner = new JobRunner(schedules, { env: io.env, where: scheduledDir(io.env), ...(hubOptions.runner ? { run: hubOptions.runner } : {}), changed: () => { tellSchedules(); } });
   /** An engine for a lane, with its own slot: what it says goes through `say` while it is the open one, and through `sayAside` once it is put aside. */
   const engineFor = (lane: Lane, earlier?: string): ReturnType<typeof createEngine> => {
     const slot: Slot = { lane, bg: false, id: undefined, created: undefined, journal: lane.journal, running: false, asking: false, turn: [], writing: lane.writing };
     lane.slot = slot;
-    return createEngine(lane.options, io, (e) => { if (slot.bg) sayAside(slot, e); else say(lane, e); }, { wake: true, recall: recallFor(lane), schedulesChanged: () => { tellSchedules(); }, attended: () => [...clients].some((c) => c.answers === true), ...(earlier ? { earlier } : {}) });
+    return createEngine(lane.options, io, (e) => { if (slot.bg) sayAside(slot, e); else say(lane, e); }, { wake: true, shelf, conversations: lane.conversations, jobs: () => runner, schedulesChanged: () => { tellSchedules(); }, attended: () => [...clients].some((c) => c.answers === true), ...(earlier ? { earlier } : {}) });
   };
 
   const connect = (lane: Lane): Created | undefined => {
@@ -456,7 +454,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   const search = (lane: Lane, query: string, limit: number, includeArchived = false): void => {
     const db = searchIndexOf(lane);
     if (!db) { say(lane, { ev: "found", query, items: [] }); return; }
-    fillIndex(lane, db);
+    lane.conversations.fill(db);
     const meta = lane.meta.read();
     const hidden = new Set(includeArchived ? [] : meta.archived);
     const mine = new Map(listSessions(lane, false).concat(includeArchived ? listSessions(lane, true) : []).map((s) => [s.id, s]));
@@ -547,7 +545,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     if (current && lane.running) { say(lane, { ev: "error", msg: "Wait for the current reply to finish before deleting this conversation." }); return; }
     try { rmSync(join(lane.storeDir, `${cmd.id}.json`), { force: true }); } catch { /* it was not there */ }
     lane.journal.remove(cmd.id);
-    try { searchIndexOf(lane)?.remove(cmd.id); } catch { /* the index is a convenience */ }
+    try { searchIndexOf(lane)?.remove(cmd.id); meaningOf(lane)?.remove(cmd.id); } catch { /* the index is a convenience */ }
     // Nothing of it is left: not its checkpoints, not what it was said to have written, not text typed for it and not sent.
     try { forgetCheckpoints(checkpointsDir(io.env), cmd.id); } catch { /* it had none */ }
     lane.artifacts.forget(cmd.id);
@@ -617,7 +615,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     const current = lane.created?.engine.sessionId === id;
     try { rmSync(join(lane.storeDir, `${id}.json`), { force: true }); } catch { /* it was not there */ }
     lane.journal.remove(id);
-    try { searchIndexOf(lane)?.remove(id); } catch { /* the index is a convenience */ }
+    try { searchIndexOf(lane)?.remove(id); meaningOf(lane)?.remove(id); } catch { /* the index is a convenience */ }
     lane.meta.update((m) => { delete m.titles[id]; m.pinned = m.pinned.filter((x) => x !== id); });
     if (current) { delete (lane.options as { session?: string }).session; restartLane(lane); }
   };
@@ -706,23 +704,19 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     said(true);
   };
 
-  // Scheduled tasks: kept in the computer's own file, listed to every window, and (where asked) run while this hub is up.
-  const schedules = new ScheduleStore(schedulesPath(io.env));
-  const runningJobs = new Set<string>();
   const scheduleItems = (): ScheduleInfo[] => schedules.list().map((j): ScheduleInfo => {
     const next = nextDue(j, Date.now());
     const kind: SessionKind = j.kind === "chat" ? "chat" : "agent";
-    return { id: j.id, title: j.title ?? (j.prompt.length > 60 ? `${j.prompt.slice(0, 59)}…` : j.prompt), prompt: j.prompt, cron: timingText(j), ...(next ? { next } : {}), ...(j.lastRun ? { last: j.lastRun } : {}), ...(j.lastCode !== undefined ? { lastCode: j.lastCode } : {}), enabled: !j.disabled, ...(kind === "agent" ? { folder: { id: folderId(j.cwd), name: basename(j.cwd) || j.cwd } } : {}), kind, mode: j.mode, ...(runningJobs.has(j.id) ? { running: true as const } : {}) };
+    return { id: j.id, title: j.title ?? (j.prompt.length > 60 ? `${j.prompt.slice(0, 59)}…` : j.prompt), prompt: j.prompt, cron: timingText(j), when: whenOf(j), ...(j.tz ? { tz: j.tz } : {}), ...(next ? { next } : {}), ...(j.lastRun ? { last: j.lastRun } : {}), ...(j.lastCode !== undefined ? { lastCode: j.lastCode } : {}), enabled: !j.disabled, ...(kind === "agent" ? { folder: { id: folderId(j.cwd), name: basename(j.cwd) || j.cwd } } : {}), kind, mode: j.mode, ...(runner.running(j.id) ? { running: true as const } : {}), ...(j.missed ? { missed: j.missed } : {}) };
   });
-  const tellSchedules = (): void => { say(main, { ev: "schedules", items: scheduleItems() }); };
-  const startJob = (job: Job, due?: number): void => {
-    if (runningJobs.has(job.id)) return;
-    runningJobs.add(job.id);
-    schedules.markRun(job.id, Date.now(), due);
-    tellSchedules();
-    void (hubOptions.runner ?? runJob)(job, io.env, scheduledDir(io.env)).then((f) => { schedules.finished(job.id, f.code, f.file); }).catch(() => { schedules.finished(job.id, null); }).finally(() => { runningJobs.delete(job.id); tellSchedules(); });
+  const NO_COMPUTER: ComputerState = { on: false, step: "unavailable", permissions: [], reason: "Computer use needs the desktop app." };
+  const computerPort = hubOptions.computer?.(() => { void tellComputer(); });
+  const tellComputer = async (lane: Lane = main): Promise<void> => {
+    const state = await (computerPort?.state() ?? Promise.resolve(NO_COMPUTER)).catch((): ComputerState => ({ ...NO_COMPUTER, reason: "The screen helper did not answer." }));
+    say(lane, { ev: "computer.state", ...state, ...(state.on && !state.control ? { control: "agent" as const } : {}) });
   };
-  const tickJobs = (): void => { for (const job of schedules.list()) { const due = dueAt(job, Date.now()); if (due !== undefined) startJob(job, due); } };
+  const tellSchedules = (): void => { say(main, { ev: "schedules", items: scheduleItems() }); };
+  const tickJobs = (): void => { for (const job of schedules.list()) { const due = dueAt(job, Date.now()); if (due !== undefined) void runner.start(job, due); } };
   const jobTimer = hubOptions.schedule ? setInterval(tickJobs, 30_000) : undefined;
   jobTimer?.unref?.();
   if (hubOptions.schedule) queueMicrotask(tickJobs);
@@ -740,24 +734,30 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
 
   /** The folder a task works in: named by an id this hub gave, or the current one. */
   const jobFolder = (id: string | undefined): string | undefined => (id === undefined ? resolve(main.options.cwd ?? process.cwd()) : folderBook.resolve(id, resolve(main.options.cwd ?? process.cwd()), namedFolders()));
-  const schedule = (lane: Lane, cmd: Extract<Command, { cmd: "schedules" | "schedule.add" | "schedule.update" | "schedule.remove" | "schedule.run" }>): void => {
+  const schedule = (lane: Lane, cmd: Extract<Command, { cmd: "schedules" | "schedule.add" | "schedule.update" | "schedule.remove" | "schedule.run" | "schedule.runs" }>): void => {
     const fail = (msg: string): void => { say(lane, { ev: "error", msg }); };
     if (cmd.cmd === "schedules") { tellSchedules(); return; }
     if (cmd.cmd === "schedule.add") {
       const chat = cmd.kind === "chat";
       const cwd = chat ? resolve(chatFilesDir(io.env)) : jobFolder(cmd.folder);
       if (!cwd) { fail("That folder is not offered by this computer."); return; }
-      const made = schedules.add({ cron: cmd.cron, prompt: cmd.prompt, cwd, ...(cmd.mode ? { mode: cmd.mode } : {}), ...(cmd.title ? { title: cmd.title } : {}), ...(chat ? { kind: "chat" as const } : {}) });
+      const made = schedules.add({ ...(cmd.when ? fieldsOf(cmd.when) : { cron: cmd.cron }), ...(cmd.tz ? { tz: cmd.tz } : {}), prompt: cmd.prompt, cwd, ...(cmd.mode ? { mode: cmd.mode } : {}), ...(cmd.title ? { title: cmd.title } : {}), ...(chat ? { kind: "chat" as const } : {}) });
       if (typeof made === "string") { fail(`The task was not saved: ${made}.`); return; }
       tellSchedules();
       return;
     }
     if (cmd.cmd === "schedule.remove") { if (!schedules.remove(cmd.id)) { fail("That task was not found."); return; } tellSchedules(); return; }
-    if (cmd.cmd === "schedule.run") { const job = schedules.list().find((j) => j.id === cmd.id); if (!job) { fail("That task was not found."); return; } if (runningJobs.has(job.id)) { fail("That task is already running."); return; } startJob(job); return; }
+    if (cmd.cmd === "schedule.runs") {
+      const job = schedules.list().find((j) => j.id === cmd.id);
+      if (!job) { fail("That task was not found."); return; }
+      say(lane, { ev: "schedule.runs", id: job.id, runs: runInfos(job, cmd.limit ?? 10) });
+      return;
+    }
+    if (cmd.cmd === "schedule.run") { const job = schedules.list().find((j) => j.id === cmd.id); if (!job) { fail("That task was not found."); return; } if (!runner.start(job)) fail("That task is already running."); return; }
     // update
     let cwd: string | undefined;
     if (cmd.folder !== undefined) { cwd = jobFolder(cmd.folder); if (!cwd) { fail("That folder is not offered by this computer."); return; } }
-    const changed = schedules.update(cmd.id, { ...(cmd.title !== undefined ? { title: cmd.title } : {}), ...(cmd.cron !== undefined ? { cron: cmd.cron } : {}), ...(cmd.prompt !== undefined ? { prompt: cmd.prompt } : {}), ...(cmd.mode ? { mode: cmd.mode } : {}), ...(cwd ? { cwd } : {}), ...(cmd.enabled !== undefined ? { enabled: cmd.enabled } : {}) });
+    const changed = schedules.update(cmd.id, { ...(cmd.title !== undefined ? { title: cmd.title } : {}), ...(cmd.when ? fieldsOf(cmd.when) : cmd.cron !== undefined ? { cron: cmd.cron } : {}), ...(cmd.tz ? { tz: cmd.tz } : {}), ...(cmd.prompt !== undefined ? { prompt: cmd.prompt } : {}), ...(cmd.mode ? { mode: cmd.mode } : {}), ...(cwd ? { cwd } : {}), ...(cmd.enabled !== undefined ? { enabled: cmd.enabled } : {}) });
     if (typeof changed === "string") { fail(`The task was not changed: ${changed}.`); return; }
     tellSchedules();
   };
@@ -767,9 +767,11 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   const toolUsage = new ToolUsage(toolUsagePath(io.env));
   const drafts = new DraftStore(draftsPath(io.env));
   const terminalState = new TerminalState(terminalStatePath(io.env));
+  const sandboxState = new SandboxState(sandboxStatePath(io.env));
+  const sandboxConfig = () => { const f = loadConfig(configPath(io.env, options.config), io.env); return f.ok ? f.value?.sandbox : undefined; };
   const terminalConfig = () => { const f = loadConfig(configPath(io.env, options.config), io.env); return f.ok ? f.value?.terminal : undefined; };
-  /** The setups a tool can start with `tool.setup`, by the id of its row. A tool gets one when it gets a way to tell it needs setting up: none has one yet. */
-  const toolSetups = new Map<string, (lane: Lane) => void>();
+  /** The setups a tool can start with `tool.setup`, by the id of its row: the media tools that run on this computer. */
+  const toolSetups = new Map<string, (lane: Lane, mode?: PermMode) => void>();
   /** What only this computer can say of a tool: the browser tool waits for a browser to be found. */
   const mediaHere = (): ReturnType<typeof mediaFor> => {
     const path = configPath(io.env, options.config), file = loadConfig(path, io.env);
@@ -783,12 +785,21 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     if (stale) { mediaSeen = { media: mediaHere(), at: Date.now() }; void mediaSeen.media.refresh().then(() => { for (const l of lanes.values()) tellTools(l); }); }
     return mediaSeen!.media;
   };
+  const mediaSetup = mediaSetups({
+    io, inCloud: () => runsInCloud(main.options, io.env), configFile: () => configPath(io.env, options.config),
+    ...(hubOptions.probe ? { probe: hubOptions.probe } : {}),
+    tell: (e) => { say(main, e); },
+    changed: () => { mediaSeen = undefined; for (const l of lanes.values()) tellTools(l); },
+  });
+  for (const id of mediaSetup.ids) toolSetups.set(id, (_lane, mode) => { mediaSetup.start(id, mode); });
+  // The browser tool waits for a browser that is already on the computer: nothing is fetched for it, but its row speaks the same events as the others.
+  toolSetups.set("browser", (lane) => { say(lane, findChrome(io.env) ? { ev: "tool.setup", id: "browser", state: "done" } : { ev: "tool.setup", id: "browser", state: "unavailable", error: "No browser was found on this computer." }); });
   const toolAvailability: Availability = (row) => (row.id === "browser" && !findChrome(io.env) ? "needs-setup" : ROW_NEED[row.id] && !media().has(ROW_NEED[row.id]!) ? "needs-setup" : undefined);
-  const tellTools = (lane: Lane): void => { const items = listTools(pluginState, toolUsage); say(lane, { ev: "tools", items, sets: listSets(items), entries: listEntries(pluginState, toolUsage, undefined, toolAvailability, new Set(toolSetups.keys())), categories: CATEGORIES.map((c) => ({ ...c })), backends: listBackends(terminalState, terminalConfig()) }); };
+  const tellTools = (lane: Lane): void => { const items = listTools(pluginState, toolUsage); say(lane, { ev: "tools", items, sets: listSets(items), entries: listEntries(pluginState, toolUsage, undefined, toolAvailability, new Set(toolSetups.keys())), categories: CATEGORIES.map((c) => ({ ...c })), backends: listBackends(terminalState, terminalConfig()), sandbox: sandboxInfo(sandboxSetting(sandboxState, sandboxConfig())) }); };
   const pluginItems = () => {
     const file = configPath(io.env, options.config), cwd = resolve(main.options.cwd ?? process.cwd()), f = loadConfig(file, io.env);
     const places = pluginPlaces(file);
-    const trust = new SkillTrust(skillTrustPath(io.env), f.ok && f.value?.skills?.trust === "confirm");
+    const trust = new SkillTrust(skillTrustPath(io.env));
     return listPlugins(pluginState, f.ok ? f.value : null, join(dirname(file), "skills"), cwd, { packs: readPacks(dirname(file), places.lock, cwd), trust, lock: places.lock });
   };
   const tellProviders = (): void => {
@@ -840,11 +851,11 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   const tellPlugins = (): void => { say(main, { ev: "plugins", items: pluginItems() }); };
   /** What waits for the person among the agent's notes and skills. */
   const review = (): Review => {
-    const file = configPath(io.env, options.config), cwd = resolve(main.options.cwd ?? process.cwd()), cfg = loadConfig(file, io.env);
+    const file = configPath(io.env, options.config), cwd = resolve(main.options.cwd ?? process.cwd()), trust = new SkillTrust(skillTrustPath(io.env));
     return {
       memory: memoryPathsFor(cwd, file),
-      book: new SkillBook({ user: join(dirname(file), "skills"), project: join(cwd, ".navvied", "skills"), ledger: skillLedgerPath(io.env) }),
-      trust: new SkillTrust(skillTrustPath(io.env), cfg.ok && cfg.value?.skills?.trust === "confirm"),
+      book: new SkillBook({ user: join(dirname(file), "skills"), project: join(cwd, ".navvied", "skills"), ledger: skillLedgerPath(io.env) }, Date.now, (s) => trust.answer(s, true)),
+      trust,
       skills: () => loadSkills({ user: join(dirname(file), "skills"), project: projectSkillDirs(cwd) }),
       packs: () => readPacks(dirname(file), pluginPlaces(file).lock, cwd),
     };
@@ -892,7 +903,13 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
       }
       if (parsed.value.cmd === "import") { if (!signedIn()) { say(lane, { ev: "error", msg: "Sign in to bring conversations from the cloud." }); return; } void importHosted(parsed.value.ids); return; }
       if (parsed.value.cmd === "move" || parsed.value.cmd === "copy") { void transfer(lane, parsed.value); return; }
-      if (parsed.value.cmd === "schedules" || parsed.value.cmd === "schedule.add" || parsed.value.cmd === "schedule.update" || parsed.value.cmd === "schedule.remove" || parsed.value.cmd === "schedule.run") { schedule(lane, parsed.value); return; }
+      if (parsed.value.cmd === "schedules" || parsed.value.cmd === "schedule.add" || parsed.value.cmd === "schedule.update" || parsed.value.cmd === "schedule.remove" || parsed.value.cmd === "schedule.run" || parsed.value.cmd === "schedule.runs") { schedule(lane, parsed.value); return; }
+      const page = pageCommand(parsed.value, { env: io.env, config: configPath(io.env, options.config), memory: () => memoryPathsFor(resolve(main.options.cwd ?? process.cwd()), configPath(io.env, options.config)), shelf, inCloud: () => runsInCloud(main.options, io.env), plugins: () => ({ ev: "plugins", items: pluginItems() }), today: () => new Date().toISOString().slice(0, 10), fetch: io.fetch });
+      if (page) {
+        const answer = (a: { say: EngineEvent[]; reply: EngineEvent[] }): void => { for (const e of a.say) say(lane, e); for (const e of a.reply) reply(JSON.stringify(encoder.stamp(e))); };
+        if ("then" in page) void page.then(answer); else answer(page);
+        return;
+      }
       if (parsed.value.cmd === "artifacts") { say(lane, { ev: "artifacts", items: lane.artifacts.list(parsed.value.id) }); return; }
       if (parsed.value.cmd === "artifact.read") {
         const got = lane.artifacts.read(parsed.value.id);
@@ -1033,12 +1050,28 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
         return;
       }
       if (parsed.value.cmd === "tools") { tellTools(lane); return; }
+      if (parsed.value.cmd === "computer.state") { void tellComputer(lane); return; }
+      if (parsed.value.cmd === "computer.permission" || parsed.value.cmd === "computer.on") {
+        const cmd = parsed.value;
+        if (!computerPort) { void tellComputer(lane); return; }
+        void (cmd.cmd === "computer.on" ? computerPort.turn(cmd.on) : computerPort.request(cmd.id)).catch(() => { say(lane, { ev: "error", msg: "The screen helper did not answer." }); }).finally(() => tellComputer());
+        return;
+      }
+      if (parsed.value.cmd === "computer.takeover" || parsed.value.cmd === "computer.giveback") {
+        const who = parsed.value.cmd === "computer.takeover" ? "person" : "agent";
+        const port = computerPort;
+        if (!port?.control) { say(lane, { ev: "error", msg: "Computer use cannot be taken over from here." }); void tellComputer(lane); return; }
+        void port.state().then(async (state) => { if (!state.on) say(lane, { ev: "error", msg: "Computer use is off." }); else await port.control!(who); }).catch(() => { say(lane, { ev: "error", msg: "The screen helper did not answer." }); }).finally(() => tellComputer());
+        return;
+      }
       if (parsed.value.cmd === "tool.setup") {
         const start = toolSetups.get(parsed.value.id);
         if (!start) { say(lane, { ev: "error", msg: "That tool has nothing to set up." }); return; }
-        start(lane);
+        start(lane, parsed.value.mode);
         return;
       }
+      if (parsed.value.cmd === "tool.setup.approve") { mediaSetup.approve(parsed.value.id); return; }
+      if (parsed.value.cmd === "tool.setup.cancel") { mediaSetup.cancel(parsed.value.id); return; }
       if (parsed.value.cmd === "tool.toggle") {
         const { name, enabled } = parsed.value;
         const items = listTools(pluginState, toolUsage);
@@ -1054,6 +1087,11 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
         const wanted = listBackends(terminalState, terminalConfig()).find((b) => b.id === id);
         if (!wanted?.ready) { say(lane, { ev: "error", msg: wanted?.hint ?? "That place is not available." }); return; }
         terminalState.set(wanted.id);
+        tellTools(lane);
+        return;
+      }
+      if (parsed.value.cmd === "sandbox.use") {
+        sandboxState.set({ ...(parsed.value.on !== undefined ? { on: parsed.value.on } : {}), ...(parsed.value.network !== undefined ? { network: parsed.value.network } : {}) });
         tellTools(lane);
         return;
       }
@@ -1093,11 +1131,12 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     async stop() {
       // The model server of this computer belongs to this hub: it ends with it.
       await local.stop();
+      await closeLocalVisions();
       clearInterval(watching);
       clearInterval(jobTimer);
       for (const slot of asideSlots) { await slot.created?.engine.idle(); slot.created?.engine.close(); }
       asideSlots.clear();
-      for (const lane of lanes.values()) { await lane.created?.engine.idle(); lane.created?.engine.close(); try { lane.index?.close(); } catch { /* it was closed */ } lane.index = undefined; }
+      for (const lane of lanes.values()) { await lane.created?.engine.idle(); lane.created?.engine.close(); lane.conversations.close(); }
     },
   };
   return hub;

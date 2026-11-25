@@ -98,10 +98,13 @@ describe("/tools", () => {
   });
   test("a tool that waits for setup starts it only when the hub says it has one", async () => {
     const link = hub(report({ browser: { setup: true } }));
+    const said = link.send.bind(link);
+    link.send = (cmd) => { said(cmd); if ((cmd as { cmd: string }).cmd === "tool.setup") queueMicrotask(() => link.emit({ ev: "tool.setup", id: "browser", state: "unavailable", error: "No browser was found on this computer." })); };
     const t = scripted(["Browse & research", 2, undefined, undefined]);
     await toolsScreen(t.kit(link));
     expect(link.commands("tool.setup")).toEqual([{ cmd: "tool.setup", id: "browser" }]);
     expect(link.commands("tool.toggle")).toEqual([]);
+    expect(t.shown[2]!.frame.notice).toEqual(["No browser was found on this computer."]);
   });
   test("a refusal of the hub is said on the next screen", async () => {
     const link = new FakeLink((c) => (c.cmd === "tool.toggle" ? "That tool is not one of the agent's." : report()));

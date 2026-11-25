@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { expandCommand, findCommand, keep } from "@navvied/engine";
 import { PERM_MODES, encodeQr, parseEvent, qrText, type CheckpointInfo, type EngineEvent, type PermMode } from "@navvied/protocol";
 import type { Options } from "../args.ts";
@@ -6,7 +5,7 @@ import { MODE_LABEL, renderBanner } from "../banner.ts";
 import { customCommands, PluginState, SkillTrust } from "../plugins.ts";
 import { accountPath, configPath, pluginStatePath, skillTrustPath, devicesPath, hostedModelsPath, isConfigured, loadConfig, rememberBashPattern, updateConfig, updateStampPath } from "../config.ts";
 import { DEFAULT_SERVER, readAccount, type Account } from "../account.ts";
-import { refreshHosted } from "../hosted-refresh.ts";
+import { ensureHostedModels } from "../hosted-refresh.ts";
 import { connectThisComputer, disconnectThisComputer, relayUrlFor } from "../computer.ts";
 import { login, signOutScreen } from "../login-ui.ts";
 import { autoUpdate } from "./auto-update.ts";
@@ -160,8 +159,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
 
   // A computer that is signed in but has never listed the models (just updated, or the list was deleted) waits a moment for them,
   // so it does not start by saying that no model is connected. Every later refresh belongs to the hub (at its start and at every reconnect of the relay).
-  const account = io.interactive ? readAccount(accountPath(io.env, options.config)) : undefined;
-  if (account && !existsSync(hostedModelsPath(io.env))) await refreshHosted(io.fetch, account, hostedModelsPath(io.env), 3000);
+  if (io.interactive) await ensureHostedModels(io, options);
   // Signing in or out from a page does what `/login` does: this computer joins the account's computers, or leaves them (both are defined below, and used only later).
   const hub = createHub(options, io, { watch: false, onSignedIn: (a) => joinAccount(a), onSignOut: (a) => disconnectThisComputer(io.fetch, a, devices, (id) => relay().forget(id)) });
   menus = hubMenus({
@@ -346,7 +344,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
       case "login": case "logout": void accountScreen(name === "logout"); return;
       default: {
         const file = configPath(io.env, options.config), cfg = loadConfig(file, io.env);
-        const custom = findCommand(customCommands(new PluginState(pluginStatePath(io.env)), new SkillTrust(skillTrustPath(io.env), cfg.ok && cfg.value?.skills?.trust === "confirm"), file, current?.cwd ?? cwd), name);
+        const custom = findCommand(customCommands(new PluginState(pluginStatePath(io.env)), new SkillTrust(skillTrustPath(io.env)), file, current?.cwd ?? cwd), name);
         if (!custom) { say(`unknown command /${name} — try /help`); break; }
         if (!current) say("add a model first: /providers"); else { send(expandCommand(custom, line.slice(1).trim().replace(/^\S+\s*/, ""))); return; }
       }

@@ -5,7 +5,7 @@
  */
 import { StepClock } from "./step-clock.ts";
 import { LineSplitter, RecentIds, type Command, type Effort, type EngineEvent, type ModelInfo, type PermMode, type PromptCommand } from "@navvied/protocol";
-import { ALLOW, ALLOW_ALWAYS, ApprovalBroker, DENY, EDIT, approvalChange, approvalOptions, Outside, fromOutsideName, hardBlock, judge, launch, withOrigin, type AgentEngine, type Rules } from "@navvied/engine";
+import { ALLOW, ALLOW_ALWAYS, ApprovalBroker, DENY, EDIT, approvalChange, approvalOptions, Outside, fromOutsideName, hardBlock, judge, launch, secretsNow, withOrigin, type AgentEngine, type Rules } from "@navvied/engine";
 import { AskServer, type AskReply, type AskedCall } from "./ask-channel.ts";
 import { buildArgv } from "./argv.ts";
 import { Translator } from "./translate.ts";
@@ -188,6 +188,7 @@ export class StreamEngine implements AgentEngine {
   #sendPrompt(cmd: PromptCommand): void {
     if (!this.#child && !this.#start()) { this.#busy = false; this.#settle(); return; }
     const uuid = crypto.randomUUID();
+    this.#outside.say(cmd.text);
     this.#tr.expect(uuid, cmd.qid);
     if (cmd.qid) { this.#prompts.set(uuid, { qid: cmd.qid, text: cmd.text, images: cmd.images?.length ?? 0 }); this.#emit({ ev: "queued", qid: cmd.qid, text: cmd.text, ...(cmd.images?.length ? { images: cmd.images.length } : {}) }); }
     this.#pending.add(uuid);
@@ -275,7 +276,8 @@ export class StreamEngine implements AgentEngine {
     const cwd = typeof call.cwd === "string" && call.cwd ? call.cwd : this.#o.cwd;
     const mode = this.#mode;
     const settled: AskReply = mode === "plan" || mode === "bypass" ? { decision: "pass" } : { decision: "allow" };
-    const judged = judge({ mode, tool: { name, readOnly: READ_ONLY.has(asked) }, args, cwd, rules: this.#o.rules, allowed: this.#allowed, knownUrl: () => true, outside: this.#outside });
+    this.#outside.record(name, args, cwd);
+    const judged = judge({ mode, tool: { name, readOnly: READ_ONLY.has(asked) }, args, cwd, rules: this.#o.rules, allowed: this.#allowed, knownUrl: () => true, outside: this.#outside, secrets: secretsNow });
     if (judged.kind === "stop") return { decision: "deny", message: judged.message };
     if (judged.kind === "go") return settled;
 
@@ -333,7 +335,10 @@ export class StreamEngine implements AgentEngine {
   #deliver(e: EngineEvent): void {
     if (this.#starting) { this.#starting = false; this.#emit({ ev: "phase", name: "" }); }
     if (e.ev === "session") this.#sessionId = e.id;
-    if (e.ev === "tool" && e.status !== "running" && fromOutsideName(e.name)) this.#outside.note(typeof e.output === "string" ? e.output : "");
+    if (e.ev === "tool" && e.status !== "running" && typeof e.output === "string") {
+      if (fromOutsideName(e.name)) this.#outside.note(e.output);
+      else if (e.name === "Read" || e.name === "Grep") this.#outside.read(e.output);
+    }
     if (e.ev === "done") {
       if (this.#killTimer) { clearTimeout(this.#killTimer); this.#killTimer = undefined; }
       if (this.#pending.size > 0 && e.stop === "end_turn") return; // more messages are queued: the agent runs them next, so the turn goes on

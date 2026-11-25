@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { CloudSchedule, Jobs, defaultTools, type ToolContext } from "@navvied/engine";
+import { JobRunner, runJob } from "../src/schedule-run.ts";
 import { ComputerSchedule, scheduleFor } from "../src/schedule-tool.ts";
 import { LATE_MS, ScheduleStore, UNATTENDED, dueAt, dueJobs, nextDue, timingText } from "../src/schedules.ts";
 import { remove, tempDir } from "./helpers.ts";
@@ -8,6 +9,7 @@ import { remove, tempDir } from "./helpers.ts";
 const dirs: string[] = [];
 afterAll(() => { dirs.forEach(remove); });
 const open = () => { const dir = tempDir(); dirs.push(dir); return { dir, store: new ScheduleStore(join(dir, "s.json")) }; };
+const runnerOf = (store: ScheduleStore, run?: typeof runJob) => new JobRunner(store, { env: {}, where: tempDir(), ...(run ? { run } : {}), now: () => T0 });
 const ok = <T>(v: T | string): T => { if (typeof v === "string") throw new Error(v); return v; };
 
 const T0 = Date.UTC(2026, 10, 25, 8, 0);
@@ -115,7 +117,7 @@ describe("the Schedule tool on this computer", () => {
   test("it makes a job in the file of tasks, with a clock it is given, and the person's own list sees it", async () => {
     const { dir, store } = open();
     let said = 0;
-    const c = ctx(new ComputerSchedule(store, { cwd: dir, chat: false, canChange: true, now: () => T0, changed: () => { said++; } }));
+    const c = ctx(new ComputerSchedule(store, runnerOf(store), { cwd: dir, chat: false, canChange: true, now: () => T0, changed: () => { said++; } }));
     const made = await run({ action: "create", name: "digest", prompt: "summarise the commits", when: "in 20 minutes" }, c);
     expect(made).toContain("once 2026-11-25 08:20 UTC");
     expect(made).toContain("It runs only while navvied is open on this computer.");
@@ -134,7 +136,7 @@ describe("the Schedule tool on this computer", () => {
 
   test("the most jobs and a bad schedule are refused in plain sentences", async () => {
     const { dir, store } = open();
-    const c = ctx(new ComputerSchedule(store, { cwd: dir, chat: false, canChange: true, now: () => T0 }));
+    const c = ctx(new ComputerSchedule(store, runnerOf(store), { cwd: dir, chat: false, canChange: true, now: () => T0 }));
     expect(await run({ action: "create", prompt: "x", when: "every 5s" }, c)).toContain("once every 60 seconds");
     for (let i = 0; i < 50; i++) ok(store.add({ cron: "0 9 * * *", prompt: `p${i}`, cwd: dir }, T0));
     expect(await run({ action: "create", prompt: "one more", when: "daily at 09:00" }, c)).toBe("Error: At most 50 jobs are kept. Remove one first.");
@@ -142,7 +144,7 @@ describe("the Schedule tool on this computer", () => {
 
   test("the last outcome and the newest runs show, with a missed run's due time and where its output is kept", async () => {
     const { dir, store } = open();
-    const c = ctx(new ComputerSchedule(store, { cwd: dir, chat: false, canChange: true, now: () => T0 + 5 * HOUR }));
+    const c = ctx(new ComputerSchedule(store, runnerOf(store), { cwd: dir, chat: false, canChange: true, now: () => T0 + 5 * HOUR }));
     const job = ok(store.add({ cron: "0 9 * * *", tz: "UTC", title: "digest", prompt: "p", cwd: dir }, T0 - 30 * HOUR));
     store.markRun(job.id, T0 + 4 * HOUR, T0 - 15 * HOUR);
     expect(await run({ action: "list" }, c)).toContain("last running");
@@ -158,11 +160,11 @@ describe("the Schedule tool on this computer", () => {
   test("inside a run nobody started, and in a chat", async () => {
     const { dir, store } = open();
     ok(store.add({ cron: "0 9 * * *", prompt: "keep", cwd: dir }, T0));
-    const looking = ctx(new ComputerSchedule(store, { cwd: dir, chat: false, canChange: false, now: () => T0 }));
+    const looking = ctx(new ComputerSchedule(store, runnerOf(store), { cwd: dir, chat: false, canChange: false, now: () => T0 }));
     expect(await run({ action: "list" }, looking)).toContain("keep");
     expect(await run({ action: "remove", id: store.list()[0]!.id }, looking)).toContain("cannot change the jobs");
     expect(store.list()).toHaveLength(1);
-    const chat = ctx(new ComputerSchedule(store, { cwd: dir, chat: true, canChange: true, now: () => T0 }));
+    const chat = ctx(new ComputerSchedule(store, runnerOf(store), { cwd: dir, chat: true, canChange: true, now: () => T0 }));
     await run({ action: "create", prompt: "a chat job", when: "daily at 08:00" }, chat);
     expect(store.list().at(-1)!.kind).toBe("chat");
   });

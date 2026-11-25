@@ -1,4 +1,5 @@
 import type { ScreenOutcome } from "@navvied/protocol";
+import { askLines } from "./computer-ask.ts";
 import { untrusted } from "./untrusted.ts";
 import type { ComputerCall, ComputerCode, ComputerResult, Tool, ToolContext } from "../types.ts";
 import { clip, num, outputBudget, str } from "./util.ts";
@@ -125,7 +126,9 @@ async function run(a: Record<string, unknown>, ctx: ToolContext): Promise<string
 
   const { call, mode } = callFor(a, kind, ctx.vision === true);
   let r: ComputerResult;
-  try { r = await helper.call(call, ctx.signal); }
+  const lines = askLines(call);
+  const consent = ctx.consent;
+  try { r = await helper.call(call, ctx.signal, consent ? (ask) => consent({ ...ask, lines }) : undefined); }
   catch {
     // What an operating system said is not for the model; what is known is that nobody knows how it ended.
     if (ctx.signal.aborted) return "[interrupted]";

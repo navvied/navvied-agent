@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createHub } from "../src/commands/hub.ts";
 import { configPath, pluginStatePath } from "../src/config.ts";
-import { PluginState, activeHooks, activeSkills, hookId, skillId } from "../src/plugins.ts";
+import { PluginState, SkillTrust, activeHooks, activeSkills, hookId, skillId } from "../src/plugins.ts";
 import { fakeIO, remove, startMockModel, tempDir, until } from "./helpers.ts";
 
 let mock: ReturnType<typeof startMockModel>;
@@ -66,13 +66,13 @@ describe("what extends the agent here", () => {
   test("what is switched off is left out of what the agent uses", () => {
     const state = new PluginState(pluginStatePath({ XDG_STATE_HOME: tempDir() }));
     dirs.push(dirname(pluginStatePath({ XDG_STATE_HOME: "/x" })));
-    const skills = tempDir(); dirs.push(skills);
+    const skills = tempDir(), trust = new SkillTrust(join(skills, "trust.json")); dirs.push(skills);
     mkdirSync(join(skills, "a"), { recursive: true }); mkdirSync(join(skills, "b"), { recursive: true });
     writeFileSync(join(skills, "a", "SKILL.md"), "---\nname: a\ndescription: first\n---\nx");
     writeFileSync(join(skills, "b", "SKILL.md"), "---\nname: b\ndescription: second\n---\nx");
-    expect(activeSkills(state, { user: skills }).map((s) => s.name).sort()).toEqual(["a", "b"]);
+    expect(activeSkills(state, { user: skills }, trust).map((s) => s.name).sort()).toEqual(["a", "b"]);
     state.set(skillId("a"), false);
-    expect(activeSkills(state, { user: skills }).map((s) => s.name)).toEqual(["b"]);
+    expect(activeSkills(state, { user: skills }, trust).map((s) => s.name)).toEqual(["b"]);
     state.set(hookId("PreToolUse", 0), false);
     const hooks = { PreToolUse: [{ command: "one" }, { command: "two" }], Stop: [{ command: "stop" }] };
     expect(activeHooks(state, hooks)).toEqual({ PreToolUse: [{ command: "two" }], Stop: [{ command: "stop" }] });

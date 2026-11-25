@@ -8,7 +8,7 @@
     "python3"
   ],
   "prompt": "This folder holds a small web service (see README.md). Start it, wait until it answers, save what GET /health returns into health.json, and then stop the server again.",
-  "check": "python3 -c \"import hashlib,json,os,socket,sys\nh = json.load(open('health.json'))\nassert h['status'] == 'ok'\nassert h['secret'] == hashlib.sha1((os.environ['BENCH_SECRET'] + 'srv').encode()).hexdigest()[:12]\ns = socket.socket(); s.settimeout(1)\nport = int(open('port.txt').read())\nsys.exit(1 if s.connect_ex(('127.0.0.1', port)) == 0 else 0)\"",
+  "check": "python3 -c \"import hashlib,json,os,sys,urllib.request\nh = json.load(open('health.json'))\nassert h['status'] == 'ok'\nsecret = hashlib.sha1((os.environ['BENCH_SECRET'] + 'srv').encode()).hexdigest()[:12]\nassert h['secret'] == secret\nport = int(open('port.txt').read())\n# The server must be gone: what answers on the port now must not be this server (another program may have taken the free port since).\ntry:\n    said = json.load(urllib.request.urlopen('http://127.0.0.1:%d/health' % port, timeout=2))\nexcept Exception:\n    sys.exit(0)\nsys.exit(1 if isinstance(said, dict) and said.get('secret') == secret else 0)\"",
   "protect": [
     "server.py",
     "README.md"

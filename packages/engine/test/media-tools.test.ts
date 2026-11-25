@@ -151,7 +151,7 @@ describe("looking at pictures and videos", () => {
   test.skipIf(win)("LookAt draws one page of a PDF with pdftoppm, and says what to do when it is not installed", async () => {
     const dir = scratch();
     const log = join(dir, "pdftoppm.txt");
-    const pdftoppm = program(dir, "pdftoppm", `echo "$@" > ${log}\nfor last; do :; done\nprintf '\\211PNG\\r\\n\\032\\n' > "$last.png"`);
+    const pdftoppm = program(dir, "pdftoppm", `echo "$@" > ${log}\nfor last; do :; done\nprintf '\\211PNG\\r\\n\\032\\n' > "$last.jpg"`);
     writeFileSync(join(dir, "doc.pdf"), "%PDF-1.4");
     const look = fakeLook("Page text.");
     const ctx = conversation(dir, { media: new Media({ vision: look.route, pdftoppm }) });
@@ -160,7 +160,7 @@ describe("looking at pictures and videos", () => {
     expect(readFileSync(log, "utf8")).toContain("-f 3 -l 3");
     expect(look.asked[0]!.images).toBe(1);
     const without = conversation(dir, { media: new Media({ vision: look.route, which: () => undefined }) });
-    expect(await tool("LookAt").run({ file_path: "doc.pdf" }, without)).toMatch(/needs pdftoppm.*Read/);
+    expect(await tool("LookAt").run({ file_path: "doc.pdf" }, without)).toMatch(/pdftoppm, mutool or gs.*Read/);
   });
 
   test.skipIf(win)("Watch samples frames evenly with ffmpeg and sends them in order with the question", async () => {
@@ -169,8 +169,10 @@ describe("looking at pictures and videos", () => {
     const ffmpeg = program(dir, "ffmpeg", `if [ "$1" = "-hide_banner" ]; then echo "  Duration: 00:01:00.00, start: 0.0" >&2; exit 1; fi\necho "$@" >> ${log}\nfor last; do :; done\nprintf jpg > "$last"`);
     writeFileSync(join(dir, "clip.mp4"), "video");
     const look = fakeLook("A dog runs.");
-    const ctx = conversation(dir, { media: new Media({ vision: look.route, local: { ffmpeg } }) });
+    const reported: { media?: unknown }[] = [];
+    const ctx = conversation(dir, { media: new Media({ vision: look.route, local: { ffmpeg } }), report: (m) => { reported.push(m); } });
     const out = await tool("Watch").run({ file_path: "clip.mp4", question: "What happens?" }, ctx);
+    expect(reported).toEqual([{ media: { path: join(dir, "clip.mp4"), mime: "video/mp4", seconds: 60 } }]);
     expect(out).toContain("A dog runs.");
     expect(out).toContain("60.0 seconds, 6 frames");
     expect(look.asked[0]!.images).toBe(6);
@@ -230,7 +232,7 @@ describe("what is offered, and to whom", () => {
 
   test("a small model is not shown them, but the prompt names the ones that work here", async () => {
     const media = mediaOf(made("tts", async () => ({ bytes: wavBytes, mime: "audio/wav" })));
-    const r = rig(() => ({ text: "ok" }), { media, window: 8_000 });
+    const r = rig(() => ({ text: "ok" }), { media, window: 8_000, small: true });
     await r.turn(prompt("read this aloud"));
     const first = r.provider.requests[0]!;
     expect(first.tools.map((t) => t.name)).not.toContain("Speak");

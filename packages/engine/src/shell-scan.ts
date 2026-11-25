@@ -9,7 +9,8 @@ export interface Redirect { op: string; target: string }
 /** One command that will run, as a shell would run it. `fed`: its arguments come from another command (xargs, find). */
 export interface Flat { words: string[]; dyn: boolean[]; redirects: Redirect[]; fed?: "xargs" | "find"; sudo: boolean; stdin?: string }
 export interface Finding { key: string; reason: string; phrase: string }
-export interface View { cmds: Flat[]; found: Finding[] }
+/** `code`: the text of every program given to an interpreter inline (`python -c`, a heredoc); `files`: the script files an interpreter or the shell is told to run. */
+export interface View { cmds: Flat[]; found: Finding[]; code: string[]; files: string[] }
 export type Mode = "posix" | "windows";
 
 const MAX_CHARS = 100_000, MAX_STEPS = 300_000, MAX_COMMANDS = 600, MAX_DEPTH = 8;
@@ -253,8 +254,21 @@ const SCRIPTERS: Record<string, RegExp> = { python: /^-[A-Za-z]*c$/, python3: /^
 const FETCHERS = new Set(["curl", "wget", "fetch", "nc", "ncat", "netcat"]);
 const DECODERS = new Set(["base64", "base32", "xxd", "openssl", "gunzip", "zcat", "bzcat", "xzcat", "uudecode", "basenc"]);
 const READS_STDIN = /^(sh|bash|zsh|dash|ksh|ash|python\d?(\.\d+)?|node|nodejs|bun|perl|ruby|php)$/;
-const EXEC_PRIMITIVE = /\b(os\.system|os\.popen|subprocess|popen|execSync|child_process|spawn|exec|system|Runtime|shell_exec|passthru|IO\.popen)\b|`/;
+export const EXEC_PRIMITIVE = /\b(os\.system|os\.popen|subprocess|popen|execSync|child_process|spawn|exec|system|Runtime|shell_exec|passthru|IO\.popen)\b|`/;
 const DELETE_PRIMITIVE = /\b(rmtree|rm_rf|rm_r|rmSync|rmdirSync|removeSync|remove_tree|unlinkSync|os\.remove|os\.unlink|os\.rmdir|rmdir|unlink|File\.delete|FileUtils)\b/;
+
+const RUNNERS = /^(?:python\d*(?:\.\d+)?|node|nodejs|bun|deno|tsx|ruby|perl|php|lua|sh|bash|zsh|dash|ksh|ash|pwsh|powershell)$/;
+const SCRIPT_FILE = /\.(?:py|[cm]?js|[cm]?ts|rb|pl|php|lua|sh|bash|zsh|ps1)$/i;
+/** The script file a command runs: the first word after the options of an interpreter, or the command itself when it is a script. */
+function scriptFile(name: string, words: W[]): string | undefined {
+  if (!words[0]!.dyn && SCRIPT_FILE.test(words[0]!.t)) return words[0]!.t;
+  if (!RUNNERS.test(name)) return undefined;
+  const rest = words.slice(1).filter((w) => !w.dyn);
+  const i = rest.findIndex((w) => !w.t.startsWith("-") && !/^(run|exec)$/.test(w.t));
+  const before = rest.slice(0, i < 0 ? 0 : i).map((w) => w.t);
+  const inline = /^(?:sh|bash|zsh|dash|ksh|ash)$/.test(name) ? /^-[A-Za-z]*c$/ : /^-[A-Za-z]*[cemr]$|^--eval$/;
+  return i >= 0 && !before.some((f) => inline.test(f)) ? rest[i]!.t : undefined;
+}
 
 const programOf = (w: W): string | undefined => {
   if (!w.dyn) return programName(w.t);
@@ -262,7 +276,7 @@ const programOf = (w: W): string | undefined => {
   return w.t.includes("/") && tail && !/[$(`]/.test(tail) ? programName(tail) : undefined;
 };
 
-interface State { cmds: Flat[]; found: Finding[]; mode: Mode; parser: Parser }
+interface State { cmds: Flat[]; found: Finding[]; code: string[]; files: string[]; mode: Mode; parser: Parser }
 
 const add = (st: State, f: Finding): void => { if (!st.found.some((x) => x.key === f.key)) st.found.push(f); };
 
@@ -282,6 +296,7 @@ function scanInto(text: string, st: State, depth: number, fed?: Flat["fed"]): vo
 
 /** Text a script program is given with -c / -e: strings in it that look like commands are looked at when it can run commands. */
 function scanScript(text: string, st: State, depth: number): void {
+  st.code.push(text.slice(0, 200_000));
   if (text.length > 20_000) { add(st, TOO_BIG); return; }
   if (EXEC_PRIMITIVE.test(text)) for (const m of text.matchAll(/(["'])((?:\\.|(?!\1)[^\\])*)\1/g)) { const lit = m[2]!; if (/[\s/]/.test(lit)) scanInto(lit, st, depth + 1); }
   if (DELETE_PRIMITIVE.test(text)) add(st, find("script-delete", "This runs a few lines of a program that delete files, and what it deletes cannot be checked first.", "programs that delete files"));
@@ -302,6 +317,8 @@ function visit(raw: Raw, st: State, depth: number, fed?: Flat["fed"]): void {
   const flat: Flat = { words: words.map((w) => w.t), dyn: words.map((w) => w.dyn), redirects: raw.redirects, sudo: u.sudo, ...(u.fed ? { fed: "xargs" as const } : fed ? { fed } : {}), ...(raw.heredoc !== undefined ? { stdin: raw.heredoc } : {}) };
   st.cmds.push(flat);
   if (name === undefined) { add(st, DYNAMIC); return; }
+  const file = scriptFile(name, words);
+  if (file) st.files.push(file);
   const fromProducers = (): void => {
     const chain: string[] = [];
     for (let p = raw.pipeIn; p; p = p.pipeIn) { const n = programOf(unwrapped(p).words[0] ?? { t: "", dyn: true }); if (n) chain.push(n); }
@@ -323,7 +340,7 @@ function visit(raw: Raw, st: State, depth: number, fed?: Flat["fed"]): void {
       if (raw.heredoc !== undefined) scanInto(raw.heredoc, st, depth + 1);
       fromProducers();
     }
-  } else if (READS_STDIN.test(name) && words.length === 1) { if (raw.heredoc !== undefined) scanScript(raw.heredoc, st, depth); fromProducers(); }
+  } else if (READS_STDIN.test(name) && (words.length === 1 || (words.length === 2 && words[1]!.t === "-"))) { if (raw.heredoc !== undefined) scanScript(raw.heredoc, st, depth); fromProducers(); }
   else if (SCRIPTERS[name.replace(/\d+(\.\d+)*$/, "")] ?? SCRIPTERS[name]) {
     const c = payloadWord(words, (SCRIPTERS[name] ?? SCRIPTERS[name.replace(/\d+(\.\d+)*$/, "")])!);
     if (c) scanScript(c.t, st, depth);
@@ -348,11 +365,11 @@ function visit(raw: Raw, st: State, depth: number, fed?: Flat["fed"]): void {
 
 /** Everything a command line will run, and what could not be told. Never throws; a line that is too large or too tangled is reported as such. */
 export function shellView(command: string, mode: Mode = "posix"): View {
-  if (command.length > MAX_CHARS) return { cmds: [], found: [TOO_BIG] };
+  if (command.length > MAX_CHARS) return { cmds: [], found: [TOO_BIG], code: [], files: [] };
   const main = new Parser(command, mode);
-  const st: State = { cmds: [], found: [], mode, parser: main };
+  const st: State = { cmds: [], found: [], code: [], files: [], mode, parser: main };
   main.run();
   if (main.bad) add(st, TOO_BIG);
   for (const raw of main.raws) visit(raw, st, 0);
-  return { cmds: st.cmds, found: st.found };
+  return { cmds: st.cmds, found: st.found, code: st.code, files: st.files };
 }

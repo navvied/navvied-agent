@@ -1,5 +1,7 @@
 import type { EngineEvent, ToolCategory, ToolEntry } from "@navvied/protocol";
 import type { Kit } from "./providers/kit.ts";
+import { computerScreen } from "./computer-screen.ts";
+import { toolSetup } from "./tool-setup.ts";
 
 type Tools = Extract<EngineEvent, { ev: "tools" }>;
 
@@ -45,7 +47,8 @@ async function page(k: Kit, c: ToolCategory, first: Tools): Promise<Tools | stri
     if (picked === undefined) return t;
     at = picked;
     const e = mine[picked]!;
-    if (!switchable(e)) { if (e.state === "needs-setup" && e.setup) k.link.send({ cmd: "tool.setup", id: e.id }); continue; }
+    if (!switchable(e)) { if (e.state === "needs-setup" && e.setup) { await toolSetup(k, e); const fresh = await k.link.call("tools", { cmd: "tools" }); if (typeof fresh !== "string") t = fresh; } continue; }
+    if (e.id === "computer-use") { await computerScreen(k, e); const fresh = await k.link.call("tools", { cmd: "tools" }); if (typeof fresh !== "string") t = fresh; continue; }
     if (e.on && isCore(t, e) && !(await keepOff(k, e))) continue;
     const got = await k.link.call("tools", { cmd: "tool.toggle", name: e.id, enabled: !e.on });
     if (typeof got === "string") { k.note.push(got); continue; }

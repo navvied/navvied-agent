@@ -1,0 +1,36 @@
+[
+  {
+    "tool": "Bash",
+    "args": {
+      "command": "cat .bench-port"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "open",
+      "url": "http://127.0.0.1:${result:(\\d+)}/signup"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "fill",
+      "fields": "{\"${result:\\[(\\d+)\\] textbox \"Name\"}\": \"Mira Ode\", \"${result:\\[(\\d+)\\] combobox \"Plan\"}\": \"Team\", \"${result:\\[(\\d+)\\] checkbox \"I accept the terms\"}\": \"yes\"}"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "click",
+      "ref": "${result:\\[(\\d+)\\] button \"Join\"}"
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "ANSWER.txt",
+      "content": "${result:Signup code: (\\w+)}\n"
+    }
+  }
+]

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { askPeer } from "@navvied/engine";
 import { DEFAULT_LIMITS, parseA2a, type A2aLimits } from "../src/a2a-config.ts";
 import { peerBook, tokenOf } from "../src/a2a-peers.ts";
-import { answerForwarded, registerFrame, relayAddress, revokeFrame } from "../src/a2a-relay.ts";
+import { answerForwarded, relayAddress } from "../src/a2a-relay.ts";
 import { startA2aServer, type A2aServer, type RunJob, type RunResult, type TaskRunner } from "../src/a2a-server.ts";
 import { PeerTokens, hashOf } from "../src/a2a-tokens.ts";
 import { a2aCommand } from "../src/commands/a2a.ts";
@@ -307,9 +307,7 @@ describe("the server of agent-to-agent calls", () => {
 });
 
 describe("through the relay", () => {
-  test("the frames are plain data, and the address has the handle and no account", () => {
-    expect(registerFrame("ab".repeat(16), "f".repeat(64))).toEqual({ ev: "a2a.register", handle: "ab".repeat(16), tokenHash: "f".repeat(64) });
-    expect(revokeFrame("f".repeat(64))).toEqual({ ev: "a2a.revoke", tokenHash: "f".repeat(64) });
+  test("the address has the handle and no account", () => {
     expect(relayAddress("https://navvied.com/", "abc")).toBe("https://navvied.com/a2a/abc/");
   });
 

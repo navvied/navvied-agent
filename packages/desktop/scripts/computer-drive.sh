@@ -6,7 +6,7 @@ set -uo pipefail
 report=$1
 here=$(cd "$(dirname "$0")/../../.." && pwd)
 case "$(uname -s)" in
-  Linux)  python3 "$here/packages/cli/test/fixtures/gtk-target.py" & app=$!; needle=python ;;
+  Linux)  python3 "$here/packages/cli/test/fixtures/gtk-target.py" & app=$!; needle=navvied-target ;;
   Darwin) open -a TextEdit; app=; needle=TextEdit ;;
   *)      cmd //c start notepad; app=; needle=notepad ;;
 esac

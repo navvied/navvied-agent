@@ -54,7 +54,7 @@ describe("a helper", () => {
     const big = rig(() => ({ text: "x" }));
     await big.turn(prompt("hi"));
     expect(big.provider.requests[0]!.tools.map((t) => t.name)).toContain("Agent");
-    const small = rig(() => ({ text: "x" }), { window: 8_000 });
+    const small = rig(() => ({ text: "x" }), { window: 8_000, small: true });
     await small.turn(prompt("hi"));
     expect(small.provider.requests[0]!.tools.map((t) => t.name)).not.toContain("Agent");
     const refused = rig((req) => (isMain(req) && req.messages.at(-1)?.role !== "tool" ? { calls: [{ name: "Agent", args: { prompt: "  " } }] } : { text: "ok" }));

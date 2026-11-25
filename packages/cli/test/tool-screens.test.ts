@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type { EngineEvent, ScheduleInfo } from "@navvied/protocol";
+import type { EngineEvent, ScheduleInfo, ScheduleWhen } from "@navvied/protocol";
 import { openScreen } from "../src/open-screen.ts";
 import { Presenter } from "../src/presenter.ts";
 import { Renderer } from "../src/render.ts";
 import { savedFile } from "../src/saved-files.ts";
 import { scheduleScreen } from "../src/schedule-screen.ts";
-import { cronWords, scheduleOf, firstWhen, whenOf } from "../src/schedule-when.ts";
+import { cronWords, scheduleOf, firstWhen, whenOf, whenWords } from "@navvied/protocol";
 import { refusalWords } from "../src/screen-words.ts";
 import { describeFailure, describeStep } from "../src/steps.ts";
 import { resolveTheme, setTheme } from "../src/theme.ts";
@@ -121,12 +121,12 @@ describe("/open", () => {
 describe("/schedule", () => {
   const NOW = new Date(2026, 10, 25, 12, 0).getTime();
   const at = (d: number, h: number, m = 0): number => new Date(2026, 10, 25 + d, h, m).getTime();
-  const job = (over: Partial<ScheduleInfo> = {}): ScheduleInfo => ({ id: "a", title: "Morning summary", prompt: "Summarise the new commits.", cron: "0 9 * * 1-5", next: at(1, 9), last: at(0, 9), lastCode: 0, enabled: true, kind: "agent", mode: "plan", ...over });
+  const job = (over: Partial<ScheduleInfo> = {}): ScheduleInfo => ({ id: "a", title: "Morning summary", prompt: "Summarise the new commits.", cron: "0 9 * * 1-5", when: { kind: "cron", cron: "0 9 * * 1-5" }, next: at(1, 9), last: at(0, 9), lastCode: 0, enabled: true, kind: "agent", mode: "plan", ...over });
   const hub = (jobs: ScheduleInfo[]) => {
     let items = jobs;
     return new FakeLink((c) => {
-      if (c.cmd === "schedule.add") items = [...items, job({ id: "n", title: c.title as string, prompt: c.prompt as string, cron: c.cron as string, mode: c.mode as "plan" | "auto" })];
-      if (c.cmd === "schedule.update") items = items.map((j) => (j.id === c.id ? { ...j, ...(c.enabled !== undefined ? { enabled: c.enabled as boolean } : {}), ...(c.title ? { title: c.title as string, cron: c.cron as string, prompt: c.prompt as string, mode: c.mode as "plan" | "auto" } : {}) } : j));
+      if (c.cmd === "schedule.add") items = [...items, job({ id: "n", title: c.title as string, prompt: c.prompt as string, when: c.when as ScheduleWhen, mode: c.mode as "plan" | "auto" })];
+      if (c.cmd === "schedule.update") items = items.map((j) => (j.id === c.id ? { ...j, ...(c.enabled !== undefined ? { enabled: c.enabled as boolean } : {}), ...(c.title ? { title: c.title as string, when: c.when as ScheduleWhen, prompt: c.prompt as string, mode: c.mode as "plan" | "auto" } : {}) } : j));
       if (c.cmd === "schedule.remove") items = items.filter((j) => j.id !== c.id);
       return { ev: "schedules", items };
     });
@@ -146,7 +146,7 @@ describe("/schedule", () => {
   });
   test("the list says when each runs next and how the last run went, and its footer is the page's", async () => {
     const t = scripted([undefined]);
-    await scheduleScreen(t.kit(hub([job(), job({ id: "b", title: "Tidy", enabled: false, next: undefined, last: undefined, lastCode: undefined, mode: "auto", cron: "0 22 * * *" })])), () => NOW);
+    await scheduleScreen(t.kit(hub([job(), job({ id: "b", title: "Tidy", enabled: false, next: undefined, last: undefined, lastCode: undefined, mode: "auto", cron: "0 22 * * *", when: { kind: "cron", cron: "0 22 * * *" } })])), () => NOW);
     const s = t.shown[0]!;
     expect(s.items.map((i) => i.label)).toEqual(["on   Morning summary", "off  Tidy", "New task"]);
     expect(s.items[0]!.hint).toBe("Every weekday at 9:00, next tomorrow 9:00, Ran fine today 9:00");
@@ -177,7 +177,7 @@ describe("/schedule", () => {
     const l = hub([]);
     const t = scripted(["New task", "Every weekday", "9:00", "Can change files", undefined], ["Morning summary", "Summarise the new commits."]);
     await scheduleScreen(t.kit(l), () => NOW);
-    expect(l.commands("schedule.add")).toEqual([{ cmd: "schedule.add", title: "Morning summary", cron: "0 9 * * 1-5", prompt: "Summarise the new commits.", mode: "auto" }]);
+    expect(l.commands("schedule.add")).toEqual([{ cmd: "schedule.add", title: "Morning summary", when: { kind: "cron", cron: "0 9 * * 1-5" }, prompt: "Summarise the new commits.", mode: "auto" }]);
     expect(t.shown.map((s) => s.title)).toContain("New task");
     expect(t.shown.at(-1)!.frame.notice).toContain("Task saved.");
   });
@@ -187,47 +187,52 @@ describe("/schedule", () => {
     await scheduleScreen(t.kit(l), () => NOW);
     const notes = t.shown.flatMap((s) => s.frame.notice ?? []);
     expect(notes).toEqual(expect.arrayContaining(["Give it a name.", "Say what it should do.", "Use five fields, such as 0 9 * * 1-5."]));
-    expect(l.commands("schedule.add")[0]).toMatchObject({ title: "Tidy", cron: "0 9 * * 1-5" });
+    expect(l.commands("schedule.add")[0]).toMatchObject({ title: "Tidy", when: { kind: "cron", cron: "0 9 * * 1-5" } });
   });
   test("another time is typed, and a wrong one is asked again", async () => {
     const t2 = scripted(["New task", "Every day", "Another time", "Only read and plan", undefined], ["A", "B", "25:00", "7:30"]);
     const l2 = hub([]);
     await scheduleScreen(t2.kit(l2), () => NOW);
     expect(t2.shown.flatMap((s) => s.frame.notice ?? [])).toContain("Use a time such as 9:30.");
-    expect(l2.commands("schedule.add")[0]).toMatchObject({ cron: "30 7 * * *" });
+    expect(l2.commands("schedule.add")[0]).toMatchObject({ when: { kind: "cron", cron: "30 7 * * *" } });
   });
   test("every week and every month ask which day, then the time", async () => {
     const l = hub([]);
     const t = scripted(["New task", "Every week on…", "Friday", "18:00", "Only read and plan", "New task", "Every month on…", "Another day", "9:00", "Only read and plan", undefined], ["A", "B", "C", "D", "20"]);
     await scheduleScreen(t.kit(l), () => NOW);
-    expect(l.commands("schedule.add").map((c) => c.cron)).toEqual(["0 18 * * 5", "0 9 20 * *"]);
+    expect(l.commands("schedule.add").map((c) => c.when)).toEqual([{ kind: "cron", cron: "0 18 * * 5" }, { kind: "cron", cron: "0 9 20 * *" }]);
   });
-  test("every few minutes or hours takes a row or a typed number, and keeps to what cron can say", async () => {
+  test("every few minutes or hours takes a row or a typed number, and sends the interval itself", async () => {
     const l = hub([]);
-    const t = scripted(["New task", "Every few minutes or hours", "15 minutes", "Only read and plan", "New task", "Every few minutes or hours", "Another number", "Only read and plan", "New task", "Every few minutes or hours", "Hour", "Only read and plan", undefined], ["A", "B", "C", "D", "90 minutes", "2 hours", "E", "F"]);
+    const t = scripted(["New task", "Every few minutes or hours", "15 minutes", "Only read and plan", "New task", "Every few minutes or hours", "Another number", "Only read and plan", "New task", "Every few minutes or hours", "Hour", "Only read and plan", undefined], ["A", "B", "C", "D", "soon", "2 hours", "E", "F"]);
     await scheduleScreen(t.kit(l), () => NOW);
-    expect(l.commands("schedule.add").map((c) => c.cron)).toEqual(["*/15 * * * *", "0 */2 * * *", "@hourly"]);
-    expect(t.shown.flatMap((s) => s.frame.notice ?? [])).toContain("Use up to 59 minutes or 23 hours, such as 20 minutes.");
+    expect(l.commands("schedule.add").map((c) => c.when)).toEqual([{ kind: "every", ms: 900_000 }, { kind: "every", ms: 7_200_000 }, { kind: "every", ms: 3_600_000 }]);
+    expect(t.shown.flatMap((s) => s.frame.notice ?? [])).toContain("Use a number such as 20 minutes or 3 hours.");
   });
   test("once at a date and time sends one moment, and a moment that has passed is refused", () => {
     const w = { ...firstWhen(), kind: 4, date: "Tomorrow", time: "9:30" };
-    expect(scheduleOf(w, NOW)).toEqual({ at: new Date(2026, 10, 26, 9, 30).getTime() });
+    expect(scheduleOf(w, NOW)).toEqual({ kind: "at", at: new Date(2026, 10, 26, 9, 30).getTime() });
     expect(scheduleOf({ ...w, date: "Today", time: "9:30" }, NOW)).toBe("That time has passed.");
     expect(scheduleOf({ ...w, date: "2026-02-30" }, NOW)).toBe("Use a date such as 2026-12-01.");
-    expect(scheduleOf({ ...w, date: "2026-12-01", time: "7:30" }, NOW)).toEqual({ at: new Date(2026, 11, 1, 7, 30).getTime() });
+    expect(scheduleOf({ ...w, date: "2026-12-01", time: "7:30" }, NOW)).toEqual({ kind: "at", at: new Date(2026, 11, 1, 7, 30).getTime() });
   });
   test("a task is changed from what it is: its schedule fills the choices again", () => {
-    const j = (cron: string) => ({ id: "a", title: "t", prompt: "p", cron, enabled: true, kind: "agent", mode: "plan" } as ScheduleInfo);
-    expect(whenOf(j("0 18 * * 5"))).toMatchObject({ kind: 2, weekday: 4, time: "18:00" });
-    expect(whenOf(j("0 9 20 * *"))).toMatchObject({ kind: 3, monthday: "20", time: "9:00" });
-    expect(whenOf(j("*/20 * * * *"))).toMatchObject({ kind: 5, every: "20 minutes" });
-    expect(whenOf(j("5 4 2 3 *"))).toMatchObject({ kind: 6, cron: "5 4 2 3 *" });
+    const j = (when: ScheduleWhen) => ({ id: "a", title: "t", prompt: "p", cron: "", when, enabled: true, kind: "agent", mode: "plan" } as ScheduleInfo);
+    const c = (cron: string) => j({ kind: "cron", cron });
+    expect(whenOf(c("0 18 * * 5"))).toMatchObject({ kind: 2, weekday: 4, time: "18:00" });
+    expect(whenOf(c("0 9 20 * *"))).toMatchObject({ kind: 3, monthday: "20", time: "9:00" });
+    expect(whenOf(j({ kind: "every", ms: 1_200_000 }))).toMatchObject({ kind: 5, every: "20 minutes" });
+    expect(whenOf(j({ kind: "every", ms: 7_200_000 }))).toMatchObject({ kind: 5, every: "2 hours" });
+    expect(whenOf(j({ kind: "at", at: new Date(2026, 11, 1, 7, 30).getTime() }))).toMatchObject({ kind: 4, date: "2026-12-01", time: "7:30" });
+    expect(whenOf(c("5 4 2 3 *"))).toMatchObject({ kind: 6, cron: "5 4 2 3 *" });
+    expect(whenWords({ kind: "every", ms: 900_000 }, String)).toBe("Every 15 minutes");
+    expect(whenWords({ kind: "at", at: 7 }, (ms) => `day${ms}`)).toBe("Once day7");
   });
   test("an hourly task has no time to ask, and Esc goes back one step", async () => {
     const l = hub([]);
     const t = scripted(["New task", "Every day", undefined, "Every few minutes or hours", "Hour", "Only read and plan", undefined], ["Build", "Run the build."]);
     await scheduleScreen(t.kit(l), () => NOW);
-    expect(l.commands("schedule.add")[0]).toMatchObject({ cron: "@hourly", mode: "plan" });
+    expect(l.commands("schedule.add")[0]).toMatchObject({ when: { kind: "every", ms: 3_600_000 }, mode: "plan" });
   });
   test("changing a task starts from what it is", async () => {
     const l = hub([job()]);

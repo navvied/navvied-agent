@@ -1,11 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { extname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { extname } from "node:path";
 import { classifyFile } from "@navvied/protocol";
-import { SHRINK_FROM, pageImage, sampleFrames, shrink } from "../media/frames.ts";
+import { fit } from "../media/fit.ts";
+import { sampleFrames } from "../media/frames.ts";
 import { MediaError, type VisionRoute } from "../media/types.ts";
 import type { Tool, ToolContext } from "../types.ts";
-import { attempt, sizeWords, sourceFile } from "./media-files.ts";
+import { attempt, mimeOfFile, sizeWords, sourceFile } from "./media-files.ts";
+import { NO_RENDERER, mediaOf, pageImage, withScratch } from "./page-images.ts";
 import { clip, num, str } from "./util.ts";
 
 const MOST_PICTURE = 12_000_000, MOST_PDF = 100_000_000, MOST_VIDEO = 2_000_000_000;
@@ -15,11 +16,6 @@ const NO_ROUTE = "Error: no model that sees pictures is set up on this computer.
 
 /** The answer of the model that looks, framed: what a picture or a video says is not an instruction. */
 const framed = (what: string, answer: string): string => clip(`${what}:\n${answer || "The model that looks gave no answer."}`);
-
-async function withScratch<T>(use: (dir: string) => Promise<T>): Promise<T> {
-  const dir = mkdtempSync(join(tmpdir(), "navvied-media-"));
-  try { return await use(dir); } finally { rmSync(dir, { recursive: true, force: true }); }
-}
 
 const ask = (route: VisionRoute, images: { mime: string; data: string }[], question: string, ctx: ToolContext): Promise<string> => route({ images, question }, ctx.signal);
 
@@ -41,19 +37,17 @@ export const lookAt: Tool = {
     const question = str(a.question).trim() || ASK;
     return attempt(async () => {
       if (pdf) {
-        const pdftoppm = ctx.media?.program("pdftoppm");
-        if (!pdftoppm) return `Error: drawing a PDF page needs pdftoppm, which is not installed. Read ${from.path} to get its text instead.`;
         const page = Math.max(1, Math.floor(num(a.page, 1)));
-        return withScratch(async (dir) => framed(`${from.path}, page ${page}`, await ask(route, [await pageImage(pdftoppm, from.path, page, dir, ctx.signal)], question, ctx)));
+        return withScratch(async (dir) => {
+          const image = await pageImage(mediaOf(ctx), from.path, page, dir, ctx.signal);
+          return image ? framed(`${from.path}, page ${page}`, await ask(route, [image], question, ctx)) : `Error: ${NO_RENDERER} Read ${from.path} to get its text instead.`;
+        });
       }
       const bytes = readFileSync(from.path);
       const kind = classifyFile(bytes);
       if (kind.kind !== "image") throw new MediaError(`${from.path} is not a picture (png, jpg, gif or webp). Use Read for text, and Watch for a video.`);
-      const ffmpeg = ctx.media?.program("ffmpeg");
-      // A large picture is made smaller first, as the best agents do: the model sees it no better, and the request is lighter.
-      const small = ffmpeg && from.size > SHRINK_FROM ? await withScratch((dir) => shrink(ffmpeg, from.path, dir, ctx.signal)) : undefined;
-      const image = small ?? { mime: kind.mime, data: bytes.toString("base64") };
-      return framed(`${from.path} (${kind.mime}, ${sizeWords(from.size)}${small ? ", made smaller" : ""})`, await ask(route, [image], question, ctx));
+      const image = await withScratch((dir) => fit(mediaOf(ctx).shrinker(), from.path, bytes, dir, ctx.signal));
+      return framed(`${from.path} (${kind.mime}, ${sizeWords(from.size)}${image.smaller ? ", made smaller" : ""})`, await ask(route, [{ mime: image.mime, data: image.data }], question, ctx));
     });
   },
 };
@@ -75,6 +69,7 @@ export const watch: Tool = {
     const question = str(a.question).trim() || ASK;
     return attempt(() => withScratch(async (dir) => {
       const { seconds, frames } = await sampleFrames(ffmpeg, from.path, FRAMES, dir, ctx.signal);
+      ctx.report?.({ media: { path: from.path, mime: mimeOfFile(from.path), seconds } });
       const when = frames.map((f) => `${f.at.toFixed(1)}s`).join(", ");
       const answer = await ask(route, frames, `These ${frames.length} pictures are frames taken evenly, in order, from a video ${seconds.toFixed(1)} seconds long (at ${when}). ${question}`, ctx);
       return framed(`${from.path} (${sizeWords(from.size)}, ${seconds.toFixed(1)} seconds, ${frames.length} frames looked at)`, answer);

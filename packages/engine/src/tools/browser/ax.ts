@@ -15,8 +15,14 @@ export interface AxNode {
   backendDOMNodeId?: number;
 }
 
+/** Where a document lives when it is not the page's own: the browser session that holds it, and the frame element that holds it in its parent. */
+export interface Place { session: string; owner: { place: Place | undefined; node: number } }
+
+/** A document of the page with the documents of the frames inside it, by the id of the element each frame sits in. */
+export interface Doc { nodes: AxNode[]; place?: Place; url?: string; frames: Map<number, Doc> }
+
 /** What a number stands for: the element (by the browser's own id), and what it was called when it was numbered. */
-export interface Ref { node: number; role: string; name: string; href?: string }
+export interface Ref { node: number; role: string; name: string; href?: string; place?: Place }
 
 const USED = new Set(["button", "link", "textbox", "searchbox", "combobox", "checkbox", "radio", "switch", "slider", "spinbutton", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "treeitem", "DisclosureTriangle", "PopUpButton", "ListBoxOption", "option", "listbox"]);
 const FILLED = new Set(["textbox", "searchbox", "combobox", "spinbutton", "slider", "PopUpButton"]);
@@ -28,12 +34,25 @@ const text = (v: AxValue | undefined): string => (typeof v?.value === "string" |
 const prop = (n: AxNode, name: string): unknown => n.properties?.find((p) => p.name === name)?.value.value;
 const clean = (s: string, max = 200): string => { const t = s.replace(/\s+/g, " ").trim(); return t.length > max ? `${t.slice(0, max)}…` : t; };
 
+/** A page that has no frames. */
+export const plain = (nodes: AxNode[]): Doc => ({ nodes, frames: new Map() });
+
 export interface Reading { lines: string[]; refs: Map<number, Ref> }
 
-export function readTree(nodes: AxNode[]): Reading {
-  const byId = new Map(nodes.map((n) => [n.nodeId, n]));
+export const FRAME_ROLES = new Set(["Iframe", "iframe", "IframePresentational"]);
+
+/** The tree of a page and of every frame in it, numbered in one run: a control in a frame is told apart by nothing but its number. */
+export function readTree(root: Doc): Reading {
   const lines: string[] = [];
   const refs = new Map<number, Ref>();
+  const into = (doc: Doc, depth: number): void => walkDoc(doc, depth, lines, refs, into);
+  into(root, 0);
+  return { lines, refs };
+}
+
+function walkDoc(doc: Doc, base: number, lines: string[], refs: Map<number, Ref>, into: (doc: Doc, depth: number) => void): void {
+  const nodes = doc.nodes;
+  const byId = new Map(nodes.map((n) => [n.nodeId, n]));
 
   const options = (n: AxNode): string[] => {
     const out: string[] = [];
@@ -57,7 +76,7 @@ export function readTree(nodes: AxNode[]): Reading {
     if (control) {
       const number = refs.size + 1;
       const href = role === "link" ? text({ value: prop(n, "url") }) : "";
-      refs.set(number, { node: n.backendDOMNodeId!, role: role || "generic", name, ...(href ? { href } : {}) });
+      refs.set(number, { node: n.backendDOMNodeId!, role: role || "generic", name, ...(href ? { href } : {}), ...(doc.place ? { place: doc.place } : {}) });
       const state: string[] = [];
       const checked = prop(n, "checked"); if (checked !== undefined) state.push(checked === "mixed" ? "mixed" : checked === true || checked === "true" ? "checked" : "unchecked");
       for (const flag of ["disabled", "expanded", "selected", "required", "invalid", "pressed"]) { const v = prop(n, flag); if (v === true || v === "true") state.push(flag); }
@@ -65,6 +84,12 @@ export function readTree(nodes: AxNode[]): Reading {
       const choices = role === "combobox" || role === "PopUpButton" ? options(n) : [];
       lines.push(`${at}[${number}] ${role || "clickable"}${name ? ` "${name}"` : ""}${state.length ? ` (${state.join(", ")})` : ""}${value ? ` value="${value}"` : ""}${href ? ` -> ${href.slice(0, 120)}` : ""}${choices.length ? ` options: ${choices.join(" | ")}` : ""}`);
       if (role === "listbox" || role === "tree" || role === "tab") children(depth + 1);
+      return;
+    }
+    if (FRAME_ROLES.has(role)) {
+      const inner = n.backendDOMNodeId !== undefined ? doc.frames.get(n.backendDOMNodeId) : undefined;
+      lines.push(`${at}frame${name ? ` "${name}"` : ""}${inner?.url ? `: ${inner.url.slice(0, 120)}` : inner ? "" : " (not readable)"}`);
+      if (inner) into(inner, depth + 1);
       return;
     }
     if (role === "heading") { if (name) lines.push(`${at}heading${prop(n, "level") ? ` ${prop(n, "level")}` : ""}: ${name}`); else children(depth); return; }
@@ -81,6 +106,5 @@ export function readTree(nodes: AxNode[]): Reading {
   };
 
   const roots = nodes.filter((n) => !nodes.some((o) => o.childIds?.includes(n.nodeId)));
-  for (const r of roots.length ? roots : nodes.slice(0, 1)) walk(r.nodeId, 0);
-  return { lines, refs };
+  for (const r of roots.length ? roots : nodes.slice(0, 1)) walk(r.nodeId, base);
 }

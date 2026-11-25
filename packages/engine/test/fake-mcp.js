@@ -6,7 +6,17 @@ else {
   const send = (m) => process.stdout.write(JSON.stringify(m) + "\n");
   const rich = mode === "rich";
   const many = mode === "many";
-  const tools = many ? Array.from({ length: 60 }, (_, i) => ({ name: i === 7 ? "send_invoice" : `tool_${i}`, description: i === 7 ? "Email an invoice to a customer" : `Does thing number ${i}`, inputSchema: { type: "object", properties: { id: { type: "string" }, note: { type: "string" } }, required: ["id"] } })) : [
+  const client = mode === "client";
+  let clientCaps = {};
+  const waiting = new Map();
+  let ask = 0;
+  // A request of the server to the client: its ids start at 1 on purpose, like the client's own.
+  const request = (method, params) => new Promise((resolve) => { const id = ++ask; waiting.set(id, resolve); send({ jsonrpc: "2.0", id, method, params }); });
+  const tools = many ? Array.from({ length: 60 }, (_, i) => ({ name: i === 7 ? "send_invoice" : `tool_${i}`, description: i === 7 ? "Email an invoice to a customer" : `Does thing number ${i}`, inputSchema: { type: "object", properties: { id: { type: "string" }, note: { type: "string" } }, required: ["id"] } })) : client ? [
+    { name: "caps", description: "The capabilities the client offered" },
+    { name: "sample", description: "Asks the client for a model answer", inputSchema: { type: "object", properties: { text: { type: "string" }, system: { type: "string" }, maxTokens: { type: "number" }, times: { type: "number" } } } },
+    { name: "elicit", description: "Asks the client to ask the person", inputSchema: { type: "object", properties: { message: { type: "string" }, schema: { type: "object" }, mode: { type: "string" } } } },
+  ] : [
     { name: "echo", description: "Say it back", inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] }, annotations: { readOnlyHint: true } },
     { name: "add numbers", description: "Add two numbers", inputSchema: { type: "object", properties: { a: { type: "number" }, b: { type: "number" } } } },
     { name: "fail", description: "Always fails" },
@@ -23,8 +33,9 @@ else {
       const line = buffer.slice(0, at); buffer = buffer.slice(at + 1);
       if (!line.trim()) continue;
       const m = JSON.parse(line);
+      if (m.method === undefined && m.id !== undefined) { waiting.get(m.id)?.(m); waiting.delete(m.id); continue; }
       if (m.id === undefined) { if (m.method === "notifications/cancelled" && process.env.CANCEL_LOG) require("fs").appendFileSync(process.env.CANCEL_LOG, `${m.params.requestId}\n`); continue; }
-      if (m.method === "initialize") { send({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: "2025-03-26", capabilities: rich ? { tools: {}, resources: {}, prompts: {} } : { tools: {} }, serverInfo: { name: "fake", version: "1" } } }); if (mode === "crash") setTimeout(() => process.exit(3), 30); }
+      if (m.method === "initialize") { clientCaps = m.params.capabilities; send({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: "2025-03-26", capabilities: rich ? { tools: {}, resources: {}, prompts: {} } : { tools: {} }, serverInfo: { name: "fake", version: "1" } } }); if (mode === "crash") setTimeout(() => process.exit(3), 30); }
       else if (m.method === "tools/list") {
         if (mode === "paged" && !m.params?.cursor) send({ jsonrpc: "2.0", id: m.id, result: { tools: tools.slice(0, 2), nextCursor: "page2" } });
         else if (mode === "paged") send({ jsonrpc: "2.0", id: m.id, result: { tools: tools.slice(2) } });
@@ -39,6 +50,14 @@ else {
       else if (m.method === "prompts/get") send({ jsonrpc: "2.0", id: m.id, result: { description: "Review", messages: [{ role: "user", content: { type: "text", text: `Please review ${m.params.arguments.file}${m.params.arguments.style ? ` in a ${m.params.arguments.style} style` : ""}.` } }] } });
       else if (m.method === "tools/call") {
         const { name, arguments: a } = m.params;
+        if (client) {
+          const done = (r) => send({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: JSON.stringify(r) }] } });
+          if (name === "caps") done(clientCaps);
+          else if (name === "sample") (async () => { let last; for (let i = 0; i < (a.times ?? 1); i++) last = await request("sampling/createMessage", { messages: [{ role: "user", content: { type: "text", text: a.text ?? "hello" } }], ...(a.system ? { systemPrompt: a.system } : {}), maxTokens: a.maxTokens ?? 100, includeContext: "allServers" }); done(last.error ? { error: last.error } : last.result); })();
+          else if (name === "elicit") request("elicitation/create", { ...(a.mode ? { mode: a.mode } : {}), message: a.message ?? "Please fill in", requestedSchema: a.schema ?? { type: "object", properties: {} } }).then((r) => done(r.error ? { error: r.error } : r.result));
+          else send({ jsonrpc: "2.0", id: m.id, error: { code: -32601, message: `no tool ${name}` } });
+          continue;
+        }
         if (name === "echo") send({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: `echo: ${a.text}` }] } });
         else if (name === "add numbers") send({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: String(a.a + a.b) }] } });
         else if (name === "fail") send({ jsonrpc: "2.0", id: m.id, result: { isError: true, content: [{ type: "text", text: "it broke" }] } });

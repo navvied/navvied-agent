@@ -5,7 +5,7 @@
  */
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize, sep } from "node:path";
-import { NAME, parseFrontmatter, type SkillInfo } from "./skills.ts";
+import { NAME, parseFrontmatter, skillHash, type SkillInfo } from "./skills.ts";
 import { clean, scanText } from "./text-scan.ts";
 
 export const SKILL_LIMIT = 100_000;
@@ -77,7 +77,13 @@ const inside = (file: string): string | undefined => {
 };
 
 export class SkillBook {
-  constructor(private readonly roots: SkillRoots, private readonly now: () => number = Date.now) {}
+  /** `accept` hears of every skill text this book writes: what the person let it write (their approval setting, or their yes to a staged change) is theirs, so it needs no second trust step. */
+  constructor(private readonly roots: SkillRoots, private readonly now: () => number = Date.now, private readonly accept?: (s: { name: string; hash: string }) => void) {}
+
+  #accepted(dir: string, files: Manifest): void {
+    const text = files["SKILL.md"];
+    if (text !== undefined) this.accept?.({ name: String(parseFrontmatter(text).meta.name || dir.split(/[\\/]/).pop()), hash: skillHash(text) });
+  }
 
   /** Every change in order, with what became of each. */
   changes(): Change[] {
@@ -126,7 +132,7 @@ export class SkillBook {
     const hidden = Object.entries(after).filter(([k, v]) => before[k] !== v).flatMap(([k, v]) => scanText(v).map((f) => `${k}: ${f}`));
     if (hidden.length) return `Error: not saved, the text has ${hidden.join("; ")}. Take that out and try again.`;
     const change: Change = { id: this.id(), at: this.now(), name: e.name, action: e.action, actor, dir, before, after, applied: false };
-    if (!stage) { writeManifest(dir, after); change.applied = true; }
+    if (!stage) { writeManifest(dir, after); change.applied = true; this.#accepted(dir, after); }
     this.#append(change);
     const verb = { create: "Created", patch: "Changed", delete: "Deleted" }[e.action];
     return stage ? `Staged: ${e.action} skill "${e.name}" waits for the person to accept it (change ${change.id}). It is not in effect yet.` : `${verb} the skill "${e.name}" (change ${change.id}; the person can undo it).`;
@@ -139,6 +145,7 @@ export class SkillBook {
     if (accept) {
       if (!same(readManifest(c.dir), c.before)) return `Error: the skill "${c.name}" was changed by hand since; reject this one and ask again.`;
       writeManifest(c.dir, c.after);
+      this.#accepted(c.dir, c.after);
     }
     this.#append({ resolve: id, outcome: accept ? "accepted" : "rejected" });
     return accept ? `Applied change ${id} to "${c.name}".` : `Rejected change ${id}.`;

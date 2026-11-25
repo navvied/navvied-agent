@@ -1,0 +1,30 @@
+[
+  {
+    "tool": "Bash",
+    "args": {
+      "command": "cat .bench-port"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "open",
+      "url": "http://127.0.0.1:${result:(\\d+)}/board"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "drag",
+      "ref": "${result:\\[(\\d+)\\] button \"Task card\"}",
+      "to": "${result:\\[(\\d+)\\] button \"Done\"}"
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "ANSWER.txt",
+      "content": "${result:Board code: (\\w+)}\n"
+    }
+  }
+]

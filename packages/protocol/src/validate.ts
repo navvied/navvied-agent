@@ -2,7 +2,7 @@
  * Hand-written validation (no dependencies). A parsed command is rebuilt from the known, checked fields only —
  * nothing the peer sent is ever forwarded verbatim.
  */
-import { EFFORTS, PERM_MODES, SESSION_KINDS, type Command, type Effort, type FileInput, type ImageInput, type PermMode, type Result, type SessionKind } from "./types.ts";
+import { EFFORTS, PERM_MODES, SESSION_KINDS, type Command, type Effort, type FileInput, type ImageInput, type PermMode, type Result, type ScheduleWhen, type SessionKind } from "./types.ts";
 
 export const LIMITS = {
   text: 1_000_000,
@@ -52,6 +52,7 @@ export function isBaseAddress(v: string): boolean {
 }
 
 const isName = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,40}$/.test(v);
+const isAgentName = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/.test(v);
 const isId = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= LIMITS.id;
 
 function images(v: unknown): Result<ImageInput[]> {
@@ -272,7 +273,12 @@ function validateOne(raw: unknown): Result<Command> {
       return ok({ cmd: "draft", key: raw.key, text: raw.text });
     case "tool.setup":
       if (typeof raw.id !== "string" || !/^[a-z][a-z0-9-]{0,40}$/.test(raw.id)) return fail("tool.setup needs the id of a tool");
-      return ok({ cmd: "tool.setup", id: raw.id });
+      if (raw.mode !== undefined && !PERM_MODES.includes(raw.mode as PermMode)) return fail(`tool.setup.mode must be one of ${PERM_MODES.join(", ")}`);
+      return ok({ cmd: "tool.setup", id: raw.id, ...(raw.mode !== undefined ? { mode: raw.mode as PermMode } : {}) });
+    case "tool.setup.approve":
+    case "tool.setup.cancel":
+      if (typeof raw.id !== "string" || !/^[a-z][a-z0-9-]{0,40}$/.test(raw.id)) return fail(`${raw.cmd} needs the id of a tool`);
+      return ok({ cmd: raw.cmd, id: raw.id });
     case "tool.toggle":
       if (typeof raw.name !== "string" || !/^[A-Za-z][A-Za-z0-9_-]{0,40}$/.test(raw.name)) return fail("tool.toggle needs the name of a tool");
       if (typeof raw.enabled !== "boolean") return fail("tool.toggle.enabled must be true or false");
@@ -280,12 +286,64 @@ function validateOne(raw: unknown): Result<Command> {
     case "terminal.use":
       if (raw.backend !== "local" && raw.backend !== "docker" && raw.backend !== "ssh") return fail("terminal.use.backend must be local, docker or ssh");
       return ok({ cmd: "terminal.use", backend: raw.backend });
+    case "sandbox.use":
+      if ((raw.on !== undefined && typeof raw.on !== "boolean") || (raw.network !== undefined && typeof raw.network !== "boolean")) return fail("sandbox.use.on and sandbox.use.network must be true or false");
+      if (raw.on === undefined && raw.network === undefined) return fail("sandbox.use needs on or network");
+      return ok({ cmd: "sandbox.use", ...(raw.on !== undefined ? { on: raw.on } : {}), ...(raw.network !== undefined ? { network: raw.network } : {}) });
     case "artifacts":
       if (raw.id !== undefined && !isId(raw.id)) return fail("artifacts.id must be an id");
       return ok({ cmd: "artifacts", ...(typeof raw.id === "string" ? { id: raw.id } : {}) });
     case "artifact.read":
       if (!isId(raw.id)) return fail("artifact.read needs an id");
       return ok({ cmd: "artifact.read", id: raw.id });
+    case "media.read": {
+      if (!/^[0-9a-f]{16,64}$/.test(String(raw.id))) return fail("media.read needs the id of a picture, sound or video");
+      for (const k of ["offset", "length"] as const) if (raw[k] !== undefined && !(typeof raw[k] === "number" && Number.isInteger(raw[k]) && (raw[k] as number) >= (k === "length" ? 1 : 0) && (raw[k] as number) <= 2_000_000_000)) return fail(`media.read.${k} must be a whole number of bytes`);
+      return ok({ cmd: "media.read", id: raw.id as string, ...(raw.offset !== undefined ? { offset: raw.offset as number } : {}), ...(raw.length !== undefined ? { length: raw.length as number } : {}) });
+    }
+    case "a2a.list": return ok({ cmd: "a2a.list" });
+    case "a2a.peer.add": {
+      if (!isAgentName(raw.name)) return fail("a2a.peer.add.name must be letters, digits, dots, dashes or underscores (at most 32)");
+      if (typeof raw.url !== "string" || raw.url.length > 2048 || !/^https?:\/\/[^\s@]+$/.test(raw.url)) return fail("a2a.peer.add.url must be a web address such as https://agent.example.com, without a name or password in it");
+      if (raw.token !== undefined && (typeof raw.token !== "string" || !raw.token.trim() || raw.token.length > 4096 || /\s/.test(raw.token.trim()))) return fail("a2a.peer.add.token must be the token as one piece of text");
+      if (raw.tokenEnv !== undefined && !(typeof raw.tokenEnv === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(raw.tokenEnv) && raw.tokenEnv.length <= 128)) return fail("a2a.peer.add.tokenEnv must be the name of an environment variable");
+      if (raw.tokenFile !== undefined && !(typeof raw.tokenFile === "string" && raw.tokenFile.length > 0 && raw.tokenFile.length <= LIMITS.pathLength)) return fail("a2a.peer.add.tokenFile must be a file path");
+      if ([raw.token, raw.tokenEnv, raw.tokenFile].filter((x) => x !== undefined).length > 1) return fail("a2a.peer.add takes one of token, tokenEnv and tokenFile");
+      if (raw.timeoutSeconds !== undefined && !(typeof raw.timeoutSeconds === "number" && raw.timeoutSeconds >= 1 && raw.timeoutSeconds <= 3600)) return fail("a2a.peer.add.timeoutSeconds must be from 1 to 3600");
+      return ok({ cmd: "a2a.peer.add", name: raw.name, url: raw.url, ...(raw.token !== undefined ? { token: (raw.token as string).trim() } : {}), ...(raw.tokenEnv !== undefined ? { tokenEnv: raw.tokenEnv as string } : {}), ...(raw.tokenFile !== undefined ? { tokenFile: raw.tokenFile as string } : {}), ...(raw.timeoutSeconds !== undefined ? { timeoutSeconds: raw.timeoutSeconds as number } : {}) });
+    }
+    case "a2a.peer.remove": case "a2a.token.add": case "a2a.token.revoke":
+      if (!isAgentName(raw.name)) return fail(`${raw.cmd}.name must be letters, digits, dots, dashes or underscores (at most 32)`);
+      return ok({ cmd: raw.cmd, name: raw.name } as Command);
+    case "memory.list":
+      if (raw.scope !== undefined && raw.scope !== "project" && raw.scope !== "user") return fail("memory.list.scope must be project or user");
+      return ok({ cmd: "memory.list", ...(raw.scope ? { scope: raw.scope } : {}) });
+    case "memory.edit": case "memory.forget": {
+      if (!isId(raw.id)) return fail(`${raw.cmd} needs the id of a note`);
+      if (raw.scope !== "project" && raw.scope !== "user") return fail(`${raw.cmd}.scope must be project or user`);
+      if (raw.cmd === "memory.forget") return ok({ cmd: "memory.forget", id: raw.id, scope: raw.scope });
+      if (typeof raw.text !== "string" || !raw.text.trim() || raw.text.length > 2000) return fail("memory.edit.text must be the note, in at most 2000 characters");
+      return ok({ cmd: "memory.edit", id: raw.id, scope: raw.scope, text: raw.text });
+    }
+    case "memory.extract":
+      if (raw.mode !== undefined && raw.mode !== "off" && raw.mode !== "rules" && raw.mode !== "model") return fail("memory.extract.mode must be off, rules or model");
+      return ok({ cmd: "memory.extract", ...(raw.mode ? { mode: raw.mode } : {}) });
+    case "mcp.resources":
+      if (raw.server !== undefined && !isId(raw.server)) return fail("mcp.resources.server must be the name of a connected program");
+      return ok({ cmd: "mcp.resources", ...(typeof raw.server === "string" ? { server: raw.server } : {}) });
+    case "mcp.resource":
+      if (!isId(raw.server)) return fail("mcp.resource.server must be the name of a connected program");
+      if (typeof raw.uri !== "string" || !raw.uri || raw.uri.length > 4096) return fail("mcp.resource.uri must be the address of a document");
+      return ok({ cmd: "mcp.resource", server: raw.server, uri: raw.uri });
+    case "mcp.tools":
+      if (raw.query !== undefined && (typeof raw.query !== "string" || raw.query.length > 200)) return fail("mcp.tools.query must be text of at most 200 characters");
+      if (raw.server !== undefined && !isId(raw.server)) return fail("mcp.tools.server must be the name of a connected program");
+      return ok({ cmd: "mcp.tools", ...(typeof raw.query === "string" ? { query: raw.query } : {}), ...(typeof raw.server === "string" ? { server: raw.server } : {}) });
+    case "plugin.install":
+      if (typeof raw.from !== "string" || !raw.from.trim() || raw.from.length > LIMITS.pathLength || /[\0\n]/.test(raw.from)) return fail("plugin.install.from must be a folder, an archive or an address");
+      if (raw.fingerprint !== undefined && !(typeof raw.fingerprint === "string" && /^[0-9a-f]{12,64}$/i.test(raw.fingerprint.trim()))) return fail("plugin.install.fingerprint must be at least 12 hex digits");
+      return ok({ cmd: "plugin.install", from: raw.from.trim(), ...(typeof raw.fingerprint === "string" ? { fingerprint: raw.fingerprint.trim() } : {}) });
+    case "computer.takeover": case "computer.giveback": return ok({ cmd: raw.cmd });
     case "plugin.toggle":
       if (!isId(raw.id)) return fail("plugin.toggle needs an id");
       if (typeof raw.enabled !== "boolean") return fail("plugin.toggle.enabled must be true or false");
@@ -306,7 +364,11 @@ function validateOne(raw: unknown): Result<Command> {
       const out: Record<string, unknown> = { cmd: raw.cmd };
       if (!add) { if (!isId(raw.id)) return fail("schedule.update needs an id"); out.id = raw.id; }
       if (raw.title !== undefined) { if (typeof raw.title !== "string" || raw.title.length > 80) return fail("title must be text of at most 80 characters"); out.title = raw.title; }
-      if (add || raw.cron !== undefined) { if (typeof raw.cron !== "string" || !raw.cron.trim() || raw.cron.length > 100) return fail("cron must be the five fields of a schedule"); out.cron = raw.cron.trim(); }
+      if (raw.cron !== undefined && raw.when !== undefined) return fail("give when or cron, not both");
+      if (add && raw.cron === undefined && raw.when === undefined) return fail("say when: when, or cron of five fields");
+      if (raw.cron !== undefined) { if (typeof raw.cron !== "string" || !raw.cron.trim() || raw.cron.length > 100) return fail("cron must be the five fields of a schedule"); out.cron = raw.cron.trim(); }
+      if (raw.when !== undefined) { const w = whenOf(raw.when); if (typeof w === "string") return fail(w); out.when = w; }
+      if (raw.tz !== undefined) { if (typeof raw.tz !== "string" || !raw.tz.trim() || raw.tz.length > 64) return fail("tz must be a time zone name"); out.tz = raw.tz.trim(); }
       if (add || raw.prompt !== undefined) { if (typeof raw.prompt !== "string" || !raw.prompt.trim() || raw.prompt.length > 4000) return fail("prompt must be 1 to 4000 characters"); out.prompt = raw.prompt; }
       if (raw.mode !== undefined) { if (raw.mode !== "plan" && raw.mode !== "auto") return fail("mode must be plan or auto"); out.mode = raw.mode; }
       if (raw.folder !== undefined) { if (!isId(raw.folder)) return fail("folder must be an id"); out.folder = raw.folder; }
@@ -316,6 +378,18 @@ function validateOne(raw: unknown): Result<Command> {
     case "schedule.remove": case "schedule.run":
       if (!isId(raw.id)) return fail(`${raw.cmd} needs an id`);
       return ok({ cmd: raw.cmd, id: raw.id } as Command);
+    case "computer.state": return ok({ cmd: "computer.state" });
+    case "computer.permission":
+      if (raw.id !== "accessibility" && raw.id !== "screen-recording") return fail("computer.permission.id must be accessibility or screen-recording");
+      return ok({ cmd: "computer.permission", id: raw.id });
+    case "computer.on":
+      if (typeof raw.on !== "boolean") return fail("computer.on.on must be true or false");
+      return ok({ cmd: "computer.on", on: raw.on });
+    case "schedule.runs": {
+      if (!isId(raw.id)) return fail("schedule.runs needs an id");
+      if (raw.limit !== undefined && (typeof raw.limit !== "number" || !Number.isInteger(raw.limit) || raw.limit < 1 || raw.limit > 20)) return fail("schedule.runs.limit must be a whole number from 1 to 20");
+      return ok({ cmd: "schedule.runs", id: raw.id, ...(raw.limit !== undefined ? { limit: raw.limit } : {}) });
+    }
     case "fork":
       if (!isId(raw.id)) return fail("fork needs an id");
       return ok({ cmd: "fork", id: raw.id });
@@ -365,4 +439,18 @@ function validateOne(raw: unknown): Result<Command> {
     default:
       return fail(typeof raw.cmd === "string" ? `unknown command "${raw.cmd.slice(0, 40)}"` : "missing cmd");
   }
+}
+
+/** `when` of a schedule command: one of the three forms, with the numbers checked. Or why not. */
+function whenOf(v: unknown): ScheduleWhen | string {
+  const w = (typeof v === "object" && v !== null ? v : {}) as Record<string, unknown>;
+  const time = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x) && x >= 0;
+  if (w.kind === "cron") return typeof w.cron === "string" && w.cron.trim() && w.cron.length <= 100 ? { kind: "cron", cron: w.cron.trim() } : "when.cron must be the five fields of a schedule";
+  if (w.kind === "every") {
+    if (typeof w.ms !== "number" || !Number.isInteger(w.ms) || w.ms < 60_000) return "when.ms must be a whole number of milliseconds, at least 60000";
+    if (w.start !== undefined && !time(w.start)) return "when.start must be a time in milliseconds";
+    return { kind: "every", ms: w.ms, ...(w.start !== undefined ? { start: w.start as number } : {}) };
+  }
+  if (w.kind === "at") return time(w.at) ? { kind: "at", at: w.at } : "when.at must be a time in milliseconds";
+  return "when.kind must be cron, every or at";
 }

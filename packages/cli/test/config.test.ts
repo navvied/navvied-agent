@@ -48,9 +48,9 @@ describe("the variables a command may keep", () => {
 });
 
 describe("what happens to skills the agent makes, and to skills that come with a project", () => {
-  test("approval and trust are read, and nothing else is accepted", () => {
+  test("approval is read, the old trust key is accepted and ignored, and nothing else is accepted", () => {
     const r = loadConfig(write("skills.json", { models: {}, skills: { approval: "ask", trust: "confirm" } }), {});
-    expect(r.ok && r.value?.skills).toEqual({ approval: "ask", trust: "confirm" });
+    expect(r.ok && r.value?.skills).toEqual({ approval: "ask" });
     for (const bad of [{ approval: "maybe" }, { trust: "always" }, "ask", null]) {
       const e = loadConfig(write("skills-bad.json", { models: {}, skills: bad }), {});
       expect(!e.ok && e.error).toContain('"skills" may have');
@@ -199,6 +199,14 @@ describe("connected programs in the file", () => {
     const r = loadConfig(write("mcp-oauth.json", { models: {}, mcp: { web: { url: "https://x.invalid/mcp", oauth: { clientId: "c", clientSecret: "s", scope: "read", extra: 1 } }, plain: { url: "https://y.invalid/mcp", oauth: {} } } }));
     expect(r.ok && r.value?.mcp).toEqual({ web: { url: "https://x.invalid/mcp", oauth: { clientId: "c", clientSecret: "s", scope: "read" } }, plain: { url: "https://y.invalid/mcp" } });
   });
+  test("what a program may ask of the model and of the person is read for both kinds, and a word that is not understood is refused", () => {
+    const r = loadConfig(write("mcp-asks.json", { models: {}, mcp: { a: { command: "x", sampling: "allow", elicitation: "off", maxTokens: 500, maxPerTurn: 2 }, b: { url: "https://x.invalid/mcp", sampling: "off" } } }));
+    expect(r.ok && r.value?.mcp).toEqual({ a: { command: "x", sampling: "allow", elicitation: "off", maxTokens: 500, maxPerTurn: 2 }, b: { url: "https://x.invalid/mcp", sampling: "off" } });
+    const bad = loadConfig(write("mcp-asks-bad.json", { models: {}, mcp: { a: { command: "x", sampling: "yes" } } }));
+    expect(!bad.ok && bad.error).toContain('connected program "a": sampling must be "ask", "allow" or "off"');
+    const size = loadConfig(write("mcp-asks-size.json", { models: {}, mcp: { a: { command: "x", maxTokens: 0 } } }));
+    expect(!size.ok && size.error).toContain("maxTokens must be a whole number above 0");
+  });
   test("an empty list is the same as none, and a damaged one is refused with the program's name", () => {
     const none = loadConfig(write("mcp0.json", { models: {}, mcp: {} }));
     expect(none.ok && none.value?.mcp).toBeUndefined();
@@ -244,7 +252,7 @@ describe("external commands in the file", () => {
     const file = loadConfig(p);
     expect(file.ok && file.value?.models.sub).toEqual({ command: "agent", args: ["--a"], model: "big", env: { TOKEN: "x" }, window: 9000 });
     const r = resolveModel(undefined, file.ok ? file.value : null, {}, p);
-    expect(r.ok && r.value).toEqual({ name: "sub", window: 9000, cli: { command: "agent", args: ["--a"], model: "big", env: { TOKEN: "x" } } });
+    expect(r.ok && r.value).toEqual({ name: "sub", window: 9000, small: false, cli: { command: "agent", args: ["--a"], model: "big", env: { TOKEN: "x" } } });
   });
 });
 
@@ -263,6 +271,17 @@ describe("resolveModel", () => {
     expect(small.ok && small.value).toMatchObject({ name: "small", window: 128_000, provider: { model: "small-1" } });
     const big = R(undefined, file);
     expect(big.ok && big.value).toMatchObject({ name: "big", window: 200_000 });
+  });
+  test("a model is small by what it is, not by its window: a hosted model with 32,000 is not, a local one with a small window is, and the entry may say", () => {
+    const f: ConfigFile = { models: {
+      hosted: { baseUrl: "https://api.example.com/v1", model: "m", window: 32_000 },
+      laptop: { baseUrl: "http://127.0.0.1:8080/v1", model: "m", window: 8_000 },
+      big: { baseUrl: "http://localhost:11434/v1", model: "m", window: 128_000 },
+      named: { baseUrl: "https://api.example.com/v1", model: "m", window: 128_000, small: true },
+      not: { baseUrl: "http://127.0.0.1:8080/v1", model: "m", window: 8_000, small: false },
+    } };
+    const small = (n: string): boolean => (R(n, f) as any).value.small;
+    expect(["hosted", "laptop", "big", "named", "not"].map(small)).toEqual([false, true, false, true, false]);
   });
   test("the key comes from the environment variable first, then the file", () => {
     expect(R("big", file, { BIG_KEY: "from-env" }).ok && (R("big", file, { BIG_KEY: "from-env" }) as any).value.provider.apiKey).toBe("from-env");

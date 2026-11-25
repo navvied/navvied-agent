@@ -52,7 +52,7 @@ describe("the names models invent for the command tool", () => {
       const r = rig(calls({ name, args: { command: "echo aliased" } }));
       await r.turn(prompt("say it", { mode: "auto" }));
       const done = r.of("tool").filter((e) => e.status === "done");
-      expect(done.map((e) => `${e.name}:${e.output}`), name).toEqual(["Bash:aliased"]);
+      expect(done.map((e) => `${e.name}:${e.output?.split("\n")[0]}`), name).toEqual(["Bash:aliased"]);
       r.cleanup();
     }
   });

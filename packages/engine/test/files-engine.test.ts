@@ -108,12 +108,12 @@ describe("the files a conversation has read, through the engine", () => {
     expect(names(large, 0)).not.toContain("MultiEdit");
     expect(names(large, 0)).not.toContain("apply_patch");
     expect(names(large, 1)).toEqual(expect.arrayContaining(["MultiEdit", "apply_patch"]));
-    const small = rig(work, { window: 8_000 });
+    const small = rig(work, { window: 8_000, small: true });
     writeFileSync(join(small.dir, "a.txt"), "x\n");
     await small.turn(prompt("look at it", { mode: "auto" }));
     expect(names(small, 1)).not.toContain("MultiEdit");
     expect(names(small, 1)).not.toContain("apply_patch");
-    const forced = rig(() => ({ text: "x" }), { window: 8_000, applyPatch: "on" });
+    const forced = rig(() => ({ text: "x" }), { window: 8_000, small: true, applyPatch: "on" });
     await forced.turn(prompt("hi"));
     expect(names(forced, 0)).toContain("apply_patch");
     const never = rig(work, { applyPatch: "off" });

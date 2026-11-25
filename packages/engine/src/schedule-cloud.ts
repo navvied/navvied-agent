@@ -1,3 +1,5 @@
+import type { ScheduleRunInfo } from "@navvied/protocol";
+import { runInfoOfCloud } from "./schedule-said.ts";
 import { askService } from "./tools/web-proxy.ts";
 import type { Timing } from "./schedule-when.ts";
 import type { ScheduleBackend, ScheduleInput, ScheduleJob, ScheduleRun, WebProxy } from "./types.ts";
@@ -10,6 +12,7 @@ const job = (j: CloudJob): ScheduleJob => ({ id: j.id, name: j.name, prompt: j.p
 export function cronOfTiming(t: Timing): { cron: string } | string {
   if (t.kind === "cron") return { cron: t.cron };
   if (t.kind === "at") return "Cloud jobs repeat on a cron schedule, so one that runs once is not available there. Give a cron such as \"0 9 * * *\", or make it a job on the computer.";
+  if (t.start !== undefined) return "Cloud jobs follow a cron schedule, so a job that repeats every few weeks cannot be kept. Use a weekly day such as \"every friday at 9\", or make it a job on the computer.";
   const minutes = t.ms / 60_000;
   if (Number.isInteger(minutes) && minutes < 60 && 60 % minutes === 0) return { cron: `*/${minutes} * * * *` };
   const hours = minutes / 60;
@@ -59,9 +62,25 @@ export class CloudSchedule implements ScheduleBackend {
     return typeof got === "string" ? got : true;
   }
 
+  async run(id: string): Promise<true | string> {
+    const got = await this.#ask({ action: "run", id });
+    return typeof got === "string" ? got : true;
+  }
+
+  async cancel(id: string): Promise<true | string> {
+    const got = await this.#ask({ action: "cancel", id });
+    return typeof got === "string" ? got : true;
+  }
+
   async runs(id: string): Promise<ScheduleRun[] | string> {
     const got = await this.#ask({ action: "list" });
     if (typeof got === "string") return got;
     return (got.jobs?.find((j) => j.id === id)?.runs ?? []).map((r) => ({ at: r.at, outcome: r.outcome, ...(r.note ? { note: r.note } : {}) }));
+  }
+
+  /** The same runs as the screens show them (`schedule.runs`): fine / failed / missed, newest first, with a short text of the note. */
+  async history(id: string, limit = 10): Promise<ScheduleRunInfo[] | string> {
+    const runs = await this.runs(id);
+    return typeof runs === "string" ? runs : runs.slice(0, limit).map(runInfoOfCloud);
   }
 }

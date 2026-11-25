@@ -1,0 +1,23 @@
+{
+  "id": "mcp-sample-unattended",
+  "title": "A request for the model that nobody can allow",
+  "kind": "agent",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun"
+  ],
+  "prompt": "Use the connected program's condense tool on the ticket T-1 and write what it returns, and nothing else, to label.txt. If it says it could not do it, write the word unavailable instead.",
+  "check": "bun \"$BENCH_FIXTURES/mcp-asks-check.ts\" sample-unattended",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 40,
+  "timeoutSeconds": 600,
+  "mcp": {
+    "lab": {
+      "fixture": "mcp-asks.ts"
+    }
+  }
+}

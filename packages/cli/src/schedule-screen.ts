@@ -1,6 +1,6 @@
 import type { ScheduleInfo } from "@navvied/protocol";
 import type { Kit } from "./providers/kit.ts";
-import { BAD_CRON, BAD_DATE, BAD_DAY, BAD_EVERY, BAD_TIME, DATES, EVERIES, MONTHDAYS, TIMES, WEEKDAYS, WHENS, cronWords, firstWhen, parseDay, parseEvery, parseTime, scheduleOf, subSteps, validDate, whenOf, type When } from "./schedule-when.ts";
+import { BAD_CRON, BAD_DATE, BAD_DAY, BAD_EVERY, BAD_TIME, DATES, EVERIES, MONTHDAYS, TIMES, WEEKDAYS, WHENS, whenWords, firstWhen, parseDay, parseEvery, parseTime, scheduleOf, subSteps, validDate, whenOf, type When } from "@navvied/protocol";
 
 export const SCHEDULE_FOOT = "Tasks run only while this computer is on and navvied is running.";
 const MODES = [{ label: "Only read and plan", hint: "It looks and writes a plan. It changes nothing." }, { label: "Can change files", hint: "It may change files with nobody to ask. Your permission rules still apply." }];
@@ -18,12 +18,12 @@ function day(ms: number, now: number): string {
   return `${Math.abs(gap) < 7 ? d.toLocaleDateString("en-US", { weekday: "long" }) : d.toLocaleDateString("en-US", { day: "numeric", month: "short" })} ${at}`;
 }
 
-const lastWords = (j: ScheduleInfo, now: number): string => (j.last === undefined || j.lastCode === undefined || j.lastCode === null ? "Not run yet" : j.lastCode === 0 ? `Ran fine ${day(j.last, now)}` : `Last run failed ${day(j.last, now)}`);
+const lastWords = (j: ScheduleInfo, now: number): string => (j.missed ? `Missed ${day(j.missed.at, now)}. The computer was off.` : j.last === undefined || j.lastCode === undefined || j.lastCode === null ? "Not run yet" : j.lastCode === 0 ? `Ran fine ${day(j.last, now)}` : `Last run failed ${day(j.last, now)}`);
 
 /** One task as a row: on or off and its name, then when it runs and how the last run went. */
 function row(j: ScheduleInfo, now: number): { label: string; hint: string } {
   const next = j.enabled ? `next ${j.next === undefined ? "none" : day(j.next, now)}` : "off";
-  return { label: `${j.enabled ? "on " : "off"}  ${j.title}`, hint: `${cronWords(j.cron)}, ${next}, ${lastWords(j, now)}${j.mode === "auto" ? ", can change files" : ""}` };
+  return { label: `${j.enabled ? "on " : "off"}  ${j.title}`, hint: `${whenWords(j.when, (ms) => day(ms, now))}, ${next}, ${lastWords(j, now)}${j.mode === "auto" ? ", can change files" : ""}` };
 }
 
 /** `/schedule`: the tasks and what can be done with one. Resolves when the person goes back out of the list. */
@@ -44,20 +44,40 @@ export async function scheduleScreen(k: Kit, now: () => number = Date.now): Prom
   }
 }
 
+const RUN_MARK = { fine: "✓", failed: "✗", stopped: "✗", running: "…", missed: "−" } as const;
+
+/** What a task said the last times it ran (newest first); a run that failed opens to say why, with a way to run it again. */
+async function history(k: Kit, j: ScheduleInfo, now: () => number): Promise<void> {
+  const got = await k.link.call("schedule.runs", { cmd: "schedule.runs", id: j.id, limit: 3 });
+  if (typeof got === "string") { k.note.push(got); return; }
+  if (!got.runs.length) { await k.choose("What it said before", "What it said before", [{ label: "Back" }], { body: ["No runs yet.", k.dim("The first run happens at its next time.")] }); return; }
+  for (;;) {
+    const rows = got.runs.map((r) => ({ label: `${RUN_MARK[r.outcome]}  ${day(r.at, now())}`, hint: r.said ?? (r.outcome === "missed" ? "The computer was off." : "") }));
+    const picked = await k.choose("What it said before", "What it said before", rows, { body: ["The last three runs."] });
+    const run = picked === undefined ? undefined : got.runs[picked];
+    if (!run) return;
+    if (run.outcome !== "failed") continue;
+    const next = await k.choose(j.title, j.title, [{ label: "Run now" }, { label: "Back" }], { body: [`${day(run.at, now())}`, "The last run failed.", ...(run.said ? [k.dim(run.said)] : [])] });
+    if (next === 0) { k.link.send({ cmd: "schedule.run", id: j.id }); k.note.push("Started."); return; }
+  }
+}
+
 /** One task: run it now, turn it on or off, change it, or remove it. */
 async function task(k: Kit, j: ScheduleInfo, now: () => number): Promise<void> {
   const rows = [
     { label: "Run now" },
     j.enabled ? { label: "Turn it off", hint: "It stays in the list and does not run." } : { label: "Turn it on", hint: "It runs at the next time above." },
+    { label: "What it said before" },
     { label: "Change it" },
     { label: "Remove it" },
   ];
   const next = j.next === undefined ? "none while off" : day(j.next, now());
-  const picked = await k.choose(j.title, j.title, rows, { body: [k.dim(`${cronWords(j.cron)}, next ${next}`)] });
+  const picked = await k.choose(j.title, j.title, rows, { body: [k.dim(`${whenWords(j.when, (ms) => day(ms, now()))}, next ${next}`)] });
   if (picked === 0) { k.link.send({ cmd: "schedule.run", id: j.id }); k.note.push("Started."); }
   else if (picked === 1) await k.link.call("schedules", { cmd: "schedule.update", id: j.id, enabled: !j.enabled });
-  else if (picked === 2) await wizard(k, j, now);
-  else if (picked === 3 && (await k.choose(`Remove ${j.title}?`, `Remove ${j.title}?`, [{ label: "Keep it" }, { label: "Remove it" }])) === 1) await k.link.call("schedules", { cmd: "schedule.remove", id: j.id });
+  else if (picked === 2) await history(k, j, now);
+  else if (picked === 3) await wizard(k, j, now);
+  else if (picked === 4 && (await k.choose(`Remove ${j.title}?`, `Remove ${j.title}?`, [{ label: "Keep it" }, { label: "Remove it" }])) === 1) await k.link.call("schedules", { cmd: "schedule.remove", id: j.id });
 }
 
 interface Typed { ask: string; valid: (text: string) => boolean; bad: string }
@@ -128,7 +148,7 @@ async function wizard(k: Kit, had: ScheduleInfo | undefined, now: () => number):
         f.mode = picked;
         const when = scheduleOf(w, now());
         if (typeof when === "string") { k.note.push(when); i = 2; dir = -1; continue; }
-        const input = { title: f.name, ...when, prompt: f.what, mode: f.mode ? "auto" : "plan" };
+        const input = { title: f.name, when, prompt: f.what, mode: f.mode ? "auto" : "plan" };
         const done = await k.link.call("schedules", had ? { cmd: "schedule.update", id: had.id, ...input } : { cmd: "schedule.add", ...input });
         if (typeof done === "string") { k.note.push(done); i = 2; dir = -1; continue; }
         k.note.push("Task saved.");

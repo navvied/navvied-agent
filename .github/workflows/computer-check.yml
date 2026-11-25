@@ -27,6 +27,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y xvfb x11-utils libxtst6 libxi6 libatspi2.0-0 at-spi2-core dbus-x11 python3-gi gir1.2-gtk-3.0
       - name: Fetch the driver, start it, list what it offers, read one open program
+        timeout-minutes: 10
         run: |
           cmd=(bash packages/desktop/scripts/computer-drive.sh "$RUNNER_TEMP/report.txt")
           [ "$RUNNER_OS" = Linux ] && cmd=(xvfb-run -a dbus-run-session -- "${cmd[@]}")

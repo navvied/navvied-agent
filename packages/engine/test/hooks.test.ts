@@ -29,7 +29,7 @@ describe("hooks that run commands", () => {
   });
   test("before a tool, exit code 2 stops it and the reason is what the command wrote on standard error", async () => {
     const hooks = commandHooks({ PreToolUse: [{ command: deny }] }, dir, () => "s");
-    expect(await hooks.pre({ tool: "Bash", input: {} }, signal)).toEqual({ block: "no commands on Fridays", notes: [] });
+    expect(await hooks.pre({ tool: "Bash", input: {} }, signal)).toMatchObject({ block: "no commands on Fridays", notes: [] });
   });
   test("a command that fails, or runs too long, is a note and never stops the tool", async () => {
     const hooks = commandHooks({ PreToolUse: [{ command: fail }, { command: slow, timeout: 0.3 }] }, dir, () => "s");
@@ -100,7 +100,7 @@ describe("hooks around a message and a session", () => {
 
   test("UserPromptSubmit: exit code 2 stops the message with the reason, and what a command prints is added as context", async () => {
     const hooks = commandHooks({ UserPromptSubmit: [{ command: deny }] }, dir, () => "s");
-    expect(await hooks.prompt!({ text: "hi", first: false }, signal)).toEqual({ block: "no commands on Fridays", notes: [] });
+    expect(await hooks.prompt!({ text: "hi", first: false }, signal)).toMatchObject({ block: "no commands on Fridays", notes: [] });
     const adds = commandHooks({ UserPromptSubmit: [{ command: say("today is a holiday") }] }, dir, () => "s");
     expect(await adds.prompt!({ text: "hi", first: false }, signal)).toEqual({ context: "today is a holiday", notes: [] });
   });

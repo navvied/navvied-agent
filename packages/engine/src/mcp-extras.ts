@@ -19,7 +19,7 @@ const named = (clients: McpLike[], userText: string): boolean => clients.some((c
 const words = (s: string): string[] => s.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
 
 /** `name(text: string, count?: number)`: what a call needs, in a line. */
-function signature(l: Listed): string {
+export function signature(l: Listed): string {
   const schema = l.info.inputSchema as { properties?: Record<string, { type?: unknown }>; required?: string[] } | undefined;
   const args = Object.entries(schema?.properties ?? {}).map(([k, v]) => `${k}${schema?.required?.includes(k) ? "" : "?"}: ${typeof v?.type === "string" ? v.type : "any"}`);
   return `${l.name}(${args.join(", ")})`;
@@ -29,6 +29,12 @@ const rank = (l: Listed, query: string[]): number => {
   const name = words(l.info.name), server = words(l.client.name), about = (l.info.description ?? "").toLowerCase();
   return query.reduce((n, w) => n + (name.includes(w) ? 3 : name.some((x) => x.includes(w)) ? 2 : 0) + (server.includes(w) ? 1 : 0) + (about.includes(w) ? 1 : 0), 0);
 };
+
+/** The tools that fit words best (the model's search of tools that are not listed, and the page's), best first; none for words that fit nothing. */
+export function searchTools(all: Listed[], text: string, most: number): Listed[] {
+  const query = words(text);
+  return all.map((l) => ({ l, n: rank(l, query) })).filter((h) => h.n > 0).sort((a, b) => b.n - a.n || a.l.name.localeCompare(b.l.name)).slice(0, most).map((h) => h.l);
+}
 
 /** Finds tools that are not listed to the model: the best matches are told in full and from then on offered like any other. */
 export function findTool(all: Listed[], clients: McpLike[], reveal: (names: string[]) => void): Tool {
@@ -41,8 +47,7 @@ export function findTool(all: Listed[], clients: McpLike[], reveal: (names: stri
     offeredWhen: ({ small, userText }) => !small || named(clients, userText),
     title: (a) => `find tools: ${String(a.query ?? "").slice(0, 40)}`,
     async run(args) {
-      const query = words(String(args.query ?? ""));
-      const hits = all.map((l) => ({ l, n: rank(l, query) })).filter((h) => h.n > 0).sort((a, b) => b.n - a.n || a.l.name.localeCompare(b.l.name)).slice(0, MOST_FOUND).map((h) => h.l);
+      const hits = searchTools(all, String(args.query ?? ""), MOST_FOUND);
       if (!hits.length) return `No tool matches "${String(args.query ?? "")}". There are ${all.length}: ${clients.map((c) => `${c.name} (${all.filter((l) => l.client === c).length})`).join(", ")}. Try other words, or a program's name.`;
       reveal(hits.map((h) => h.name));
       return `${hits.length} found, now callable:\n${hits.map((h) => `${signature(h)} - ${(h.info.description ?? "").replace(/\s+/g, " ").slice(0, 160)}`).join("\n")}`;

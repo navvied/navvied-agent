@@ -16,6 +16,8 @@ import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, open
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { gunzipSync } from "node:zlib";
+import { forbidden, scanCommand } from "./command-scan.ts";
+import { isZip, unzipTo } from "./zip-unpack.ts";
 import { gitEnv } from "./git-env.ts";
 import { HOOK_EVENTS, type HookCommand, type HookConfig, type HookEvent } from "./hooks.ts";
 import type { McpServerConfig } from "./mcp.ts";
@@ -35,6 +37,8 @@ export interface Run {
   command: string;
   /** Where it comes from: `plugin:name`. */
   source: string;
+  /** What reading the command found (deletes, sends, secret reads, administrator rights, run without looking), in words; missing when nothing. */
+  findings?: string[];
 }
 
 export interface Pack {
@@ -75,10 +79,10 @@ function readLimited(path: string, max: number): Buffer {
 }
 
 /** One regular file of a plugin: its path with forward slashes, and its text. */
-interface Entry { rel: string; data: Buffer; mode: number }
+export interface Entry { rel: string; data: Buffer; mode: number }
 
 /** Reads a folder as a hostile tree: no links, nothing but regular files, within the limits. `.git` is not part of a plugin. */
-function readTree(root: string): { entries: Entry[] } | { error: string } {
+export function readTree(root: string): { entries: Entry[] } | { error: string } {
   const entries: Entry[] = [];
   let total = 0;
   const walk = (dir: string, rel: string, depth: number): string | undefined => {
@@ -165,10 +169,16 @@ function parseMcp(raw: unknown, root: string): Record<string, McpServerConfig> |
   return out;
 }
 
-const runsOf = (name: string, hooks: HookConfig, mcp: Record<string, McpServerConfig>): Run[] => [
-  ...Object.entries(hooks).flatMap(([event, list]) => (list ?? []).map((h) => ({ what: `${event}${h.matcher ? ` (${h.matcher})` : ""}`, command: h.command, source: `plugin:${name}` }))),
-  ...Object.entries(mcp).map(([server, e]) => ({ what: `tool server ${server}`, command: e.url ?? [e.command, ...(e.args ?? [])].filter(Boolean).join(" "), source: `plugin:${name}` })),
-];
+const runsOf = (name: string, hooks: HookConfig, mcp: Record<string, McpServerConfig>): Run[] => {
+  const run = (what: string, command: string, shell: boolean): Run => {
+    const findings = shell ? scanCommand(command) : [];
+    return { what, command, source: `plugin:${name}`, ...(findings.length ? { findings } : {}) };
+  };
+  return [
+    ...Object.entries(hooks).flatMap(([event, list]) => (list ?? []).map((h) => run(`${event}${h.matcher ? ` (${h.matcher})` : ""}`, h.command, true))),
+    ...Object.entries(mcp).map(([server, e]) => run(`tool server ${server}`, e.url ?? [e.command, ...(e.args ?? [])].filter(Boolean).join(" "), !e.url)),
+  ];
+};
 
 /** Reads and checks a plugin that is on disk. The folder is read once; what is checked is what is hashed. */
 export function readPack(dir: string, source: Pack["source"]): Pack {
@@ -202,7 +212,9 @@ export function readPack(dir: string, source: Pack["source"]): Pack {
   const mcp = parseMcp(raw.mcp, dir);
   if (typeof mcp === "string") return fail(`${MANIFEST}: ${mcp}`);
   const findings = entries.filter((e) => /^(skills\/[^/]+\/SKILL|agents\/[^/]+|commands\/[^/]+)\.md$/.test(e.rel)).flatMap((e) => scanText(e.data.toString("utf8")).map((f) => `${e.rel}: ${f}`)).slice(0, 20);
-  return { name, version: raw.version, description: raw.description, dir, source, hash, ...found, hooks, mcp, runs: runsOf(name, hooks, mcp), findings };
+  const runs = runsOf(name, hooks, mcp);
+  for (const r of runs) { const why = r.command.startsWith("http") ? undefined : forbidden(r.command); if (why) return fail(`${r.what} runs a command that may never run: ${r.command.slice(0, 80)} (${why})`); }
+  return { name, version: raw.version, description: raw.description, dir, source, hash, ...found, hooks, mcp, runs, findings };
 }
 
 /** What was installed, and from where. Kept next to the person's own configuration. */
@@ -285,7 +297,7 @@ export function expandCommand(command: PackCommand, args: string): string {
 }
 
 export interface InstallOptions {
-  /** A folder, a `.tar.gz`/`.tgz`/`.tar` file or address, or a git address (`https://…/x.git`, `git@host:x.git`, with `#ref` for a branch or tag). */
+  /** A folder, a `.tar.gz`/`.tgz`/`.tar`/`.zip` file or address, or a git address (`https://…/x.git`, `git@host:x.git`, with `#ref` for a branch or tag). */
   from: string;
   /** The folder the person's plugins are in. */
   root: string;
@@ -299,7 +311,7 @@ export interface InstallOptions {
 
 export type InstallResult = { ok: true; pack: Pack } | { ok: false; error: string };
 
-const ARCHIVE = /\.(tar\.gz|tgz|tar)$/i;
+const ARCHIVE = /\.(tar\.gz|tgz|tar|zip)$/i;
 const GIT_ADDRESS = /^(https?:\/\/|ssh:\/\/|git:\/\/|git@|file:\/\/)/i;
 
 /** A source as it may be written to the lock file and shown: without a password or token in an address. */
@@ -325,6 +337,7 @@ async function download(url: string, doFetch: typeof fetch): Promise<Buffer | st
 
 function unpack(archive: Buffer, into: string): string | undefined {
   if (archive.length > LIMITS.archive) return `the archive is larger than ${LIMITS.archive / 1024 / 1024} MB`;
+  if (isZip(archive)) return unzipTo(archive, into, LIMITS);
   let tar = archive;
   if (archive[0] === 0x1f && archive[1] === 0x8b) {
     try { tar = gunzipSync(archive, { maxOutputLength: LIMITS.unpacked }); } catch { return `the archive is damaged or larger than ${LIMITS.unpacked / 1024 / 1024} MB when unpacked`; }
@@ -361,18 +374,27 @@ function writeTree(entries: readonly Entry[], into: string): void {
   }
 }
 
+export type Staged = { ok: true; pack: Pack; staged: string; work: string } | { ok: false; error: string };
+
+/** A source as the lock file keeps it: a local path is made absolute so it still means the same thing from another folder. */
+export function recordedSource(from: string): string {
+  const text = from.trim();
+  return existsSync(text) ? resolve(text) : plainSource(text);
+}
+
 /**
- * Installs a plugin: gets the files (never running anything), reads them once as hostile input, checks the manifest and the fingerprint the
- * person expects, then moves them in and records the fingerprint. It is off until the person switches it on.
+ * Gets the files of a plugin from a folder, an archive or a git address (never running anything), reads them once as hostile input and
+ * checks the manifest and the fingerprint the person expects. Nothing is put in the person's folder: the caller keeps `work` until it has
+ * moved `staged` in with `swapIn` or has thrown it away with `discard`.
  */
-export async function installPlugin(o: InstallOptions): Promise<InstallResult> {
+export async function stagePlugin(o: { from: string; root: string; expectHash?: string; fetch?: typeof fetch }): Promise<Staged> {
   mkdirSync(o.root, { recursive: true });
   const work = scratch(o.root);
-  const done = (r: InstallResult): InstallResult => { rmSync(work, { recursive: true, force: true }); return r; };
+  const fail = (error: string): Staged => { rmSync(work, { recursive: true, force: true }); return { ok: false, error }; };
   const raw = join(work, "raw"), staged = join(work, "staged");
   mkdirSync(raw); mkdirSync(staged);
   const from = o.from.trim();
-  if (!from) return done({ ok: false, error: "no source given" });
+  if (!from) return fail("no source given");
   let problem: string | undefined;
   if (existsSync(from) && lstatSync(from).isDirectory()) {
     const tree = readTree(resolve(from));
@@ -384,27 +406,46 @@ export async function installPlugin(o: InstallOptions): Promise<InstallResult> {
     try { problem = unpack(readLimited(resolve(from), LIMITS.archive), raw); } catch { problem = "the archive cannot be read or is too large"; }
   } else if (GIT_ADDRESS.test(from) || /\.git(#.*)?$/.test(from)) {
     problem = await clone(from, raw);
-  } else return done({ ok: false, error: "that is not a folder, an archive or a git address" });
-  if (problem) return done({ ok: false, error: problem });
+  } else return fail("that is not a folder, an archive or a git address");
+  if (problem) return fail(problem);
   // The tree may have a single top folder (an archive made from one): that folder is the plugin.
   let top = raw;
   const only = readdirSync(raw).filter((n) => n !== ".git");
   if (!existsSync(join(raw, MANIFEST)) && only.length === 1 && lstatSync(join(raw, only[0]!)).isDirectory()) top = join(raw, only[0]!);
   const tree = readTree(top);
-  if ("error" in tree) return done({ ok: false, error: tree.error });
+  if ("error" in tree) return fail(tree.error);
   writeTree(tree.entries, staged);
   const pack = readPack(staged, "user");
-  if (pack.problem) return done({ ok: false, error: pack.problem });
-  if (o.expectHash) {
-    const want = o.expectHash.trim().toLowerCase();
-    if (want.length < 12 || !/^[0-9a-f]+$/.test(want) || !pack.hash.startsWith(want)) return done({ ok: false, error: `its files do not match the fingerprint given (they are ${pack.hash})` });
-  }
+  if (pack.problem) return fail(pack.problem);
+  if (o.expectHash && !matchesFingerprint(pack.hash, o.expectHash)) return fail(`its files do not match the fingerprint given (they are ${pack.hash})`);
+  return { ok: true, pack, staged, work };
+}
+
+/** Whether a fingerprint the person gave (at least 12 hex digits) is the start of the real one. */
+export function matchesFingerprint(hash: string, given: string): boolean {
+  const want = given.trim().toLowerCase();
+  return want.length >= 12 && /^[0-9a-f]+$/.test(want) && hash.startsWith(want);
+}
+
+export const discard = (s: { work: string }): void => rmSync(s.work, { recursive: true, force: true });
+
+/** Puts the staged folder in place of the one that is there; the old one is only removed with the scratch folder, and comes back if the move fails. */
+export function swapIn(s: { staged: string; work: string }, target: string): void {
+  const backup = join(s.work, "previous"), had = existsSync(target);
+  if (had) renameSync(target, backup);
+  try { renameSync(s.staged, target); } catch (e) { if (had) renameSync(backup, target); throw e; }
+}
+
+/** Installs a plugin: stages it, moves it in and records the fingerprint. It is off until the person switches it on. */
+export async function installPlugin(o: InstallOptions): Promise<InstallResult> {
+  const got = await stagePlugin(o);
+  if (!got.ok) return got;
+  const { pack } = got;
   const target = join(o.root, pack.name);
-  if (existsSync(target) && !o.replace) return done({ ok: false, error: `${pack.name} is already installed` });
-  rmSync(target, { recursive: true, force: true });
-  renameSync(staged, target);
-  o.lock.set(pack.name, { hash: pack.hash, version: pack.version, source: plainSource(from) });
-  rmSync(work, { recursive: true, force: true });
+  if (existsSync(target) && !o.replace) { discard(got); return { ok: false, error: `${pack.name} is already installed` }; }
+  swapIn(got, target);
+  o.lock.set(pack.name, { hash: pack.hash, version: pack.version, source: recordedSource(o.from) });
+  discard(got);
   return { ok: true, pack: { ...pack, dir: target } };
 }
 

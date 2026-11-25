@@ -1,0 +1,15 @@
+[
+  {
+    "tool": "Remember",
+    "args": {
+      "action": "list"
+    }
+  },
+  {
+    "tool": "Bash",
+    "args": {
+      "command": "printf 'ISO 8601\\n' > ANSWER.txt",
+      "description": "write the answer"
+    }
+  }
+]

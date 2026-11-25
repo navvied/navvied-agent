@@ -1,0 +1,16 @@
+[
+  {
+    "tool": "Read",
+    "args": {
+      "file_path": "report.pdf",
+      "pages": "3"
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "answer.txt",
+      "content": "KITE-4471\n"
+    }
+  }
+]

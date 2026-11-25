@@ -1,0 +1,22 @@
+{
+  "id": "memory-meaning-recall",
+  "title": "Find a note by its meaning through the person's own embeddings server",
+  "kind": "terminal",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "bun"
+  ],
+  "prompt": "How should dates be formatted in this project? Write the answer into ANSWER.txt, alone on one line.",
+  "check": "test \"$(tr -d '[:space:]' < ANSWER.txt)\" = \"ISO8601\" && bun \"$BENCH_FIXTURES/skills-check.ts\" meaning-asked",
+  "protect": [
+    "README.md"
+  ],
+  "setup": "bun \"$BENCH_FIXTURES/start-web.ts\" embed-server.ts",
+  "teardown": "bun \"$BENCH_FIXTURES/stop-web.ts\"",
+  "embeddings": {
+    "api": "chat"
+  },
+  "maxSteps": 20,
+  "timeoutSeconds": 600
+}

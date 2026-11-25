@@ -1,0 +1,37 @@
+[
+  {
+    "tool": "Bash",
+    "args": {
+      "command": "cat .bench-port"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "open",
+      "url": "http://127.0.0.1:${result:(\\d+)}/checkout"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "type",
+      "ref": "${result:\\[(\\d+)\\] textbox \"Voucher\"}",
+      "text": "SPRING-26"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "click",
+      "ref": "${result:\\[(\\d+)\\] button \"Redeem\"}"
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "ANSWER.txt",
+      "content": "${result:Voucher code: (\\w+)}\n"
+    }
+  }
+]

@@ -1,4 +1,8 @@
-import { readHostedModels, writeHostedModels, type Account, type HostedModels } from "./account.ts";
+import { existsSync } from "node:fs";
+import { readAccount, readHostedModels, writeHostedModels, type Account, type HostedModels } from "./account.ts";
+import { accountPath, hostedModelsPath } from "./config.ts";
+import type { Options } from "./args.ts";
+import type { IO } from "./io.ts";
 import { AccountError, fetchModels } from "./account-client.ts";
 
 export type Refreshed = { changed: boolean; signedOut?: string };
@@ -15,4 +19,10 @@ export async function refreshHosted(send: typeof fetch, account: Account, file: 
   if (known && JSON.stringify(known) === JSON.stringify(listing)) return { changed: false };
   writeHostedModels(file, listing);
   return { changed: true };
+}
+
+/** A computer that is signed in but has never listed the models (just updated, or the list was deleted) asks for them before its model is chosen, so a hosted model can be named at once. */
+export async function ensureHostedModels(io: IO, options: Options): Promise<void> {
+  const account = readAccount(accountPath(io.env, options.config));
+  if (account && !existsSync(hostedModelsPath(io.env))) await refreshHosted(io.fetch, account, hostedModelsPath(io.env), 3000);
 }

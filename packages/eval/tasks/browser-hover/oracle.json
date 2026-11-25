@@ -1,0 +1,29 @@
+[
+  {
+    "tool": "Bash",
+    "args": {
+      "command": "cat .bench-port"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "open",
+      "url": "http://127.0.0.1:${result:(\\d+)}/account-menu"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "hover",
+      "ref": "${result:\\[(\\d+)\\] button \"Account\"}"
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "ANSWER.txt",
+      "content": "${result:Support code: (\\w+)}\n"
+    }
+  }
+]

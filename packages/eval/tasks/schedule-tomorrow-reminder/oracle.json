@@ -1,0 +1,3 @@
+[
+  { "tool": "Schedule", "args": { "action": "create", "name": "standup", "prompt": "Remind me to prepare the standup notes from this project's README.", "when": "tomorrow at 9", "tz": "UTC" } }
+]

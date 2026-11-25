@@ -35,11 +35,19 @@ export function tree(root: Spec[]): AxNode[] {
   return nodes;
 }
 
-export interface Site { title: string; ax: Spec[]; /** What the page's own scripts answer, by what is asked (see `answers`). */ challenge?: "captcha" | "code"; errorText?: string; password?: number[]; text?: string }
+/** A frame in a page: the element it sits in (`owner`, the browser's id), and whether the browser runs it apart from the page (another site's frame has a session of its own). */
+export interface FakeFrame { owner: number; id: string; url: string; ax: Spec[]; apart?: boolean }
+export interface Site { frames?: FakeFrame[]; title: string; ax: Spec[]; /** What the page's own scripts answer, by what is asked (see `answers`). */ challenge?: "captcha" | "code"; errorText?: string; password?: number[]; text?: string }
 export interface FakePage { targetId: string; sessionId: string; url: string; title: string; ax: AxNode[]; history: string[]; at: number; blocked: boolean; opener?: string; gone: Set<number>; site?: Site }
 export interface Seen { method: string; params: Record<string, any>; sessionId?: string }
 
-const JPEG = "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=";
+/** A JPEG header that says how big the picture is, which is all the tool reads of it. */
+const jpeg = (width: number, height: number): string => {
+  const b = Buffer.alloc(2 + 2 + 2 + 15 + 2);
+  b.writeUInt16BE(0xffd8, 0); b.writeUInt16BE(0xffc0, 2); b.writeUInt16BE(17, 4); b[6] = 8; b.writeUInt16BE(height, 7); b.writeUInt16BE(width, 9); b[11] = 3;
+  b.writeUInt16BE(0xffd9, b.length - 2);
+  return b.toString("base64");
+};
 
 export class FakeBrowser {
   readonly server: ReturnType<typeof Bun.serve>;
@@ -59,6 +67,15 @@ export class FakeBrowser {
   #ws: { send(data: string): void } | undefined;
   #held: { id: number; answer: () => unknown }[] = [];
   #targets = 0;
+  /** What kind of control an element is, when it is not a text field. */
+  kinds = new Map<number, "list" | "check">();
+  /** The window the page is in, and how far it is scrolled. */
+  window = { w: 1280, h: 800, ratio: 1, x: 0, y: 0 };
+  /** The sessions of frames the browser runs apart from their page, as pages of their own. */
+  frameSessions = new Map<string, FakePage>();
+  /** What a drag that begins in the page carries; when set, the first move of a pressed mouse says so, as a browser does while drags are held back. */
+  dragData: unknown;
+  #dragSaid = false;
   /** Commands the fake leaves unanswered until `release` (a page that is stuck). */
   hold = new Set<string>();
 
@@ -119,6 +136,11 @@ export class FakeBrowser {
   #load(p: FakePage, url: string): void {
     const site = this.sites.get(url);
     p.url = url; p.site = site; p.title = site?.title ?? ""; p.ax = tree(site?.ax ?? []); p.gone.clear();
+    for (const f of site?.frames ?? []) if (f.apart) {
+      const fp: FakePage = { targetId: f.id, sessionId: `${p.sessionId}-${f.id}`, url: f.url, title: "", ax: tree(f.ax), history: [f.url], at: 0, blocked: false, gone: new Set() };
+      this.frameSessions.set(fp.sessionId, fp);
+      this.event("Target.attachedToTarget", { sessionId: fp.sessionId, waitingForDebugger: true, targetInfo: { targetId: f.id, type: "iframe", url: f.url } }, p.sessionId);
+    }
     this.event("Page.frameNavigated", { frame: { id: "main", url } }, p.sessionId);
     this.event("Target.targetInfoChanged", { targetInfo: { targetId: p.targetId, title: p.title, url } });
   }
@@ -127,14 +149,14 @@ export class FakeBrowser {
 
   #handle(m: { id: number; method: string; params: Record<string, any>; sessionId?: string }): void {
     this.seen.push({ method: m.method, params: m.params, ...(m.sessionId ? { sessionId: m.sessionId } : {}) });
-    const page = [...this.pages.values()].find((p) => p.sessionId === m.sessionId);
+    const page = [...this.pages.values()].find((p) => p.sessionId === m.sessionId) ?? this.frameSessions.get(m.sessionId ?? "");
     if (m.method !== "Page.handleJavaScriptDialog" && (page?.blocked || this.hold.has(m.method))) { this.#held.push({ id: m.id, answer: () => this.#run(m.method, m.params, m.sessionId) }); return; }
     try {
       const r = this.#run(m.method, m.params, m.sessionId);
       // A click that opened a dialog does not return until the dialog is answered.
       if (page?.blocked && m.method === "Input.dispatchMouseEvent") this.#held.push({ id: m.id, answer: () => r });
       else this.#reply(m.id, r ?? {});
-      if (m.method === "Target.setAutoAttach") queueMicrotask(() => {
+      if (m.method === "Target.setAutoAttach" && !m.sessionId) queueMicrotask(() => {
         if (!this.pages.size) this.addPage();
         else for (const x of this.pages.values()) this.event("Target.attachedToTarget", { sessionId: x.sessionId, waitingForDebugger: true, targetInfo: { targetId: x.targetId, type: "page", url: x.url } });
       });
@@ -142,8 +164,15 @@ export class FakeBrowser {
   }
 
   #run(method: string, p: Record<string, any>, sessionId?: string): unknown {
-    const page = [...this.pages.values()].find((x) => x.sessionId === sessionId);
+    const page = [...this.pages.values()].find((x) => x.sessionId === sessionId) ?? this.frameSessions.get(sessionId ?? "");
     switch (method) {
+      case "Target.getTargetInfo": return { targetInfo: { targetId: p.targetId, url: [...this.frameSessions.values()].find((f) => f.targetId === p.targetId)?.url ?? "" } };
+      case "Page.getFrameTree": {
+        const inside = (page!.site?.frames ?? []).filter((f) => !f.apart);
+        return { frameTree: { frame: { id: page!.targetId, url: page!.url }, childFrames: inside.map((f) => ({ frame: { id: f.id, url: f.url } })) } };
+      }
+      case "DOM.describeNode": { const f = (page!.site?.frames ?? []).find((x) => x.owner === p.backendNodeId); return { node: { ...(f ? { frameId: f.id } : {}) } }; }
+      case "Input.setInterceptDrags": this.#dragSaid = false; return {};
       case "Target.getTargets": return { targetInfos: [...this.pages.values()].map((x) => ({ targetId: x.targetId, type: "page", title: x.title, url: x.url })) };
       case "Target.createTarget": { const x = this.addPage(); return { targetId: x.targetId }; }
       case "Target.closeTarget": { this.pages.delete(p.targetId); this.event("Target.targetDestroyed", { targetId: p.targetId }); return { success: true }; }
@@ -158,19 +187,25 @@ export class FakeBrowser {
       case "Page.getNavigationHistory": return { currentIndex: page!.at, entries: page!.history.map((url, id) => ({ id, url })) };
       case "Page.navigateToHistoryEntry": page!.at = p.entryId; this.#load(page!, page!.history[p.entryId]!); return {};
       case "Page.handleJavaScriptDialog": { page!.blocked = false; this.event("Page.javascriptDialogClosed", { result: p.accept }, page!.sessionId); queueMicrotask(() => this.release()); return {}; }
-      case "Page.captureScreenshot": return { data: JPEG };
-      case "Accessibility.getFullAXTree": return { nodes: page!.ax };
+      case "Page.captureScreenshot": return { data: jpeg(Math.max(1, Math.round(p.clip.width * p.clip.scale * this.window.ratio)), Math.max(1, Math.round(p.clip.height * p.clip.scale * this.window.ratio))) };
+      case "Accessibility.getFullAXTree": {
+        if (!p.frameId) return { nodes: page!.ax };
+        const f = (page!.site?.frames ?? []).find((x) => x.id === p.frameId);
+        if (!f) throw new Error("Frame with the given id was not found.");
+        return { nodes: tree(f.ax) };
+      }
       case "DOM.resolveNode": if (page!.gone.has(p.backendNodeId)) throw new Error("No node with given id found"); return { object: { objectId: `node-${p.backendNodeId}` } };
       case "DOM.getContentQuads": { const n = p.backendNodeId; if (page!.gone.has(n)) throw new Error("Could not find node with given id"); return { quads: [[n * 100, 0, n * 100 + 50, 0, n * 100 + 50, 20, n * 100, 20]] }; }
       case "DOM.setFileInputFiles": return {};
       case "Input.dispatchMouseEvent":
+        if (p.type === "mouseMoved" && p.buttons === 1 && this.dragData !== undefined && !this.#dragSaid) { this.#dragSaid = true; this.event("Input.dragIntercepted", { data: this.dragData }, sessionId); }
         if (p.type === "mouseReleased") this.onClick.get(Math.floor(p.x / 100))?.(page!, this);
         return {};
       case "Runtime.callFunctionOn": {
         const node = Number(String(p.objectId).replace("node-", ""));
         this.beforeFunction(String(p.functionDeclaration));
         const fn = String(p.functionDeclaration), args = (p.arguments ?? []).map((a: any) => a.value);
-        if (fn.includes("password")) return { result: { value: { password: page!.site?.password?.includes(node) ?? false, origin: new URL(page!.url).origin } } };
+        if (fn.includes("password")) return { result: { value: { password: page!.site?.password?.includes(node) ?? false, origin: new URL(page!.url).origin, kind: this.kinds.get(node) ?? "text" } } };
         if (fn.includes("expected")) { if (args[0] !== new URL(page!.url).origin) return { result: { value: "moved" } }; this.typed.set(node, args[1]); return { result: { value: "ok" } }; }
         if (fn.includes("this.options")) return { result: { value: args[0] === "none" ? "none" : "ok" } };
         return { result: { value: true } };
@@ -183,6 +218,7 @@ export class FakeBrowser {
   #evaluate(x: string, page: FakePage): unknown {
     if (x === "document.readyState") return "complete";
     if (x === "location.href") return page.url;
+    if (x.includes("devicePixelRatio")) return { ...this.window };
     if (x.includes("t: document.title")) return { t: page.title, u: page.url, y: 0, h: 900, v: 900 };
     if (x.includes("recaptcha")) return page.site?.challenge ?? "";
     const own = this.answers(x, page);

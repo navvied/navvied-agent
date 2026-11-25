@@ -1,5 +1,5 @@
 import { dirname, resolve } from "node:path";
-import { installPlugin, removePlugin, type Pack } from "@navvied/engine";
+import { checkOutdated, installPlugin, removePlugin, updatePlugin, type Pack, type PluginChange } from "@navvied/engine";
 import type { Options } from "../args.ts";
 import { configPath, loadConfig, pluginStatePath, skillTrustPath } from "../config.ts";
 import type { IO } from "../io.ts";
@@ -9,13 +9,29 @@ import { EXIT } from "./run.ts";
 const USAGE = `usage:
   navvied plugin install <folder | archive | git address> [<fingerprint>]   copy it here; nothing in it is run, and it stays off
   navvied plugin list
+  navvied plugin outdated [online]   which plugins have a newer version at their source (installs nothing; "online" also asks sources on the network)
+  navvied plugin update [<name> [<fingerprint>]]   show what a new version changes; it is installed only with the new fingerprint
   navvied plugin show <name>      what it brings and every command it would run
   navvied plugin on <name>        switch it on (a project's plugin must be accepted first)
   navvied plugin off <name>
   navvied plugin accept <name>    accept a plugin that comes with this project
   navvied plugin remove <name>`;
 
-const showRuns = (pack: Pack): string[] => [...(pack.runs.length ? pack.runs.map((r) => `  ${r.what}: ${r.command}  (${r.source})`) : ["  It runs no commands."]), ...pack.findings.map((f) => `  Found in its text, ${f}`)];
+const showRun = (r: Pack["runs"][number]): string[] => [`  ${r.what}: ${r.command}  (${r.source})`, ...(r.findings ?? []).map((f) => `    ${f}`)];
+const showRuns = (pack: Pack): string[] => [...(pack.runs.length ? pack.runs.flatMap(showRun) : ["  It runs no commands."]), ...pack.findings.map((f) => `  Found in its text, ${f}`)];
+
+const showChange = (c: PluginChange): string[] => {
+  const files = (label: string, list: string[]): string[] => (list.length ? [`  ${label}`, ...list.map((f) => `    ${f}`)] : []);
+  const brings = (label: string, list: string[]): string[] => (list.length ? [`  New ${label}: ${list.join(", ")}`] : []);
+  return [
+    `${c.name} ${c.from.version} to ${c.to.version}`,
+    `Fingerprint ${c.to.hash}`,
+    ...files("Added", c.added), ...files("Removed", c.removed), ...files("Changed", c.changed),
+    ...brings("skills", c.newBrings.skills), ...brings("agents", c.newBrings.agents), ...brings("commands", c.newBrings.commands),
+    ...brings("hook events", c.newEvents),
+    ...(c.newRuns.length ? ["  New commands it would run", ...c.newRuns.flatMap(showRun)] : []),
+  ];
+};
 
 /** `navvied plugin …`: the plugins on this computer. Installing never runs anything and never switches anything on. */
 export async function pluginCommand(rest: string | undefined, options: Options, io: IO): Promise<number> {
@@ -28,7 +44,7 @@ export async function pluginCommand(rest: string | undefined, options: Options, 
   const cwd = resolve(options.cwd ?? process.cwd());
   const places = pluginPlaces(file);
   const state = new PluginState(pluginStatePath(io.env));
-  const trust = new SkillTrust(skillTrustPath(io.env), cfg.ok && cfg.value?.skills?.trust === "confirm");
+  const trust = new SkillTrust(skillTrustPath(io.env));
   const packs = (): Pack[] => readPacks(dirname(file), places.lock, cwd);
 
   if (sub === "install") {
@@ -49,6 +65,29 @@ export async function pluginCommand(rest: string | undefined, options: Options, 
       say(`${p.name.padEnd(20)} ${p.version.padEnd(10)} ${p.source.padEnd(8)} ${p.problem ? `unusable: ${p.problem}` : i.enabled ? (i.trusted ? "on" : "on, waiting for you to accept it") : "off"}`);
     }
     return EXIT.ok;
+  }
+  if (sub === "outdated") {
+    const rows = await checkOutdated({ root: places.root, lock: places.lock, online: words[0] === "online" });
+    if (!rows.length) { say("No plugins."); return EXIT.ok; }
+    const label = { current: "up to date", newer: "newer version", "not-asked": "not asked (needs the network)", unreachable: "cannot be read" } as const;
+    for (const r of rows) say(`${r.name.padEnd(20)} ${r.version.padEnd(10)} ${label[r.status]}${r.latest ? ` (${r.latest})` : ""}${r.why ? `: ${r.why}` : ""}`);
+    return EXIT.ok;
+  }
+  if (sub === "update") {
+    const [name, accept] = words;
+    if (!name && accept) return fail(USAGE);
+    const names = name ? [name] : Object.keys(places.lock.read()).sort();
+    if (!names.length) { say("No plugins."); return EXIT.ok; }
+    let code: number = EXIT.ok;
+    for (const n of names) {
+      const done = await updatePlugin({ name: n, root: places.root, lock: places.lock, ...(accept ? { accept } : {}) });
+      if (!done.ok) { io.stderr.write(`error: ${n}: ${done.error}\n`); code = EXIT.usage; continue; }
+      if (done.change.from.hash === done.change.to.hash) { say(`${n} is up to date.`); continue; }
+      for (const line of showChange(done.change)) say(line);
+      if (done.installed) say(`Installed ${n} ${done.change.to.version}. It keeps the setting it had.`);
+      else say(`Not installed yet. To install it: navvied plugin update ${n} ${done.change.to.hash.slice(0, 12)}`);
+    }
+    return code;
   }
   if (!sub || !["show", "on", "off", "accept", "remove"].includes(sub)) return fail(USAGE);
   const pack = packs().find((p) => p.name === words[0]);

@@ -129,6 +129,20 @@ describe("the driver as two children of this program", () => {
     expect(m.stopped).toEqual([false]);
     await expect(m.host.call("click", {})).rejects.toBeInstanceOf(NotSent);
   });
+  test("close waits for the daemon to be gone and kills one that stays", async () => {
+    const m = machine(); await m.host.start();
+    const d = m.started[0]!.child;
+    const closing = m.host.close(30);
+    await new Promise((r) => setTimeout(r, 60));
+    await closing;
+    expect(d.inputClosed).toBe(true);
+    expect(d.killed).toBeGreaterThan(0);
+    const m2 = machine(); await m2.host.start();
+    const c2 = m2.host.close(500);
+    m2.started[0]!.child.exit(0);
+    await c2;
+    expect(m2.started[0]!.child.killed).toBe(0);
+  });
   test("a daemon that dies by itself is reported once as unexpected and the driver is not started again", async () => {
     const m = machine(); await m.host.start();
     m.started[0]!.child.exit(1);

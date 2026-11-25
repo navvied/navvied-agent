@@ -1,0 +1,24 @@
+{
+  "id": "mcp-sample-code",
+  "title": "A connected program that asks the model for an answer",
+  "kind": "agent",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun"
+  ],
+  "prompt": "Use the connected program's condense tool on the ticket T-1 and write what it returns, and nothing else, to label.txt.",
+  "check": "bun \"$BENCH_FIXTURES/mcp-asks-check.ts\" sample-code",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 40,
+  "timeoutSeconds": 600,
+  "mcp": {
+    "lab": {
+      "fixture": "mcp-asks.ts",
+      "sampling": "allow"
+    }
+  }
+}

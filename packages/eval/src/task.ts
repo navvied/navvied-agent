@@ -19,7 +19,7 @@ export interface Task {
   /** Added to the environment of the agent. `{port}` is the port the setup left in `.bench-port`, for the tasks that start a fixture web. `{dir}` is the workspace, for a task that keeps the agent's state inside it. */
   env?: Record<string, string>;
   /** MCP servers the agent is given for this task: each is a program of the fixtures folder (`fixture`), started by the agent itself from its own configuration, which the harness writes for the run. */
-  mcp?: Record<string, { fixture: string }>;
+  mcp?: Record<string, { fixture: string; /** What the program may ask of the model and of the person (see the engine's MCP configuration); left out: the defaults. */ sampling?: "ask" | "allow" | "off"; elicitation?: "ask" | "off" }>;
   /** The stand-ins for speech and picture programs (fixtures/media) the agent is configured with: `stt` hears one fixed sentence, `tts` writes the text it is given into a sound file, `image` writes a picture that says its size. */
   media?: ("stt" | "tts" | "image")[];
   /** A program of the fixtures folder that starts the agent in place of the command line, with the same arguments, for a task that gives it something a command line cannot be given from outside (a scripted screen). */
@@ -28,6 +28,8 @@ export interface Task {
   hooks?: Record<string, { matcher?: string; fixture: string }[]>;
   /** Other agents the agent is given for this task, by the name it asks them by: a path of the fixture agents (`a2a-peer.ts`), which the setup starts and leaves the port of in `.bench-port`. */
   a2a?: Record<string, string>;
+  /** The agent is given a server for search by meaning: the fixture `embed-server.ts`, which the setup starts (leaving its port in `.bench-port`), speaking this shape. */
+  embeddings?: { api: "chat" | "ollama" };
   /** Takes minutes: run only when asked for. */
   slow: boolean;
   prompt: string;
@@ -55,6 +57,7 @@ const isString = (v: unknown): v is string => typeof v === "string" && v.length 
 const isMcp = (v: unknown): v is NonNullable<Task["mcp"]> => !!v && typeof v === "object" && !Array.isArray(v) && Object.values(v).every((e) => !!e && typeof e === "object" && isString((e as { fixture?: unknown }).fixture));
 
 const isHooks = (v: unknown): v is NonNullable<Task["hooks"]> => !!v && typeof v === "object" && !Array.isArray(v) && Object.values(v).every((l) => Array.isArray(l) && l.every((h) => !!h && typeof h === "object" && isString((h as { fixture?: unknown }).fixture)));
+const isEmbeddings = (v: unknown): v is NonNullable<Task["embeddings"]> => !!v && typeof v === "object" && ((v as { api?: unknown }).api === "chat" || (v as { api?: unknown }).api === "ollama");
 const isPeers = (v: unknown): v is NonNullable<Task["a2a"]> => !!v && typeof v === "object" && !Array.isArray(v) && Object.values(v).every((p) => typeof p === "string" && p.startsWith("/"));
 
 export function loadTask(dir: string): Task {
@@ -78,6 +81,7 @@ export function loadTask(dir: string): Task {
     ...(Array.isArray(raw.media) ? { media: raw.media.filter((k): k is "stt" | "tts" | "image" => k === "stt" || k === "tts" || k === "image") } : {}),
     ...(isHooks(raw.hooks) ? { hooks: raw.hooks } : {}),
     ...(isPeers(raw.a2a) ? { a2a: raw.a2a } : {}),
+    ...(isEmbeddings(raw.embeddings) ? { embeddings: raw.embeddings } : {}),
     ...(script ? { script } : {}),
     slow: raw.slow === true,
     ...(Array.isArray(raw.answers) ? { answers: raw.answers.filter(isString) } : {}),

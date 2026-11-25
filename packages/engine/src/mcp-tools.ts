@@ -2,15 +2,32 @@
  * Turns connected programs into the engine's tools. Every tool is named `mcp__<server>__<tool>`. When the programs bring more than fit in a
  * model's first look, their tools are not listed: one search tool finds them, and what it finds is offered from then on.
  */
-import type { McpPromptInfo } from "@navvied/protocol";
+import type { McpPromptInfo, McpResourceContent, McpResourceInfo, McpToolFound } from "@navvied/protocol";
 import { McpAuthError, McpClient, McpHttpClient, type McpLike, type McpServerConfig } from "./mcp.ts";
-import { FIND, type Listed, PROMPTS, RESOURCES, findTool, promptText, promptsTool, resourcesTool } from "./mcp-extras.ts";
+import { FIND, type Listed, PROMPTS, RESOURCES, findTool, promptText, promptsTool, resourcesTool, searchTools, signature } from "./mcp-extras.ts";
+import type { McpHost } from "./mcp-host.ts";
 import type { OAuthStore } from "./mcp-oauth.ts";
-import { render } from "./mcp-result.ts";
+import { render, type McpContent } from "./mcp-result.ts";
 import type { Tool } from "./types.ts";
 
 const NAME = /[^A-Za-z0-9_-]/g;
 const WORDS = 500;
+const MOST_TOOLS = 50;
+const MOST_RESOURCES = 200;
+const MOST_TEXT = 1_000_000;
+const MOST_DATA = 2_000_000;
+
+/** One part of a document, for a page: its text (cut), or its bytes as base64 when they are not too many. */
+function partOf(c: McpContent): McpResourceContent {
+  const x = c as { text?: string; data?: string; mimeType?: string; resource?: { uri?: string; text?: string; blob?: string; mimeType?: string } };
+  const r = x.resource;
+  const mime = r?.mimeType ?? x.mimeType;
+  const text = c.type === "text" ? x.text : r?.text;
+  if (text !== undefined) return { ...(r?.uri ? { uri: r.uri } : {}), ...(mime ? { mime } : {}), bytes: Buffer.byteLength(text), text: text.slice(0, MOST_TEXT), ...(text.length > MOST_TEXT ? { truncated: true as const } : {}) };
+  const data = c.type === "image" ? x.data : r?.blob;
+  const bytes = Math.floor(((data ?? "").length * 3) / 4) - (data?.endsWith("==") ? 2 : data?.endsWith("=") ? 1 : 0);
+  return { ...(r?.uri ? { uri: r.uri } : {}), ...(mime ? { mime } : {}), bytes, ...(data && bytes <= MOST_DATA ? { data } : data ? { truncated: true as const } : {}) };
+}
 
 /** How much the programs may put in front of a model before their tools are searched instead of listed. */
 export interface DeferLimit { tools: number; /** Characters of names, descriptions and schemas. */ chars: number }
@@ -43,7 +60,17 @@ function toTool(l: Listed, small: boolean): Tool {
   };
 }
 
-export interface McpConnection {
+/** What a page may ask of the connected programs besides their prompts: their documents, and their tools by words. */
+export interface McpBrowse {
+  /** The documents the programs offer (of one program, or all); a program that could not list them is in `problems`. */
+  resources(server?: string): Promise<{ items: McpResourceInfo[]; problems: { server: string; reason: string }[] }>;
+  /** One document of a program, as parts a page can show. */
+  readResource(server: string, uri: string, signal: AbortSignal): Promise<McpResourceContent[]>;
+  /** The tools that fit the words (the first `MOST_TOOLS` by name without words), and how many tools there are. */
+  find(query?: string, server?: string): { items: McpToolFound[]; total: number };
+}
+
+export interface McpConnection extends McpBrowse {
   tools: Tool[];
   /** Servers that could not be used, with the reason in plain words. `signin`: the server wants the person to sign in. */
   problems: { server: string; reason: string; signin?: true }[];
@@ -61,6 +88,8 @@ export interface McpOptions {
   store?: OAuthStore;
   /** Replaces the limit from which tools are searched instead of listed. */
   defer?: DeferLimit;
+  /** What the programs may ask of this side (a model answer, a question for the person). Without it nothing of that is offered to them. */
+  host?: McpHost;
 }
 
 /**
@@ -76,7 +105,8 @@ export async function connectMcp(servers: Record<string, McpServerConfig>, small
   const problems: McpConnection["problems"] = [];
   await Promise.all(Object.entries(servers).map(async ([name, config]) => {
     try {
-      const client = config.url ? await McpHttpClient.start(name, config, options.store) : await McpClient.start(name, config, track);
+      const handlers = options.host?.handlers(name, config);
+      const client = config.url ? await McpHttpClient.start(name, config, options.store, handlers) : await McpClient.start(name, config, track, handlers);
       if (config.url) track(client);
       const seen = new Set<string>();
       for (const info of await client.tools()) {
@@ -111,6 +141,24 @@ export async function connectMcp(servers: Record<string, McpServerConfig>, small
       const client = withPrompts.find((c) => c.name === server);
       if (!client) throw new Error(`the connected program "${server}" has no prompts`);
       return promptText(await client.getPrompt(name, args, signal));
+    },
+    async resources(server) {
+      const items: McpResourceInfo[] = [], problems: { server: string; reason: string }[] = [];
+      for (const c of withResources.filter((x) => !server || x.name === server)) {
+        try { for (const r of await c.resources()) items.push({ server: c.name, uri: r.uri, ...(r.name ? { name: r.name } : {}), ...(r.description ? { description: r.description.slice(0, 300) } : {}), ...(r.mimeType ? { mimeType: r.mimeType } : {}), ...(r.template ? { template: true as const } : {}) }); }
+        catch (e) { problems.push({ server: c.name, reason: e instanceof Error ? e.message : String(e) }); }
+      }
+      return { items: items.slice(0, MOST_RESOURCES), problems };
+    },
+    async readResource(server, uri, signal) {
+      const client = withResources.find((c) => c.name === server);
+      if (!client) throw new Error(`the connected program "${server}" has no documents`);
+      return (await client.readResource(uri, signal)).map(partOf);
+    },
+    find(query, server) {
+      const pool = listed.filter((l) => !server || l.client.name === server);
+      const hits = query?.trim() ? searchTools(pool, query, MOST_TOOLS) : [...pool].sort((a, b) => a.name.localeCompare(b.name)).slice(0, MOST_TOOLS);
+      return { items: hits.map((l) => ({ server: l.client.name, name: l.name, tool: l.info.name, description: (l.info.description ?? "").replace(/\s+/g, " ").slice(0, 300), signature: signature(l) })), total: pool.length };
     },
     close: () => clients.forEach((c) => c.close()),
   };

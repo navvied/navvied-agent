@@ -1,6 +1,7 @@
 import { isAbsolute, posix } from "node:path";
 import { changedPaths } from "./tools/changed.ts";
 import { caselessFor, nativePaths, type Paths } from "./rules.ts";
+import { secretDirNames } from "./secret-stores.ts";
 import { programName, shellView, type Flat } from "./shell-scan.ts";
 
 /**
@@ -136,7 +137,7 @@ function ofBash(command: string, cwd: string, p: Paths): Risk | undefined {
 }
 
 /** Files the agent should not change without the person's say-so: what sets up their shell and keys, git's own records, and navvied's setup. */
-const PROTECTED = /(^|\/)(\.git\/(?!info\/exclude$)|\.ssh\/|\.gnupg\/|\.aws\/|\.bashrc$|\.bash_profile$|\.zshrc$|\.zprofile$|\.profile$|\.gitconfig$|\.npmrc$|\.netrc$|\.mcp\.json$|\.husky\/|\.config\/navvied\/|\.navvied\/(hooks|settings)[^/]*$)/;
+const PROTECTED = new RegExp(String.raw`(^|\/)(\.git\/(?!info\/exclude$)|(?:${secretDirNames()})\/|\.bashrc$|\.bash_profile$|\.zshrc$|\.zprofile$|\.profile$|\.gitconfig$|\.npmrc$|\.netrc$|\.mcp\.json$|\.husky\/|\.config\/navvied\/|\.navvied\/(hooks|settings)[^/]*$)`);
 
 const PROTECTED_CASELESS = new RegExp(PROTECTED.source, "i");
 

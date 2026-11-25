@@ -11,6 +11,8 @@ export interface PromptInfo {
   instructions?: string;
   /** Commands in the background that ended since the model last heard of them, one line each. */
   finished?: string[];
+  /** The notes being saved from what the person just said: the model is told, so that it neither says it cannot save nor saves them again. */
+  noted?: string[];
   /** Tools that exist and are not offered in this request: named, without their definitions. */
   also?: string[];
   /** What to say about the program itself, for a request that asks. */
@@ -32,6 +34,8 @@ const PLAN_NOTE =
   "When you know exactly what to do, call ExitPlanMode with a concrete step-by-step plan for the user to approve.";
 
 const REMEMBER_NOTE = "Remember: save lasting facts about the person and project, not task progress.";
+
+const notedNow = (info: PromptInfo): string => (info.noted?.length ? `Notes being saved from the person's message: ${info.noted.join("; ")}. Do not call Remember for them.` : "");
 
 const remembers = (info: PromptInfo): boolean => info.tools?.includes("Remember") === true || info.also?.includes("Remember") === true;
 
@@ -64,6 +68,7 @@ export function systemPrompt(info: PromptInfo, mode: PermMode): string {
       `You are a coding assistant working in ${info.cwd} on ${info.platform}.${info.tools?.some((t) => t === "WebSearch" || t === "WebFetch") ? ` Date: ${info.date}.` : ""}`,
       SMALL_RULES,
       remembers(info) ? REMEMBER_NOTE : "",
+      notedNow(info),
       mode === "plan" ? PLAN_NOTE : "",
       info.also?.length ? `Also available, by name: ${info.also.join(", ")}.` : "",
       info.reference,
@@ -78,6 +83,7 @@ export function systemPrompt(info: PromptInfo, mode: PermMode): string {
     `Work carefully: read before you edit, make the smallest correct change, run the tests or the program to check it, and say what you verified. Be concise. Never claim to have done what you did not. Prefer Read, Glob and Grep to the shell for looking at code.${info.tools?.includes("TodoWrite") ? " Use TodoWrite for work in several steps." : ""} If a tool call is denied, do not retry it: ask what they prefer.`,
     mode === "plan" ? PLAN_NOTE : "",
     remembers(info) ? REMEMBER_NOTE : "",
+    notedNow(info),
     info.also?.length ? `Also available, by name: ${info.also.join(", ")}.` : "",
     info.reference,
     info.finished?.length ? info.finished.join("\n") : "",

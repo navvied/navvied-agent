@@ -1,4 +1,6 @@
 import { hostedProviders, type MediaServer } from "./client.ts";
+import { findShrinker, type Shrinker } from "./fit.ts";
+import { findRenderer, type Renderer } from "./render.ts";
 import { localProviders, type Finders, type LocalConfig } from "./local.ts";
 import type { MediaKind, MediaProvider, Need, VisionRoute } from "./types.ts";
 
@@ -30,6 +32,8 @@ export class Media {
   /** Where the programs were found: the path is searched once for the life of this object. */
   readonly #found = new Map<string, string | undefined>();
   readonly #find: Finders;
+  #renderer: { found: Renderer | undefined } | undefined;
+  #shrinker: { found: Shrinker | undefined } | undefined;
 
   constructor(o: MediaOptions = {}) {
     this.#o = o;
@@ -57,6 +61,18 @@ export class Media {
   program(name: "ffmpeg" | "pdftoppm"): string | undefined {
     if (!this.#found.has(name)) this.#found.set(name, (name === "ffmpeg" ? this.#o.local?.ffmpeg : this.#o.pdftoppm) ?? this.#find.which(name));
     return this.#found.get(name);
+  }
+
+  /** The program that draws a PDF page (see `RENDERERS`), if this computer has one. */
+  renderer(): Renderer | undefined {
+    this.#renderer ??= { found: findRenderer(this.#find.which, this.#o.pdftoppm) };
+    return this.#renderer.found;
+  }
+
+  /** The program that makes a picture smaller, if this computer has one. */
+  shrinker(): Shrinker | undefined {
+    this.#shrinker ??= { found: findShrinker(this.#find.which, this.program("ffmpeg")) };
+    return this.#shrinker.found;
   }
 
   get look(): VisionRoute | undefined { return this.#o.vision; }

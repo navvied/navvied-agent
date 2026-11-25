@@ -10,7 +10,7 @@ export interface Link {
 type Waiter = { ev: string; resolve: (answer: never) => void };
 
 /** Events that belong to these screens alone: a conversation never says them. */
-const OWN = (ev: string): boolean => ev === "machine" || ev.startsWith("account") || ev === "providers" || ev === "endpoints" || ev === "endpoint.models" || ev === "provider.models" || ev.startsWith("local.");
+const OWN = (ev: string): boolean => ev === "machine" || ev === "tool.setup" || ev === "computer.state" || ev.startsWith("account") || ev === "providers" || ev === "endpoints" || ev === "endpoint.models" || ev === "provider.models" || ev.startsWith("local.");
 
 /** Sends commands to the hub and matches its events to them. An `error` answers the oldest command still waiting, so a screen can say it itself. */
 export class HubLink implements Link {

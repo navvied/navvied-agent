@@ -20,14 +20,14 @@ describe("looking through earlier conversations", () => {
     expect(names("was haben wir gestern beschlossen?", true, false)).toContain("Recall");
     expect(names("what did we decide last time?", false, false)).not.toContain("Recall");
     expect(names("what did we decide last time?", true, true)).not.toContain("Recall");
-    const r = rig((req) => (req.messages.at(-1)?.role === "tool" ? { text: String(req.messages.at(-1)!.content).slice(0, 60) } : { calls: [{ name: "Recall", args: { query: "tresor" } }] }), { recall: past, window: 8_000 });
+    const r = rig((req) => (req.messages.at(-1)?.role === "tool" ? { text: String(req.messages.at(-1)!.content).slice(0, 60) } : { calls: [{ name: "Recall", args: { query: "tresor" } }] }), { recall: past, window: 8_000, small: true });
     await r.turn(prompt("was haben wir gestern ueber den Tresor beschlossen?"));
     expect(r.provider.requests[0]!.system).toContain("Recall");
     expect(r.provider.requests[0]!.tools.map((t) => t.name)).not.toContain("Recall");
     expect(r.text()).toContain("Gespraech (id de1");
     expect(r.text()).not.toContain("sk-abcdefgh");
     r.cleanup();
-    const none = rig(() => ({ text: "x" }), { window: 8_000 });
+    const none = rig(() => ({ text: "x" }), { window: 8_000, small: true });
     await none.turn(prompt("was haben wir gestern beschlossen?"));
     expect(none.provider.requests[0]!.system).not.toContain("Recall");
     none.cleanup();

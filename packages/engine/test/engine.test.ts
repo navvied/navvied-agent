@@ -56,7 +56,7 @@ describe("a small model", () => {
   const names = (r: ReturnType<typeof rig>, i = 0): string[] => r.provider.requests[i]!.tools.map((t) => t.name);
 
   test("is offered only the tools it needs, a shorter prompt, and the web tool only when an address is mentioned", async () => {
-    const small = rig(() => ({ text: "hi" }), { window: 32_768 });
+    const small = rig(() => ({ text: "hi" }), { window: 32_768, small: true });
     await small.turn(prompt("say hi"));
     expect(names(small)).toEqual(["Read", "Write", "Edit", "Bash", "Glob", "Grep", "AskUserQuestion"]);
     expect(small.provider.requests[0]!.system).toContain("Answer questions and chat in plain text, directly");
@@ -88,7 +88,7 @@ describe("a small model", () => {
   });
 
   test("plan mode still offers only reading tools and the way to hand in the plan", async () => {
-    const r = rig(() => ({ text: "ok" }), { window: 32_768 });
+    const r = rig(() => ({ text: "ok" }), { window: 32_768, small: true });
     await r.turn(prompt("plan it", { mode: "plan" }));
     expect(names(r)).toEqual(["Read", "Glob", "Grep", "AskUserQuestion", "ExitPlanMode"]);
     r.cleanup();

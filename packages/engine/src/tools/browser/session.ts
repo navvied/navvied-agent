@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { basename, extname, join } from "node:path";
+import type { BrowserNote } from "@navvied/protocol";
 import { refusal } from "../web-guard.ts";
 import { Cdp } from "./cdp.ts";
 import { startGuardProxy, type GuardProxy } from "./guard-proxy.ts";
@@ -8,9 +9,9 @@ import { Tab } from "./tab.ts";
 
 const IDLE_MS = 5 * 60_000;
 const MOST_DOWNLOAD = 500 * 1024 * 1024;
-const TAB_EVENTS = ["Page.javascriptDialogOpening", "Page.javascriptDialogClosed", "Page.fileChooserOpened", "Page.frameNavigated", "Runtime.consoleAPICalled", "Runtime.exceptionThrown", "Network.requestWillBeSent", "Network.loadingFinished", "Network.loadingFailed", "Network.responseReceived", "Fetch.requestPaused"];
+const TAB_EVENTS = ["Page.javascriptDialogOpening", "Page.javascriptDialogClosed", "Page.fileChooserOpened", "Page.frameNavigated", "Runtime.consoleAPICalled", "Runtime.exceptionThrown", "Network.requestWillBeSent", "Network.loadingFinished", "Network.loadingFailed", "Network.responseReceived", "Fetch.requestPaused", "Input.dragIntercepted"];
 
-export interface Download { guid: string; url: string; name: string; state: "going" | "done" | "failed"; path?: string; bytes?: number; note?: string }
+export interface Download { guid: string; url: string; name: string; state: "going" | "done" | "failed"; path?: string; bytes?: number; note?: string; told?: true }
 
 /** The browser and its pages. */
 export class Session {
@@ -23,6 +24,8 @@ export class Session {
   /** Pages the browser opened by itself since they were last reported (a link that opens a new window). */
   opened: Tab[] = [];
   downloads: Download[] = [];
+  /** Where what the browser saw happen is told (the step that is running; set at each call). */
+  say: ((note: BrowserNote) => void) | undefined;
   #proxy: GuardProxy | undefined;
   #launched: Launched | undefined;
   #idle: ReturnType<typeof setTimeout> | undefined;
@@ -39,7 +42,7 @@ export class Session {
     try {
       if (endpoint) { s.cdp = await Cdp.connect(endpoint); }
       else {
-        s.#proxy = startGuardProxy(() => s.allowPrivate, (why, host) => { for (const t of s.tabs) t.refuseHost(host, why); });
+        s.#proxy = startGuardProxy(() => s.allowPrivate, (why, host) => { for (const t of s.tabs) t.refuse(host.toLowerCase(), why); });
         s.#launched = await launch(chrome!, s.#proxy.port);
         s.cdp = await Cdp.connect(s.#launched.endpoint);
       }
@@ -51,11 +54,16 @@ export class Session {
   }
 
   async #setUp(): Promise<void> {
-    for (const name of TAB_EVENTS) this.cdp.on(name, (p, sid) => { if (sid) this.#byId.get(sid)?.handle(name, p); });
-    this.cdp.on("Target.attachedToTarget", (p) => { if (p.targetInfo?.type === "page") void this.#adopt(String(p.sessionId), String(p.targetInfo.targetId), p.targetInfo.openerId ? String(p.targetInfo.openerId) : undefined); });
+    for (const name of TAB_EVENTS) this.cdp.on(name, (p, sid) => { if (sid) this.#byId.get(sid)?.handle(name, p, sid); });
+    this.cdp.on("Target.attachedToTarget", (p, sid) => {
+      if (p.targetInfo?.type === "page") void this.#adopt(String(p.sessionId), String(p.targetInfo.targetId), p.targetInfo.openerId ? String(p.targetInfo.openerId) : undefined);
+      // A frame of another site speaks through a session of its own; it belongs to the page that holds it.
+      else if (p.targetInfo?.type === "iframe" && sid) { const tab = this.#byId.get(sid); if (tab) { this.#byId.set(String(p.sessionId), tab); void tab.attachFrame(String(p.sessionId), String(p.targetInfo.targetId)); } }
+    });
+    this.cdp.on("Target.detachedFromTarget", (p) => { const id = String(p.sessionId); const tab = this.#byId.get(id); if (tab && id !== tab.sessionId) { tab.detachFrame(id); this.#byId.delete(id); } });
     this.cdp.on("Target.targetInfoChanged", (p) => { const t = this.tabs.find((x) => x.targetId === p.targetInfo?.targetId); if (t) { t.title = String(p.targetInfo.title ?? ""); t.url = String(p.targetInfo.url ?? t.url); } });
     this.cdp.on("Target.targetDestroyed", (p) => this.#gone(String(p.targetId)));
-    this.cdp.on("Browser.downloadWillBegin", (p) => { mkdirSync(this.#folder, { recursive: true }); this.downloads.push({ guid: String(p.guid), url: String(p.url ?? ""), name: String(p.suggestedFilename || "download"), state: "going" }); });
+    this.cdp.on("Browser.downloadWillBegin", (p) => { mkdirSync(this.#folder, { recursive: true }); this.downloads.push({ guid: String(p.guid), url: String(p.url ?? ""), name: String(p.suggestedFilename || "download"), state: "going" }); this.say?.({ what: "download", state: "started", name: this.downloads.at(-1)!.name }); });
     this.cdp.on("Browser.downloadProgress", (p) => this.#progress(p));
     await this.cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
     const { targetInfos } = await this.cdp.send<{ targetInfos: { targetId: string; type: string }[] }>("Target.getTargets");
@@ -73,7 +81,7 @@ export class Session {
   }
 
   async #adopt(sessionId: string, targetId: string, opener: string | undefined): Promise<Tab> {
-    const tab = new Tab(this.cdp, targetId, sessionId, async (url) => this.#gate(url));
+    const tab = new Tab(this.cdp, targetId, sessionId, async (url) => this.#gate(url), (note) => this.say?.(note));
     this.#byId.set(sessionId, tab);
     await tab.init();
     this.tabs.push(tab);
@@ -138,7 +146,10 @@ export class Session {
       for (let i = 1; existsSync(target); i++) target = join(this.#folder, `${basename(safe, extname(safe))} (${i})${extname(safe)}`);
       try { renameSync(join(this.#folder, d.guid), target); d.path = target; d.bytes = statSync(target).size; d.state = "done"; } catch (e) { d.state = "failed"; d.note = e instanceof Error ? e.message : "the file could not be kept"; }
     } else if (p.state === "canceled" && d.state === "going") { d.state = "failed"; d.note = "cancelled"; }
-    if (d.state !== "going") for (const w of this.#downloadWaiters) w();
+    if (d.state !== "going") {
+      if (!d.told) { d.told = true; this.say?.({ what: "download", state: d.state, name: basename(d.path ?? d.name), ...(d.bytes !== undefined ? { bytes: d.bytes } : {}), ...(d.path ? { path: d.path } : {}), ...(d.note ? { note: d.note } : {}) }); }
+      for (const w of this.#downloadWaiters) w();
+    }
   }
 
   /** Waits for the downloads that began after `from` to end, for at most `ms`; the ones that did not end say so. */

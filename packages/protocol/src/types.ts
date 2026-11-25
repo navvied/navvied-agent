@@ -111,12 +111,24 @@ export interface MarkCommand { cmd: "mark"; id: string; read?: boolean; done?: b
 /** Ask for the scheduled tasks (answered with `schedules`). */
 export interface SchedulesCommand { cmd: "schedules" }
 /** Schedule a task: `prompt` runs by `cron` (five fields) as an agent in `folder` (an id of `caps.folders`; default: the current one) or, with `kind: "chat"`, as a chat. `mode: "auto"` lets it change files with nobody to ask. */
-export interface ScheduleAddCommand { cmd: "schedule.add"; title?: string; cron: string; prompt: string; folder?: string; mode?: "plan" | "auto" }
-export interface ScheduleUpdateCommand { cmd: "schedule.update"; id: string; title?: string; cron?: string; prompt?: string; enabled?: boolean; mode?: "plan" | "auto"; folder?: string }
+export interface ScheduleAddCommand { cmd: "schedule.add"; title?: string; /** Give `when` or `cron`, not both (`cron` is `when: {kind:"cron", cron}`). */ cron?: string; when?: ScheduleWhen; /** The time zone `when` is in (an IANA name such as `Asia/Jakarta`); this computer's own when absent. */ tz?: string; prompt: string; folder?: string; mode?: "plan" | "auto" }
+export interface ScheduleUpdateCommand { cmd: "schedule.update"; id: string; title?: string; cron?: string; when?: ScheduleWhen; tz?: string; prompt?: string; enabled?: boolean; mode?: "plan" | "auto"; folder?: string }
+/**
+ * When a task runs, in the one shape the Schedule tool and the screens share. `cron`: five fields (or `@hourly`, `@daily`, `@weekly`, `@monthly`), which also says every day, every weekday, every week on, every month on. `every`: every `ms` milliseconds (at least 60000), counted from its last start; with `start` (ms since the epoch) the starts keep to the grid of `start` plus whole intervals (every 2 weeks on a friday). `at`: once, at `at` (ms since the epoch).
+ */
+export type ScheduleWhen = { kind: "cron"; cron: string } | { kind: "every"; ms: number; start?: number } | { kind: "at"; at: number };
 export interface ScheduleRemoveCommand { cmd: "schedule.remove"; id: string }
 /** Run a scheduled task now. */
 export interface ScheduleRunCommand { cmd: "schedule.run"; id: string }
-/** Ask for what extends the agent on this computer: skills, outside tool servers and hooks (answered with `plugins`). Adding or removing one is done on the computer, never from a page. */
+/** Ask for the last runs of one scheduled task (answered with `schedule.runs`). `limit` is how many, newest first (default 10, at most 20). */
+export interface ScheduleRunsCommand { cmd: "schedule.runs"; id: string; limit?: number }
+/** Ask where turning on computer use stands (answered with `computer.state`). */
+export interface ComputerStateCommand { cmd: "computer.state" }
+/** Ask the system for one grant (its own prompt, or its settings page opens); answered with `computer.state`, which is sent again when the person has granted it. */
+export interface ComputerPermissionCommand { cmd: "computer.permission"; id: ComputerPermissionId }
+/** Turn computer use on or off for conversations (on only when `computer.state` says `ready`); answered with `computer.state`. */
+export interface ComputerOnCommand { cmd: "computer.on"; on: boolean }
+/** Ask for what extends the agent on this computer: skills, outside tool servers and hooks (answered with `plugins`). Adding one from a page is `plugin.install`; removing one is done on the computer. */
 export interface PluginsCommand { cmd: "plugins" }
 /** Switch one on or off. It is kept in the computer's own state; skills follow at once, outside tool servers and hooks from the next new conversation. */
 /** Keep what the person has typed and not sent, for a conversation (its id) or for a new one (`new`). Empty text takes the draft away. Every window of the computer is told (`drafts`). */
@@ -127,10 +139,16 @@ export interface DraftsCommand { cmd: "drafts" }
 export interface ToolsCommand { cmd: "tools" }
 /** Switch one tool, or a whole set of tools (named by its id), on or off for the conversations that start afterwards. */
 export interface ToolToggleCommand { cmd: "tool.toggle"; name: string; enabled: boolean }
-/** Starts the setup of a tool that says `needs-setup` (and has `setup: true`). */
-export interface ToolSetupCommand { cmd: "tool.setup"; id: string }
+/**
+ * Starts the setup of a tool that says `needs-setup` (and has `setup: true`). `mode` is the permission mode of the conversation the person is in: in every mode but `bypass` the setup
+ * stops at `ask` (what will be fetched, and how large) until `tool.setup.approve`; with no mode it asks. `tool.setup.cancel` stops it and keeps what was fetched for a later start.
+ */
+export interface ToolSetupCommand { cmd: "tool.setup"; id: string; mode?: PermMode }
+export interface ToolSetupAnswerCommand { cmd: "tool.setup.approve" | "tool.setup.cancel"; id: string }
 /** Choose where the Bash tool runs its commands, for the conversations that start afterwards. */
 export interface TerminalUseCommand { cmd: "terminal.use"; backend: "local" | "docker" | "ssh" }
+/** Confine commands on this computer or not, and let a confined command use the network or not: a field not given stays as it is. */
+export interface SandboxUseCommand { cmd: "sandbox.use"; on?: boolean; network?: boolean }
 /** Ask for the providers whose keys can be saved on this computer, and which have one (answered with `providers`). */
 export interface ProvidersCommand { cmd: "providers" }
 /** Save what a provider needs on this computer: its key (sent once, never sent back), the region, and the other fields it asks for. A key left out keeps the one already saved. */
@@ -198,6 +216,46 @@ export interface SkillRollbackCommand { cmd: "skill.rollback"; id?: string }
 export interface ArtifactsCommand { cmd: "artifacts"; id?: string }
 /** Read one file to show it: text or a picture. A file is named by the `id` the hub gave; a path is never taken. Answered with `artifact`. */
 export interface ArtifactReadCommand { cmd: "artifact.read"; id: string }
+/**
+ * Fetch the bytes of a picture, a sound or a video a step made, to show or play it on a page that is not on this computer. A file is named by the `media.id` a `tool` event gave (`media`); a path is never taken. Answered to the asker only, as one or more `media`
+ * events: `offset` and `length` (default and most: 262144) are in bytes of the file, so a page asks again from `offset + length` until `done`. At most 64 MB for one file.
+ */
+export interface MediaReadCommand { cmd: "media.read"; id: string; offset?: number; length?: number }
+/** Ask for the agents this computer may ask and the agents that may ask it (answered with `a2a`). */
+export interface A2aListCommand { cmd: "a2a.list" }
+/**
+ * Keep an agent this computer may ask (the same as an entry of `a2a.peers` in the configuration file). `token` is what that agent gave for it: it is sent once, kept in a private file of this computer and never sent back (`tokenEnv` and `tokenFile` name
+ * where a token already is instead). From the next new conversation on. Answered with `a2a`.
+ */
+export interface A2aPeerAddCommand { cmd: "a2a.peer.add"; name: string; url: string; token?: string; tokenEnv?: string; tokenFile?: string; timeoutSeconds?: number }
+/** Stop asking one agent, and take away the token file this computer made for it. Answered with `a2a`. */
+export interface A2aPeerRemoveCommand { cmd: "a2a.peer.remove"; name: string }
+/** Make the token for an agent that may ask this computer (`navvied a2a add`). Answered to the asker only with `a2a.token`, the one time it can be read, and to every window with `a2a`. */
+export interface A2aTokenAddCommand { cmd: "a2a.token.add"; name: string }
+/** Take a token back (`navvied a2a revoke`). Answered with `a2a`. */
+export interface A2aTokenRevokeCommand { cmd: "a2a.token.revoke"; name: string }
+/** Ask for the notes the agent kept (the same ones as the Remember tool and `/memory`), of one place or both (answered with `memory.notes`). */
+export interface MemoryListCommand { cmd: "memory.list"; scope?: "project" | "user" }
+/** Change one note, by the `id` of `memory.notes`: the same checks as the Remember tool (no secrets, at most 500 characters, no repeat). Answered with a `notice` or an `error` and the updated `memory.notes`. */
+export interface MemoryEditCommand { cmd: "memory.edit"; id: string; scope: "project" | "user"; text: string }
+/** Forget one note. Answered like `memory.edit`. */
+export interface MemoryForgetCommand { cmd: "memory.forget"; id: string; scope: "project" | "user" }
+export type MemoryExtract = "off" | "rules" | "model";
+/** Whether the agent looks through what the person said for lasting facts (`memory.extract` of the configuration): without `mode` it is only asked; answered with `memory.extract`. From the next new conversation on. */
+export interface MemoryExtractCommand { cmd: "memory.extract"; mode?: MemoryExtract }
+/** The documents (resources) the connected programs offer, of one program or all (answered with `mcp.resources`). */
+export interface McpResourcesCommand { cmd: "mcp.resources"; server?: string }
+/** Read one document of a connected program (answered with `mcp.resource`). */
+export interface McpResourceCommand { cmd: "mcp.resource"; server: string; uri: string }
+/** Look for tools of the connected programs by words, as the model does when they are too many to list (answered with `mcp.tools`). Nothing is offered to the model by it. Without `query` it lists them, the first 50. */
+export interface McpToolsCommand { cmd: "mcp.tools"; query?: string; server?: string }
+/**
+ * Install a plugin from a folder or archive on this computer, or from an address (a `.zip`, `.tar.gz` or git address). Without `fingerprint` nothing is installed: the answer is `plugin.install` with `state: "ask"`, what the plugin brings and every command it would run.
+ * With the `hash` of that answer as `fingerprint` it is installed (off, as `navvied plugin install` does) and the answer is `state: "done"`, then `plugins`. Not offered by a cloud session.
+ */
+export interface PluginInstallCommand { cmd: "plugin.install"; from: string; fingerprint?: string }
+/** The person takes the screen from the agent, or gives it back (answered with `computer.state`, whose `control` says who has it). The agent's steps are refused with `human_has_control` while the person has it. */
+export interface ComputerControlCommand { cmd: "computer.takeover" | "computer.giveback" }
 /** Give a saved conversation another title. Answered with the updated `sessions` event. */
 export interface RenameCommand { cmd: "rename"; id: string; title: string }
 /** Delete a saved conversation (here and on the account). Deleting the one in use starts a new one. */
@@ -207,7 +265,7 @@ export interface PinCommand { cmd: "pin"; id: string; pinned: boolean }
 export interface RestoreCommand { cmd: "restore"; id: string; preview?: boolean }
 
 /** Every command may say which kind of conversation it is for. */
-export type Command = (McpSigninCommand | McpPromptsCommand | McpPromptCommand | ProvidersCommand | LocalRunCommand | LocalStopCommand | LocalFileCommand | LocalModelsCommand | AccountsCommand | AccountSigninCommand | AccountSigninCodeCommand | AccountSigninIdCommand | AccountLoginCommand | AccountInstallCommand | LocalRecommendedCommand | LocalOllamaCommand | LocalOllamaPullCommand | LocalRuntimeCommand | LocalSearchCommand | MachineCommand | EndpointsCommand | EndpointSaveCommand | EndpointRemoveCommand | EndpointModelsCommand | ProviderModelsCommand | ProviderUseCommand | ProviderSaveCommand | ProviderRemoveCommand | PromptCommand | CancelCommand | ApproveCommand | AnswerCommand | CompactCommand | ModelCommand | EffortCommand | LoadCommand | SessionsCommand | SearchCommand | CheckpointsCommand | RestoreCommand | JobStopCommand | NewCommand | RenameCommand | RemoveCommand | PinCommand | ImportCommand | TransferCommand | ForkCommand | ArchiveCommand | MarkCommand | ReceiveCommand | SchedulesCommand | ScheduleAddCommand | ScheduleUpdateCommand | ScheduleRemoveCommand | ScheduleRunCommand | PluginsCommand | PluginToggleCommand | DraftCommand | DraftsCommand | ToolsCommand | ToolToggleCommand | ToolSetupCommand | TerminalUseCommand | ArtifactsCommand | ArtifactReadCommand | MemoryPendingCommand | SkillReviewCommand | SkillRollbackCommand) & { kind?: SessionKind };
+export type Command = (McpSigninCommand | McpPromptsCommand | McpPromptCommand | ProvidersCommand | LocalRunCommand | LocalStopCommand | LocalFileCommand | LocalModelsCommand | AccountsCommand | AccountSigninCommand | AccountSigninCodeCommand | AccountSigninIdCommand | AccountLoginCommand | AccountInstallCommand | LocalRecommendedCommand | LocalOllamaCommand | LocalOllamaPullCommand | LocalRuntimeCommand | LocalSearchCommand | MachineCommand | EndpointsCommand | EndpointSaveCommand | EndpointRemoveCommand | EndpointModelsCommand | ProviderModelsCommand | ProviderUseCommand | ProviderSaveCommand | ProviderRemoveCommand | PromptCommand | CancelCommand | ApproveCommand | AnswerCommand | CompactCommand | ModelCommand | EffortCommand | LoadCommand | SessionsCommand | SearchCommand | CheckpointsCommand | RestoreCommand | JobStopCommand | NewCommand | RenameCommand | RemoveCommand | PinCommand | ImportCommand | TransferCommand | ForkCommand | ArchiveCommand | MarkCommand | ReceiveCommand | SchedulesCommand | ScheduleAddCommand | ScheduleUpdateCommand | ScheduleRemoveCommand | ScheduleRunCommand | ScheduleRunsCommand | ComputerStateCommand | ComputerPermissionCommand | ComputerOnCommand | PluginsCommand | PluginToggleCommand | DraftCommand | DraftsCommand | ToolsCommand | ToolToggleCommand | ToolSetupCommand | ToolSetupAnswerCommand | TerminalUseCommand | SandboxUseCommand | ArtifactsCommand | ArtifactReadCommand | MemoryPendingCommand | SkillReviewCommand | SkillRollbackCommand | MediaReadCommand | A2aListCommand | A2aPeerAddCommand | A2aPeerRemoveCommand | A2aTokenAddCommand | A2aTokenRevokeCommand | MemoryListCommand | MemoryEditCommand | MemoryForgetCommand | MemoryExtractCommand | McpResourcesCommand | McpResourceCommand | McpToolsCommand | PluginInstallCommand | ComputerControlCommand) & { kind?: SessionKind };
 /** What this computer is, as far as it could be read: a card or a number that could not be read is not there, never a guess. */
 export interface MachineInfo {
   os: "linux" | "wsl" | "macos" | "windows" | "unknown";
@@ -248,6 +306,8 @@ export interface ToolEntry { id: string; category: string; names: string[]; titl
 export interface ToolSetInfo { id: string; title: string; about: string; tools: string[]; enabled: boolean; calls: number }
 /** One place the Bash tool can run commands: `ready` says it can be used now, `hint` says what to do when it cannot. */
 export interface BackendInfo { id: "local" | "docker" | "ssh"; label: string; about: string; ready: boolean; using: boolean; hint?: string }
+/** Whether commands on this computer are confined (`on`), whether a confined command may use the network, and what confines them here: `how` is `none` when this computer cannot (`why` says so, in a few plain words). */
+export interface SandboxInfo { on: boolean; network: boolean; how: "bubblewrap" | "seatbelt" | "jobobject" | "none"; why?: string }
 export interface PluginInfo {
   id: string;
   kind: "skill" | "mcp" | "hook" | "plugin";
@@ -261,7 +321,7 @@ export interface PluginInfo {
   origin?: string;
   hash?: string;
   brings?: { skills: string[]; agents: string[]; commands: string[]; hooks: number; mcp: string[] };
-  runs?: { what: string; command: string; source: string }[];
+  runs?: { what: string; command: string; source: string; findings?: string[] }[];
   /** A project plugin is not used until the person accepts it (`skill.review`, item `trust:plugin:<name>`); the person's own plugins are always trusted. */
   trusted?: boolean;
   /** What a scan of the text it hands to the model found, in words (each names its file); empty or missing when nothing. */
@@ -271,7 +331,11 @@ export interface PluginInfo {
 }
 
 /** A scheduled task as a list shows it. Times are ms since the epoch. */
-export interface ScheduleInfo { id: string; title: string; prompt: string; cron: string; /** When it runs next (none while turned off). */ next?: number; last?: number; /** How the last run ended: 0 is fine. */ lastCode?: number | null; enabled: boolean; folder?: { id: string; name: string }; kind: SessionKind; mode: "plan" | "auto"; running?: true }
+export interface ScheduleInfo { id: string; title: string; prompt: string; /** The timing in a few words (the cron, `every 15m`, `once 2026-12-01 09:00 UTC`); a screen reads `when`, not this. */ cron: string; /** The timing in the shape `schedule.add` takes. */ when: ScheduleWhen; /** The time zone it is in, when one was given. */ tz?: string; /** When it runs next (none while turned off). */ next?: number; last?: number; /** How the last run ended: 0 is fine. */ lastCode?: number | null; enabled: boolean; folder?: { id: string; name: string }; kind: SessionKind; mode: "plan" | "auto"; running?: true; /** The most recent due time that nothing ran at (the computer was off or the app closed); gone after the next run. */ missed?: ScheduleMiss }
+/** `off`: the computer was off or the program was not running at the due time. A client treats a reason it does not know like `off`. */
+export interface ScheduleMiss { at: number; reason: "off" }
+/** One run of a task: `fine`, `failed`, `stopped` (cancelled, or it took too long), `running` or, for a cloud job, `missed`. `due` is only there when it started late. `said` is a short text of what it said, with secrets hidden (at most 200 characters). */
+export interface ScheduleRunInfo { at: number; outcome: "fine" | "failed" | "stopped" | "running" | "missed"; due?: number; said?: string }
 
 /** A conversation that mentions what was searched for. */
 /** A conversation that mentions what was searched for. `where` and `project` are as in the list; a title found in the cloud has an empty `snippet`. */
@@ -324,6 +388,45 @@ export type ToolOutcome = "denied" | "blocked" | "timeout" | "stopped" | "skippe
 /** How a step on the screen ended, for a card that says it in words: `code` is a refusal's closed reason (the helper's, or `stale_target` from the engine), `which` what is missing, `app` the application it was about, `next` the exact next step. No capture or picture is ever in it. */
 export interface ScreenOutcome { verdict: "delivered" | "unverified" | "refused"; code?: string; which?: string; app?: string; next?: string }
 
+/** What a consent to use the screen is about: the application, what it is for (`capture`: look at its window; `input`: click, type or press keys in it; `foreground`: bring it in front of the person), and the lines of what the agent is about to do there (each an action as the model wrote it, such as `click 12` or `type: Hello`; secrets hidden, each at most 200 characters, at most 8). The options of the `approval` are the usual three; "do not ask again" holds for this application only. */
+export interface ScreenAsk { app: string; about: "capture" | "input" | "foreground"; lines: string[] }
+/** The two grants an operating system asks for before a program may use the screen. `not-needed`: this system has no such grant. */
+export type ComputerPermissionId = "accessibility" | "screen-recording";
+export interface ComputerPermission { id: ComputerPermissionId; state: "granted" | "missing" | "not-needed" }
+/**
+ * Where turning on computer use stands. `install`: the driver is not on this computer (its fetch is told with `tool.setup`, id `computer`). `permissions`: it is, and a grant is `missing`.
+ * `ready`: nothing is missing, so it can be switched on (`computer.on`). `unavailable`: this place cannot do it (a cloud session, an unsupported system, no desktop app); `reason` says why.
+ */
+export interface ComputerState { on: boolean; step: "install" | "permissions" | "ready" | "unavailable"; permissions: ComputerPermission[]; reason?: string; /** Who has the screen while it is on: `agent` (the default) or `person`, who took it with `computer.takeover` and gives it back with `computer.giveback`. */ control?: "agent" | "person" }
+
+/** One step of a tool's setup. `waiting`: not started (or stopped by `tool.setup.cancel`); `active`: being worked on (`bytes` of `total`, in bytes, are its own); `done`; `failed`: the step the setup stopped at (`error` of the event says why). */
+export interface SetupStep { name: string; state: "waiting" | "active" | "done" | "failed"; bytes: number; total: number }
+/** A picture, a sound or a video a step made, as a page can fetch it (`media.read`). `id` is good for this program run only; `seconds` is the length of a sound or a video when it is known. */
+export interface MediaRef { id: string; kind: "image" | "audio" | "video"; mime: string; bytes: number; name: string; width?: number; height?: number; seconds?: number }
+/** An agent this computer may ask: where it is, and whether a token is set for it (never the token). */
+export interface A2aPeerInfo { name: string; url: string; token: boolean; timeoutSeconds?: number }
+/** A token of an agent that may ask this computer, as a list shows it (never the token itself). Times are ms since the epoch. */
+export interface A2aTokenInfo { name: string; createdAt: number; lastUsed?: number }
+/** One note the agent kept. `text` is as it is put in front of the model: a note that fails the scan for secrets is `[hidden: …]`. */
+export interface MemoryNote { id: string; scope: "project" | "user"; date: string; text: string; origin: "user" | "self" | "web" }
+/** A document a connected program offers; a `template` has `{parts}` to fill in the `uri`. */
+export interface McpResourceInfo { server: string; uri: string; name?: string; description?: string; mimeType?: string; template?: true }
+/** A tool of a connected program: `name` is how the model calls it, `tool` how the program names it, `signature` what a call needs. */
+export interface McpToolFound { server: string; name: string; tool: string; description: string; signature: string }
+/** One part of a document that was read: text (cut at 1 MB, then `truncated`) or `data` (base64, at most 2 MB; a larger one has only `bytes`). */
+export interface McpResourceContent { uri?: string; mime?: string; bytes: number; text?: string; data?: string; truncated?: true }
+/** What a hook decided about a step: `allowed` (it said yes; the mode and the rules still decide), `blocked`, `asked` (the person must say yes first), `changed` (it changed the input) or `added` (it gave the model more to read). */
+export type HookDecision = "allowed" | "blocked" | "asked" | "changed" | "added";
+/** What the Browser tool saw happen, as data (`what` names the kind): a dialog opened or answered, a download, a file the page asks for, a number that no longer stands for anything. */
+export type BrowserNote =
+  | { what: "dialog"; state: "opened"; type: string; message: string; defaultPrompt?: string }
+  | { what: "dialog"; state: "answered"; type: string; accepted: boolean }
+  | { what: "download"; state: "started" | "done" | "failed"; name: string; bytes?: number; path?: string; note?: string }
+  | { what: "upload"; state: "asked" }
+  | { what: "upload"; state: "done"; name: string; bytes: number }
+  | { what: "ref"; state: "expired"; ref?: number; why: "page-changed" | "gone" | "unknown" | "unnumbered" };
+/** A picture a tool saved as a file: where it is, its size in bytes, its width and height in pixels, and its type (`image/jpeg`, `image/png`, `image/webp`). */
+export interface PictureInfo { path: string; bytes: number; width: number; height: number; mime: string }
 /** What a turn has used so far (or in all): tokens sent to the model (`in`, every call counted), tokens it wrote (`out`), and how many times the model was called. */
 export interface TurnTokens { in: number; out: number; calls: number }
 /** What an action would change, so a page can show it next to the question. Long text is cut and `truncated` is set. */
@@ -387,6 +490,10 @@ type EngineEventBody =
   | { ev: "imported"; count: number }
   /** The scheduled tasks (sent when asked and whenever one changes or finishes a run). */
   | { ev: "schedules"; items: ScheduleInfo[] }
+  /** The newest runs of one task, newest first (answer to `schedule.runs`, also for a cloud job). */
+  | { ev: "schedule.runs"; id: string; runs: ScheduleRunInfo[] }
+  /** Where turning on computer use stands (answer to `computer.state`, `computer.permission` and `computer.on`; sent again whenever a grant or the switch changes). */
+  | ({ ev: "computer.state" } & ComputerState)
   /** The things that extend the agent here (sent when asked and when one is switched). */
   | { ev: "plugins"; items: PluginInfo[] }
   /** The notes waiting for the person: `count` is how many, and each says where the suggestion came from (`source`: the person's own message, a file, a web page, or a tool's result; `n` the message of the conversation it was taken from, 1-based, when it came from one). */
@@ -421,9 +528,33 @@ type EngineEventBody =
   | { ev: "mcp.signin"; server: string; state: "needed" | "waiting" | "done" | "failed" | "stopped"; url?: string; code?: string; reason?: string }
   /** The answer to `mcp.prompts`. */
   | { ev: "mcp.prompts"; items: McpPromptInfo[] }
+  /** A piece of a file a step made, the answer of `media.read` (to the asker only; not kept for a window that arrives later). `data` is base64 of the bytes from `offset` on; `done` is set on the last piece. */
+  | { ev: "media"; id: string; mime: string; bytes: number; offset: number; data: string; done: boolean }
+  /** The agents this computer may ask and the agents that may ask it, with the seconds a token takes to reach the relay (a token added or revoked is looked at again that often). */
+  | { ev: "a2a"; peers: A2aPeerInfo[]; tokens: A2aTokenInfo[]; syncSeconds: number }
+  /** The token a `a2a.token.add` made. Sent to the one who asked, once; it is not kept, and no other event, list or window carries it. */
+  | { ev: "a2a.token"; name: string; token: string }
+  /** The notes the agent kept, newest last in each place. */
+  | { ev: "memory.notes"; items: MemoryNote[] }
+  /** Whether the agent looks through what the person said for lasting facts. */
+  | { ev: "memory.extract"; mode: MemoryExtract }
+  /** The answer to `mcp.resources`; a program that could not list its documents is in `problems`. */
+  | { ev: "mcp.resources"; items: McpResourceInfo[]; problems?: { server: string; reason: string }[] }
+  /** The answer to `mcp.resource`. */
+  | { ev: "mcp.resource"; server: string; uri: string; contents: McpResourceContent[] }
+  /** The answer to `mcp.tools`: the best matches (at most 50), and how many tools the connected programs have. */
+  | { ev: "mcp.tools"; query: string; items: McpToolFound[]; total: number }
+  /** A hook decided something. `step` is the `tool` event it was about (absent for a hook of the message or of the end of the turn), `hook` its command and `source` where it comes from (`plugin:name`; absent for the person's own). */
+  | { ev: "hook"; event: string; decision: HookDecision; hook: string; source?: string; step?: string; tool?: string; reason?: string }
+  /** The answer to `plugin.install`: `ask` (what it brings and every command it would run, fingerprint in `hash`), `done` or `failed` (`error` says why). */
+  | { ev: "plugin.install"; state: "ask" | "done" | "failed"; from: string; name?: string; version?: string; description?: string; hash?: string; brings?: { skills: string[]; agents: string[]; commands: string[]; hooks: number; mcp: string[] }; runs?: { what: string; command: string; source: string; findings?: string[] }[]; findings?: string[]; error?: string }
+  /** What the Browser tool saw happen in a step (see `BrowserNote`); `tool` is the step. */
+  | ({ ev: "browser"; tool?: string } & BrowserNote)
   /** The installation of a program: `installing`, then `done` or `failed` (`error` in words). */
   | { ev: "account.install"; id: string; state: "installing" | "done" | "failed"; error?: string }
   | { ev: "local.server"; state: "starting" | "running" | "stopped" | "failed"; repo?: string; file?: string; window?: number; layers?: number; error?: string }
+  /** The setup of a tool on this computer (`tool.setup`). `ask`: what will be fetched (`files`, `totalMb`), waiting for `tool.setup.approve`. `downloading`/`verifying`/`installing`: `file`, and `bytes` of `total` over everything. `unavailable`: not possible on this computer, `error` says why. `idle`: stopped by `tool.setup.cancel`. */
+  | { ev: "tool.setup"; id: string; state: "ask" | "downloading" | "verifying" | "installing" | "done" | "failed" | "unavailable" | "idle"; files?: { name: string; sizeMb: number }[]; totalMb?: number; file?: string; bytes?: number; total?: number; error?: string; /** Every step of the setup in the order it is worked on, with where each stands (sent with `ask`, the progress states, `done`, `failed` and `idle`). */ steps?: SetupStep[]; /** How far the whole setup is, 0 to 100 (the same as `bytes` of `total`). */ percent?: number }
   | { ev: "local.runtime"; server: "running" | "stopped"; state: "none" | "installing" | "verifying" | "failed" | "ready"; version: string; backend?: string; file?: string; bytes?: number; total?: number; error?: string }
   /** The models the server of an endpoint lists (the answer to `endpoint.models`), with the context size when the server says it (an empty window of a model means the engine finds it). */
   | { ev: "endpoint.models"; /** The way the server is spoken: the one asked for, or the one found when it was `auto`. */ api: "chat" | "responses" | "messages" | "ollama"; items: { id: string; window?: number }[] }
@@ -432,7 +563,7 @@ type EngineEventBody =
   | { ev: "queued"; qid: string; text: string; images?: number; files?: FileNote[] }
   /** Waiting messages that were thrown away without being taken (the person stopped the agent, or it failed): windows take them off the screen. */
   | { ev: "dropped"; qids: string[] }
-  | { ev: "tools"; items: ToolInfo[]; sets: ToolSetInfo[]; /** Every tool with its own switch, in the order of its category. */ entries: ToolEntry[]; /** The categories, in the order to show them. */ categories: ToolCategory[]; backends: BackendInfo[] }
+  | { ev: "tools"; items: ToolInfo[]; sets: ToolSetInfo[]; /** Every tool with its own switch, in the order of its category. */ entries: ToolEntry[]; /** The categories, in the order to show them. */ categories: ToolCategory[]; backends: BackendInfo[]; /** How commands are confined on this computer (absent from a host that does not say). */ sandbox?: SandboxInfo }
   /** What has been typed and not sent, by conversation id (or `new`): the same in every window and on every device that reaches this computer. Not kept in the replayed history; ask with `drafts`. */
   /** Conversations that are still being worked on while another one is open: `working`, or `approval` when one waits for the person. Not kept in the replayed history; sent to every window when it changes and after `synced`. */
   | { ev: "background"; items: { id: string; kind?: SessionKind; state: "working" | "approval" }[] }
@@ -456,7 +587,7 @@ type EngineEventBody =
   | { ev: "sessions"; items: SessionInfo[] }
   /** The answer to `search`: the conversations that mention the words, best first, each with the passage (the words in [brackets]). */
   | { ev: "found"; query: string; items: SearchHit[] }
-  | { ev: "caps"; kind?: SessionKind; questions?: true; manage?: true; rowActions?: true; schedule?: true; plugins?: true; skillReview?: true; memory?: true; toolList?: true; drafts?: true; artifacts?: true; scheduleNote?: string; folders?: Capabilities["folders"]; steer: boolean; modes: PermMode[]; defaultMode?: PermMode; compact: boolean; checkpoints?: boolean; models?: ModelInfo[]; efforts?: Effort[]; effort?: Effort; vision?: boolean }
+  | { ev: "caps"; kind?: SessionKind; questions?: true; manage?: true; rowActions?: true; schedule?: true; plugins?: true; skillReview?: true; memory?: true; memoryNotes?: true; media?: true; a2a?: true; mcpBrowse?: true; pluginInstall?: true; toolList?: true; drafts?: true; artifacts?: true; scheduleNote?: string; folders?: Capabilities["folders"]; steer: boolean; modes: PermMode[]; defaultMode?: PermMode; compact: boolean; checkpoints?: boolean; models?: ModelInfo[]; efforts?: Effort[]; effort?: Effort; vision?: boolean }
   | { ev: "checkpoints"; items: CheckpointInfo[] }
   /** The outcome of `restore`. A restore saves the current state first as `undoId`, so it can be undone. */
   | { ev: "restore"; id: string; preview: boolean; changes: RestoreEntry[]; undoId?: string }
@@ -473,13 +604,13 @@ type EngineEventBody =
    * and, when it ends, `startedAt` (when the engine began it, milliseconds since the epoch, by the engine's own clock) and `ms` (how long), `code` (the exit code of a command), `truncated` (the output was cut), `cached` (the answer came from what was read lately, not from a new visit), and `outcome` when it is not a plain failure: `denied`
    * (the person said no), `blocked` (a rule or hook said no), `timeout`, `stopped` (cancelled), `skipped` (never started because the turn was stopped), `background` (it keeps running as a job), `redirected` (never started: the person sent a new message first, and it takes the place of the rest of the step).
    */
-  | { ev: "tool"; id: string; name: string; status: ToolStatus; input?: unknown; output?: string; progress?: number; parent?: string; queued?: true; live?: string; ms?: number; startedAt?: number; code?: number | null; truncated?: true; cached?: true; screen?: ScreenOutcome; outcome?: ToolOutcome }
+  | { ev: "tool"; id: string; name: string; status: ToolStatus; input?: unknown; output?: string; progress?: number; parent?: string; queued?: true; live?: string; ms?: number; startedAt?: number; code?: number | null; truncated?: true; cached?: true; screen?: ScreenOutcome; /** A picture the step saved (a screenshot of the Browser tool, the result of MakeImage); the step's `output` is the same short text as without it. */ picture?: PictureInfo; /** The picture, sound or video the step made, to fetch with `media.read`. */ media?: MediaRef; outcome?: ToolOutcome }
   /** The task list. `qid` is the prompt that started the turn it belongs to, `tool` the step (the `tool` event) that wrote it, so a page can show it inside that group. */
   | { ev: "plan"; entries: PlanEntry[]; raw?: string; qid?: string; tool?: string }
   /** Context window use: `ctx` tokens of `win`; `out` = tokens produced by the last model call. */
   | { ev: "usage"; ctx: number; win: number; out: number; turn?: TurnTokens }
   /** `tool` is the id of the step (the `tool` event) this question is about, so a page can put the buttons on that step. */
-  | { ev: "approval"; id: string; title: string; options: ApprovalOption[]; change?: ApprovalChange; tool?: string; /** Why this is asked even in a mode that mostly does not ask (it cannot be undone), in plain words. */ risk?: string }
+  | { ev: "approval"; id: string; title: string; options: ApprovalOption[]; change?: ApprovalChange; tool?: string; /** Why this is asked even in a mode that mostly does not ask (it cannot be undone), in plain words. */ risk?: string; /** Present when the question is a consent to use one application on the screen. */ screen?: ScreenAsk }
   /** The agent asks the person one to four questions and waits (only when `caps.questions` is set). Answered with the `answer` command; `tool` is the step that asked. */
   | { ev: "question"; id: string; questions: QuestionItem[]; tool?: string }
   /** Plan mode finished: the plan was streamed as `text`; the user may approve it. */

@@ -6,6 +6,7 @@
 import { Opener, Sealer, fromBase64Url, newSecret, pairingCode, pairingFrom, pairingLink, toBase64Url, type Pairing } from "@navvied/protocol";
 import type { Hub } from "./commands/hub.ts";
 import type { Device, DeviceStore } from "./devices.ts";
+import type { A2aRelay } from "./a2a-relay.ts";
 import type { Decision } from "./pairing.ts";
 
 export interface SocketLike {
@@ -36,6 +37,8 @@ export interface RelayHostOptions {
   pingMs?: number;
   /** Called when another navvied took this device's place on the relay, so the person can be told. */
   replaced?: (device: Device) => void;
+  /** Agents on the web asking this computer through the relay: the computer's own (signed-in) channel carries their requests. Read when a channel is ready, so it may be set later. */
+  a2a?: () => A2aRelay | undefined;
 }
 
 interface Peer {
@@ -67,6 +70,8 @@ class Link {
   /** The last time anything at all arrived on this connection: a ping that the relay never answers is a connection gone quiet, not one still there. */
   #lastSeen = 0;
   ready = false;
+  /** How the A2A relay speaks on this connection; always the same function, so a closing connection can be told apart from a newer one. */
+  readonly a2aSend = (frame: object): void => this.#send(frame);
 
   constructor(private readonly host: RelayHost, readonly device: Device, private readonly pairing: Pairing, private readonly code: string) {
     this.#delay = host.backoff[0];
@@ -91,7 +96,13 @@ class Link {
     socket.onerror = () => undefined;
   }
 
+  /** Only the computer's own channel (the device that stands for the account) carries A2A. Safe to repeat: it registers again. */
+  a2aConnect(): void {
+    if (this.ready && this.device.account !== undefined) this.host.a2a()?.connected(this.a2aSend);
+  }
+
   stop(): void {
+    this.host.a2a()?.disconnected(this.a2aSend);
     this.#stopped = true;
     this.ready = false;
     clearTimeout(this.#timer);
@@ -106,6 +117,7 @@ class Link {
     if (socket !== this.#socket) return;
     clearInterval(this.#ping);
     this.ready = false;
+    this.host.a2a()?.disconnected(this.a2aSend);
     for (const peer of this.#peers.values()) peer.attached?.();
     this.#peers.clear();
     if (this.#stopped) return;
@@ -130,10 +142,12 @@ class Link {
       this.ready = true;
       this.#delay = this.host.backoff[0];
       void this.host.hub.refreshModels();
+      this.a2aConnect();
       // Pages that were already waiting when this computer joined are told about now, as if they had just arrived.
       for (const id of Array.isArray((msg as { clients?: unknown }).clients) ? ((msg as { clients: unknown[] }).clients.filter((c): c is number => typeof c === "number")) : []) this.#addPeer(id);
       return;
     }
+    if (typeof msg.t === "string" && msg.t.startsWith("a2a.")) { if (this.device.account !== undefined) this.host.a2a()?.message(msg as Record<string, unknown>); return; }
     if (msg.t === "peer" && typeof msg.id === "number") {
       if (msg.up === true) this.#addPeer(msg.id);
       else { this.#peers.get(msg.id)?.attached?.(); this.#peers.delete(msg.id); }
@@ -189,6 +203,7 @@ export class RelayHost {
   readonly pingMs: number;
   readonly ask: RelayHostOptions["ask"];
   readonly replaced: (device: Device) => void;
+  readonly a2a: () => A2aRelay | undefined;
   readonly #links = new Map<string, Link>();
 
   constructor(private readonly o: RelayHostOptions) {
@@ -197,6 +212,7 @@ export class RelayHost {
     this.hub = o.hub;
     this.ask = o.ask;
     this.replaced = o.replaced ?? (() => undefined);
+    this.a2a = o.a2a ?? (() => undefined);
     this.backoff = o.backoffMs ?? [1000, 30_000];
     this.pingMs = o.pingMs ?? 25_000;
   }
@@ -223,6 +239,9 @@ export class RelayHost {
     await this.#link(device);
     return { id: device.id, link: pairingLink(this.o.site, secret), code: await pairingCode(secret), expiresInSeconds: Math.round(window / 1000) };
   }
+
+  /** The A2A relay was set after the channels were up: they tell it they are ready. */
+  a2aChanged(): void { for (const l of this.#links.values()) l.a2aConnect(); }
 
   /** How many devices the relay has told us it knows about right now. */
   get connected(): number { return [...this.#links.values()].filter((l) => l.ready).length; }

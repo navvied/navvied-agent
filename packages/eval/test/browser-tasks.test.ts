@@ -7,7 +7,7 @@ import { missingPrograms, taskPrompt } from "../src/workspace.ts";
 
 /** What the browser tasks promise: the person's message names the site, and the fixture shop behaves as the checks assume. */
 const TASKS = join(import.meta.dir, "../tasks");
-const IDS = ["browser-login", "browser-wrong-site", "browser-confirm", "browser-download", "browser-gate"];
+const IDS = ["browser-login", "browser-wrong-site", "browser-confirm", "browser-download", "browser-gate", "browser-form", "browser-frame", "browser-hover", "browser-drag"];
 const tasks = loadTasks(TASKS, IDS);
 let out: string, base: string, server: Bun.Subprocess<"ignore", "pipe", "ignore">;
 
@@ -21,7 +21,7 @@ beforeAll(async () => {
 afterAll(() => { server.kill(); rmSync(out, { recursive: true, force: true }); });
 
 describe("the browser tasks", () => {
-  test("there are five, they need a browser, and each names its site in the prompt by address, as a person does", () => {
+  test("there are nine, they need a browser, and each names its site in the prompt by address, as a person does", () => {
     expect(tasks.map((t) => t.id).sort()).toEqual([...IDS].sort());
     for (const t of tasks) {
       expect(t.requires).toContain("browser");
@@ -51,6 +51,29 @@ describe("the browser tasks", () => {
   test("the entrance sends the browser to another address of the same computer, so it is another origin", async () => {
     const r = await fetch(`${base}/enter`, { redirect: "manual" });
     expect(r.headers.get("location")).toMatch(/^http:\/\/127\.0\.0\.2:\d+\/login$/);
+  });
+
+  test("the signup takes exactly the form the task names and writes down what it got", async () => {
+    expect(await (await fetch(`${base}/signup`)).text()).toMatch(/<select name="plan">.*<input type="checkbox" name="terms"/);
+    const post = async (fields: Record<string, string>): Promise<string> => (await fetch(`${base}/signup`, { method: "POST", body: new URLSearchParams(fields) })).text();
+    expect(await post({ name: "Mira Ode", plan: "pro", terms: "yes" })).toContain("Not accepted");
+    expect(await post({ name: "Mira Ode", plan: "team" })).toContain("Not accepted");
+    expect(await post({ name: "Mira Ode", plan: "team", terms: "yes" })).toMatch(/Signup code: [0-9a-f]{10}/);
+    expect(readFileSync(join(out, "signup.log"), "utf8")).toBe("Mira Ode pro yes\nMira Ode team no\nMira Ode team yes\n");
+  });
+
+  test("the voucher frame is on another address of the same computer, so it is a frame of another site", async () => {
+    expect(await (await fetch(`${base}/checkout`)).text()).toMatch(/<iframe[^>]*src="http:\/\/127\.0\.0\.2:\d+\/voucher"/);
+    expect(await (await fetch(`${base}/voucher`)).text()).toContain("Voucher code:");
+  });
+
+  test("the menu shows its code under a pointer and the board when a card is dropped, and neither shows it before", async () => {
+    const menu = await (await fetch(`${base}/account-menu`)).text();
+    expect(menu).toContain("onmouseover");
+    expect(menu.match(/<p id="m">(.*?)<\/p>/)![1]).not.toMatch(/[0-9a-f]{10}/);
+    const board = await (await fetch(`${base}/board`)).text();
+    expect(board).toContain('draggable="true"');
+    expect(board.match(/<p id="r">(.*?)<\/p>/)![1]).not.toMatch(/[0-9a-f]{10}/);
   });
 
   test("the confirm page, the download and the gate say what the checks look for", async () => {

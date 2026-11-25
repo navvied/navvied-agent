@@ -1,0 +1,17 @@
+{
+  "id": "edit-after-cat",
+  "title": "Edit a file that was read with cat",
+  "kind": "fix",
+  "level": 1,
+  "lang": "ts",
+  "requires": [
+    "bun"
+  ],
+  "prompt": "Look at src/limits.ts with cat, then change the limit to 50 in it. Do not change the tests.",
+  "check": "bun test",
+  "protect": [
+    "tests/**"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 300
+}

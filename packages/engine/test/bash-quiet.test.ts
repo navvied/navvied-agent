@@ -23,13 +23,15 @@ describe("a command that nobody can type to", () => {
     expect(Date.now() - started).toBeLessThan(20_000);
   });
 
-  test.skipIf(!posix)("a command that leaves something running behind it (a trailing &) is answered when the command ends", async () => {
+  test.skipIf(!posix)("a command that ends a statement in & is answered when it ends, and what it started is a job", async () => {
+    const jobs = new Jobs(() => undefined);
     const started = Date.now();
-    const out = await bash.run({ command: "sleep 20 & echo started $!" }, ctx());
-    // Left behind on purpose, so it is ended here: a program still running holds its folder on Windows.
-    try { process.kill(Number(/started (\d+)/.exec(out)?.[1])); } catch { /* already gone */ }
-    expect(out).toContain("started");
+    const out = await bash.run({ command: "sleep 20 & echo after" }, ctx({ jobs }));
+    expect(out).toContain("after");
+    expect(out).toContain("in the background");
+    expect(jobs.list().filter((j) => j.status === "running")).toHaveLength(1);
     expect(Date.now() - started).toBeLessThan(20_000);
+    jobs.close();
   });
 
   test.skipIf(!posix)("git is told not to open an editor or ask for a password", async () => {

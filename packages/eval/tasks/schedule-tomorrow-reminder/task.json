@@ -1,0 +1,14 @@
+{
+  "id": "schedule-tomorrow-reminder",
+  "title": "Schedule a one-time job for tomorrow morning in a time zone",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": ["bun"],
+  "prompt": "Add a scheduled job named standup that runs once, tomorrow at 9 in the morning UTC, and reminds me to prepare the standup notes from this project's README.",
+  "check": "bun \"$BENCH_FIXTURES/schedule-check.ts\" tomorrow",
+  "protect": ["README.md"],
+  "env": { "XDG_STATE_HOME": "{dir}/.state" },
+  "maxSteps": 20,
+  "timeoutSeconds": 120
+}

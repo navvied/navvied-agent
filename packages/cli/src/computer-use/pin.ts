@@ -39,7 +39,7 @@ export const PIN: Pin = {
   bundleId: "com.navvied.agent",
   needs: { click: ["pid", "delivery_mode"], type_text: ["pid", "text", "delivery_mode"] },
   assets: {
-    darwin: { asset: "cua-driver-rs-0.52.0-darwin-universal.tar.gz", sha256: "19e5e652db83cc0324e7a3898ee875b87b265ad7e1c09fd862ef78869480f61d", format: "tar.gz", entry: "CuaDriver.app/Contents/MacOS/cua-driver", signer: apple },
+    darwin: { asset: "cua-driver-rs-0.52.0-darwin-universal.tar.gz", sha256: "19e5e652db83cc0324e7a3898ee875b87b265ad7e1c09fd862ef78869480f61d", format: "tar.gz", entry: "cua-driver-rs-0.52.0-darwin-universal/cua-driver", signer: apple },
     "linux-x86_64": { asset: "cua-driver-rs-0.52.0-linux-x86_64-binary.tar.gz", sha256: "55c99ec4177170b1a440a5efd41e55bacae1e9fe257c96dcd9e5b81ef9085036", format: "tar.gz", entry: "cua-driver", signer: { kind: "none" } },
     "linux-arm64": { asset: "cua-driver-rs-0.52.0-linux-arm64-binary.tar.gz", sha256: "5c7d0a36c0e368fb2847f226ca1435c60bfb79ac3968d9b08a94d82c97da880a", format: "tar.gz", entry: "cua-driver", signer: { kind: "none" } },
     "windows-x86_64": { asset: "cua-driver-rs-0.52.0-windows-x86_64-binary.zip", sha256: "788178cbdcce4de0121f6d04ef6cb5e9d512503371e60a70563aa6f69cdd50af", format: "zip", entry: "cua-driver.exe", signer: windows },

@@ -1,15 +1,16 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { secretsIn } from "../src/redact.ts";
 import { browser } from "../src/tools/browser.ts";
-import { readTree } from "../src/tools/browser/ax.ts";
+import { plain, readTree } from "../src/tools/browser/ax.ts";
 import { hideSecrets, holdsSecret, originOf, originsIn, whyNotHere } from "../src/tools/browser/credentials.ts";
 import { startGuardProxy, type GuardProxy } from "../src/tools/browser/guard-proxy.ts";
 import { web } from "../src/tools/web-guard.ts";
+import { Tab } from "../src/tools/browser/tab.ts";
 import { tree } from "./fake-cdp.ts";
 
 describe("the accessibility tree as text", () => {
   test("what can be used is numbered in reading order with its state, and the rest is read plainly", () => {
-    const { lines, refs } = readTree(tree([
+    const { lines, refs } = readTree(plain(tree([
       ["banner", "", {}, [["link", "Home", { node: 10, url: "https://a.test/" }]]],
       ["main", "", {}, [
         ["heading", "Sign up", { level: 2 }],
@@ -21,7 +22,7 @@ describe("the accessibility tree as text", () => {
         ["button", "Join", { node: 15 }],
         ["img", "A lamp"],
       ]],
-    ]));
+    ])));
     expect(lines).toEqual([
       '[1] link "Home" -> https://a.test/',
       "heading 2: Sign up",
@@ -37,20 +38,20 @@ describe("the accessibility tree as text", () => {
   });
 
   test("ignored nodes say nothing but their content is kept, and a control the browser gave no id for is named but not numbered", () => {
-    const { lines, refs } = readTree(tree([["generic", "", { ignored: true }, [["StaticText", "kept"]]], ["button", "No id"]]));
+    const { lines, refs } = readTree(plain(tree([["generic", "", { ignored: true }, [["StaticText", "kept"]]], ["button", "No id"]])));
     expect(lines).toEqual(["kept", "button: No id"]);
     expect(refs.size).toBe(0);
   });
 
   test("a clickable element the page made focusable and named is a control too", () => {
-    const { lines } = readTree(tree([["generic", "Menu", { node: 5, focusable: true }], ["generic", "", { node: 6, focusable: true }]]));
+    const { lines } = readTree(plain(tree([["generic", "Menu", { node: 5, focusable: true }], ["generic", "", { node: 6, focusable: true }]])));
     expect(lines).toEqual(['[1] generic "Menu"']);
   });
 
   test("a very long name is cut, and a tree with nothing in it gives no lines", () => {
-    const { lines } = readTree(tree([["button", "x".repeat(500), { node: 1 }]]));
+    const { lines } = readTree(plain(tree([["button", "x".repeat(500), { node: 1 }]])));
     expect(lines[0]!.length).toBeLessThan(260);
-    expect(readTree([]).lines).toEqual([]);
+    expect(readTree(plain([])).lines).toEqual([]);
   });
 });
 
@@ -103,9 +104,14 @@ describe("the proxy every connection of the browser goes through", () => {
   const talk = (...parts: string[]): Promise<string> => new Promise((resolve) => {
     let got = "";
     const queue = [...parts];
+    // A write may take only part of what it is given: the rest goes on when the socket can take it.
+    let pending: Buffer = Buffer.alloc(0);
+    const put = (s: { write(b: Buffer): number }): void => { while (pending.length) { const n = s.write(pending); if (n <= 0) return; pending = pending.subarray(n); } };
+    const send = (s: { write(b: Buffer): number }, text: string): void => { pending = Buffer.concat([pending, Buffer.from(text, "latin1")]); put(s); };
     void Bun.connect({ hostname: "127.0.0.1", port: proxy.port, socket: {
-      open(s) { s.write(queue.shift()!); },
-      data(s, d) { got += Buffer.from(d).toString("latin1"); if (queue.length && got.includes("200 Connection Established")) s.write(queue.shift()!); },
+      open(s) { send(s, queue.shift()!); },
+      drain(s) { put(s); },
+      data(s, d) { got += Buffer.from(d).toString("latin1"); if (queue.length && got.includes("200 Connection Established")) send(s, queue.shift()!); },
       close() { resolve(got); },
       error() { resolve(got); },
     } });
@@ -156,6 +162,14 @@ describe("the proxy every connection of the browser goes through", () => {
     expect(await talk(`CONNECT ${"a".repeat(40_000)} HTTP/1.1\r\n`)).toContain("HTTP/1.1 403");
   });
 
+  test("a refusal reaches the browser whole, whatever it was still sending, so it is a refusal and not a reset", async () => {
+    for (let i = 0; i < 12; i++) {
+      const got = await talk(`CONNECT ${"a".repeat(40_000 + i)} HTTP/1.1\r\n`);
+      expect(got, `try ${i}`).toContain("HTTP/1.1 403");
+      expect(got, `try ${i}`).toContain("the request is too large.");
+    }
+  });
+
   test("a request that arrives in pieces is put together, and bytes sent while it is checked are not lost", async () => {
     const got = await new Promise<string>((resolve) => {
       let text = "";
@@ -182,14 +196,19 @@ describe("what the person typed at the end of a sentence", () => {
   });
 });
 
-describe("a refusal belongs to the tab that asked for that host", () => {
-  test("the browser's own background request does not become the reason a page was not opened", async () => {
-    const { Tab } = await import("../src/tools/browser/tab.ts");
-    const tab = new Tab({} as never, "t", "s", async () => undefined);
-    tab.url = "http://public.test:8080/page";
-    tab.refuseHost("www.google.com", "the name www.google.com could not be looked up, so it was not fetched.");
-    expect(tab.refusal).toBe("");
-    tab.refuseHost("PUBLIC.test", "its own");
-    expect(tab.refusal).toBe("its own");
+describe("why a page could not be opened", () => {
+  const tab = (): Tab => new Tab({ send: async () => ({}) } as never, "T", "S", async () => undefined);
+  const asks = (t: Tab, url: string): void => t.handle("Fetch.requestPaused", { requestId: "r", resourceType: "Document", request: { url } });
+
+  test("is the reason for a document the page asked for, or where a redirect of it led, and never one for a request somebody else made", () => {
+    const t = tab();
+    t.refuse("www.google.com", "the name www.google.com could not be looked up");
+    expect(t.refusal).toBe("");
+    asks(t, "http://shop.test/start");
+    expect(t.refusal).toBe("");
+    asks(t, "http://10.0.0.5/inside");
+    t.refuse("10.0.0.5", "opening local or private network addresses is not allowed.");
+    t.refuse("update.googleapis.com", "another stray");
+    expect(t.refusal).toBe("opening local or private network addresses is not allowed.");
   });
 });

@@ -60,7 +60,7 @@ describe("the tool", () => {
 
   test("a small model is not shown its definition but is told its name; a call to it is run", async () => {
     const fake = new FakeComputer(WORLD);
-    const r = rig(script(use("list")), { computer: fake, window: 16_000 });
+    const r = rig(script(use("list")), { computer: fake, window: 16_000, small: true });
     await r.turn(prompt("hello"));
     const first = r.provider.requests[0]!;
     expect(first.tools.map((t) => t.name)).not.toContain("computer");

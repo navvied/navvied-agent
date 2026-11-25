@@ -13,8 +13,8 @@ export interface LocalConfig {
   stt?: { bin: string; model: string; language?: string };
   /** Piper (`model` is the voice, an .onnx file) or Kokoro (`model` and `voices` files, an optional `voice`). */
   tts?: { engine?: "piper" | "kokoro"; bin: string; model: string; voices?: string; voice?: string };
-  /** stable-diffusion.cpp: `bin` is `sd`, `model` a checkpoint. */
-  image?: { bin: string; model: string };
+  /** stable-diffusion.cpp: `bin` is `sd-cli` (or `sd`), `model` a checkpoint; `steps` and `cfg` are the model's own settings (a turbo model needs 1 step and a scale of 1). */
+  image?: { bin: string; model: string; steps?: number; cfg?: number };
   /** The program that cuts sound and frames out of recordings (default: the one on the path). */
   ffmpeg?: string;
 }
@@ -97,7 +97,7 @@ export function diffusion(c: NonNullable<LocalConfig["image"]>): MediaProvider<"
       const size = PICTURE.exec(req.size ?? "512x512");
       if (!size) throw new MediaError(`The size "${req.size}" is not like 512x512.`);
       const out = join(dir, "picture.png");
-      const r = await run([c.bin, "-m", c.model, "-p", asValue(req.prompt), "-o", out, "-W", size[1]!, "-H", size[2]!, ...(req.reference ? ["-i", req.reference] : [])], { cwd: dir, ms: MS.image, signal });
+      const r = await run([c.bin, "-m", c.model, "-p", asValue(req.prompt), "-o", out, "-W", size[1]!, "-H", size[2]!, ...(c.steps ? ["--steps", String(c.steps)] : []), ...(c.cfg !== undefined ? ["--cfg-scale", String(c.cfg)] : []), ...(req.reference ? ["-i", req.reference] : [])], { cwd: dir, ms: MS.image, signal });
       if (r.code !== 0 || !existsSync(out)) throw failed("Drawing the picture", r.code, r.err);
       return { bytes: readFileSync(out), mime: "image/png" };
     }),

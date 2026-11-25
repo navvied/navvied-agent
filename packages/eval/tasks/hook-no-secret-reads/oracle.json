@@ -1,0 +1,21 @@
+[
+  {
+    "tool": "Read",
+    "args": {
+      "file_path": ".env"
+    }
+  },
+  {
+    "tool": "Read",
+    "args": {
+      "file_path": ".env.example"
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "SETTINGS.txt",
+      "content": "DATABASE_URL\nLOG_LEVEL\nPORT\nSTRIPE_KEY\n"
+    }
+  }
+]

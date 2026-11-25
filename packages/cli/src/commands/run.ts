@@ -3,6 +3,7 @@ import { jsonIn, validateJson } from "@navvied/engine";
 import { EventEncoder, type EngineEvent } from "@navvied/protocol";
 import type { Options } from "../args.ts";
 import { createEngine, type EngineExtras } from "../create.ts";
+import { ensureHostedModels } from "../hosted-refresh.ts";
 import type { IO } from "../io.ts";
 import { Renderer } from "../render.ts";
 
@@ -28,12 +29,14 @@ export async function runCommand(prompt: string | undefined, options: Options, i
   /** What the model said after its last tool: the final answer. */
   let answer = "";
   const encoder = new EventEncoder();
-  let failed = false, stop = "end_turn", note = false;
+  let turnOver = false, failed = false, stop = "end_turn", note = false;
   let created: ReturnType<typeof createEngine> | undefined;
 
   const scripted = [...(options.answers ?? [])];
   const emit = (e: EngineEvent): void => {
-    if (e.ev === "text") answer += e.text;
+    // A turn that a finished helper starts has no message of its own: the answer is what the last turn said.
+    if (e.ev === "text") { if (turnOver) answer = ""; turnOver = false; answer += e.text; }
+    if (e.ev === "done") turnOver = true;
     if (e.ev === "tool" && e.status === "running") answer = "";
     if (options.json) io.stdout.write(encoder.encode(e)); else if (!quiet) renderer.handle(e);
     else if (e.ev === "error" || e.ev === "notice") io.stderr.write(`${e.ev === "error" ? "error: " : ""}${e.msg}\n`);
@@ -47,6 +50,7 @@ export async function runCommand(prompt: string | undefined, options: Options, i
     }
   };
 
+  await ensureHostedModels(io, options);
   created = createEngine(options, io, emit, { ...(options.answers ? { attended: () => true } : {}), ...extras });
   if (!created.ok) { io.stderr.write(`error: ${created.error}\n`); return EXIT.usage; }
   const { engine } = created.value;
@@ -57,7 +61,6 @@ export async function runCommand(prompt: string | undefined, options: Options, i
   const off = io.onInterrupt(() => { interrupts += 1; if (interrupts === 1) engine.handle({ cmd: "cancel" }); else force(); });
 
   const ask = async (text: string): Promise<void> => {
-    answer = "";
     engine.handle({ cmd: "prompt", text, qid: crypto.randomUUID(), mode: options.mode ?? "auto", ...(options.effort ? { effort: options.effort } : {}) });
     await Promise.race([engine.idle(), forced]);
   };

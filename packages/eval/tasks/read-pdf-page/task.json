@@ -1,0 +1,15 @@
+{
+  "id": "read-pdf-page",
+  "title": "Find a value on one page of a PDF",
+  "kind": "terminal",
+  "level": 1,
+  "lang": "none",
+  "requires": [],
+  "prompt": "report.pdf has three pages. The access code is on page 3. Write the access code into answer.txt.",
+  "check": "grep -q 'KITE-4471' answer.txt",
+  "protect": [
+    "report.pdf"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 600
+}

@@ -1,13 +1,16 @@
 import type { FileState } from "./tools/file-state.ts";
 import type { ShellState } from "./tools/shell-state.ts";
 import type { Backend } from "./backend.ts";
+import type { Denial } from "./sandbox/denial.ts";
+import type { Sandbox } from "./sandbox/index.ts";
 import type { Jobs } from "./jobs.ts";
 import type { MemoryPaths } from "./memory.ts";
 import type { SkillInfo } from "./skills.ts";
 import type { SkillBook } from "./skill-book.ts";
 import type { Media } from "./media/media.ts";
+import type { MediaFile } from "./media/shelf.ts";
 import type { Need } from "./media/types.ts";
-import type { EngineEvent, PermMode, QuestionItem, ScreenOutcome } from "@navvied/protocol";
+import type { EngineEvent, PermMode, PictureInfo, QuestionItem, ScreenAsk, ScreenOutcome } from "@navvied/protocol";
 import type { Timing } from "./schedule-when.ts";
 import type { PeerAnswer } from "./a2a/client.ts";
 
@@ -26,9 +29,12 @@ export interface Message {
 
 export type JsonSchema = Record<string, unknown>;
 /** The earlier conversations of the person, as a tool may look through them. */
+export interface RecallHit { id: string; title: string; snippet: string; updated: number; n: number }
 export interface Recall {
   /** The conversations that match, best first: the message that matched is `n` (1-based) in the conversation. */
-  search(query: string, limit: number): { id: string; title: string; snippet: string; updated: number; n: number }[];
+  search(query: string, limit: number): RecallHit[] | Promise<RecallHit[]>;
+  /** One plain line for the model when search by meaning is set up and is not working (and why); nothing otherwise. Read after a search. */
+  notice?(): string | undefined;
   /** Every message of one conversation, in order. */
   read(id: string): { k: string; text: string }[] | undefined;
   /** The conversations most recently worked on. */
@@ -58,6 +64,10 @@ export interface ScheduleBackend {
   setEnabled(id: string, enabled: boolean): Promise<ScheduleJob | string>;
   remove(id: string): Promise<true | string>;
   runs(id: string): Promise<ScheduleRun[] | string>;
+  /** Starts the job now, unattended in its stored mode; the result is recorded as a run. */
+  run(id: string): Promise<true | string>;
+  /** Stops the run of the job that is going now. */
+  cancel(id: string): Promise<true | string>;
 }
 export interface ToolSpec { name: string; description: string; parameters: JsonSchema }
 
@@ -151,16 +161,26 @@ export interface ComputerResult {
  * only sends an action and relays the answer. A call that throws or is cut off has an outcome nobody knows.
  */
 export interface ComputerHelper {
-  call(c: ComputerCall, signal?: AbortSignal): Promise<ComputerResult>;
+  call(c: ComputerCall, signal?: AbortSignal, consent?: ComputerConsent): Promise<ComputerResult>;
 }
+
+/**
+ * How a helper asks the person before it uses an application: the engine puts the question to the person's window (an `approval` event whose `screen` names the application and the lines of what is about to happen)
+ * and answers `once` (this step), `app` (this application for the rest of the conversation: the helper remembers it) or `no`. Where nobody can be asked the answer is `no`.
+ */
+export type ComputerConsent = (ask: { app: string; about: "capture" | "input" | "foreground" }) => Promise<"once" | "app" | "no">;
 
 export interface ToolContext {
   /** A tool that frames its own text from outside says so here, so the rest of the turn is judged knowing it was read. */
   outside?: (text: string) => void;
   /** The helper that drives this computer's screen (when computer use is on). */
   computer?: ComputerHelper;
-  /** This result is kept out of the saved conversation, the step's card and the hooks: they get `note` instead, and any picture shown with it is dropped the same way. The model has the full text for the rest of the turn, until a newer one replaces it. */
-  keepOut?: (note: string) => void;
+  /** Asks the person to allow the step in hand to use an application (for the helper of the screen). */
+  /** The folder a tool keeps what it makes (its pictures) in, one for each tool; none where nothing may be kept. */
+  folder?: (tool: string) => string;
+  consent?: (ask: ScreenAsk) => Promise<"once" | "app" | "no">;
+  /** This result is kept out of the saved conversation, the step's card and the hooks: they get `note` instead, and any picture shown with it is dropped the same way. The model has the full text for the rest of the turn, until a newer one of the same `kind` (none: the screen's) replaces it. */
+  keepOut?: (note: string, kind?: string) => void;
   /** Something a tool keeps for the rest of the conversation (a program it started): made the first time, closed when the conversation ends. */
   keep?: <T extends { close(): void }>(key: string, make: () => T) => T;
   /** What this conversation has read or written of files: the tools that change a file check it. */
@@ -189,6 +209,10 @@ export interface ToolContext {
   env?: NodeJS.ProcessEnv;
   /** Where Bash runs its commands (on this computer when it is not set). */
   backend?: Backend;
+  /** Confines the commands that run on this computer (see sandbox/). Not set: they run as they are. */
+  sandbox?: Sandbox;
+  /** This one command runs outside the sandbox: the person allowed it after the sandbox stopped it. */
+  unconfined?: true;
   /** The person's earlier conversations, for the Recall tool. */
   recall?: Recall;
   /** A search server to use instead of the public search page. */
@@ -214,7 +238,7 @@ export interface ToolContext {
   /** What a command printed, as it prints (the engine passes it on, a little at a time). */
   live?: (chunk: string) => void;
   /** Facts about how the work ended, for the step's card: the exit code, that the output was cut, that it timed out, or that it went on as a job. */
-  report?: (meta: { code?: number | null; truncated?: boolean; timedOut?: boolean; background?: boolean; cached?: boolean; /** How a step on the screen ended, for the card. */ screen?: ScreenOutcome }) => void;
+  report?: (meta: { code?: number | null; truncated?: boolean; timedOut?: boolean; background?: boolean; cached?: boolean; /** The sandbox stopped the command at this path (see sandbox/denial.ts). */ denied?: Denial; /** How a step on the screen ended, for the card. */ screen?: ScreenOutcome; /** A picture the step saved as a file. */ picture?: PictureInfo; /** A picture, sound or video the step made, for a page to fetch (`media.read`): the engine checks the file and gives it an id. */ media?: MediaFile }) => void;
   /** Runs another tool as if the model had called it: the same checks, approvals and secret hiding. For a tool that is a program calling tools. `ok` is false when the call was refused or failed. */
   call?: (name: string, args: Record<string, unknown>) => Promise<{ ok: boolean; text: string }>;
   /** Runs a research task in a helper of its own and returns what it found. */

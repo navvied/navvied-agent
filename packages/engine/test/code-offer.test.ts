@@ -123,7 +123,7 @@ describe("the tool in the list of an engine that has it switched on", () => {
   });
 
   test("a small model never gets it, however much it reads", async () => {
-    const r = rig((_q, n) => (n === 0 ? { calls: Array.from({ length: 12 }, (_, i) => call(i)) } : { text: "ok" }), { ...tools(records(10_000)), window: SMALL_WINDOW });
+    const r = rig((_q, n) => (n === 0 ? { calls: Array.from({ length: 12 }, (_, i) => call(i)) } : { text: "ok" }), { ...tools(records(10_000)), window: SMALL_WINDOW, small: true });
     await r.turn(prompt("for each of the 40 records get it"));
     for (let i = 0; i < r.provider.requests.length; i++) expect(offered(r, i)).toBe(false);
     r.cleanup();

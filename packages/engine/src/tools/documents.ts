@@ -11,10 +11,11 @@ export const DOCUMENT_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx", ".odt", "
 
 const ROWS = 500;
 
-export interface Entry { name: string; method: number; size: number; offset: number }
+/** `size` is the stored (compressed) size; `usize` the size once unpacked; `unixMode` is set when the file was made on a Unix-like system. */
+export interface Entry { name: string; method: number; size: number; usize: number; offset: number; flags: number; unixMode?: number }
 
-/** The files in a zip, read from its central directory. */
-export function zipEntries(buf: Buffer): Entry[] {
+/** The files in a zip, read from its central directory. With `strict`, a directory that is cut short or that needs zip64 is an error, not a shorter list. */
+export function zipEntries(buf: Buffer, strict = false): Entry[] {
   let end = -1;
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 66_000); i--) if (buf.readUInt32LE(i) === 0x06054b50) { end = i; break; }
   if (end < 0) throw new Error("this is not a document file (no zip directory)");
@@ -23,9 +24,11 @@ export function zipEntries(buf: Buffer): Entry[] {
   const out: Entry[] = [];
   for (let i = 0; i < count && at + 46 <= buf.length && buf.readUInt32LE(at) === 0x02014b50; i++) {
     const nameLen = buf.readUInt16LE(at + 28), extra = buf.readUInt16LE(at + 30), comment = buf.readUInt16LE(at + 32);
-    out.push({ name: buf.toString("utf8", at + 46, at + 46 + nameLen), method: buf.readUInt16LE(at + 10), size: buf.readUInt32LE(at + 20), offset: buf.readUInt32LE(at + 42) });
+    const host = buf.readUInt8(at + 5), attrs = buf.readUInt32LE(at + 38);
+    out.push({ name: buf.toString("utf8", at + 46, at + 46 + nameLen), method: buf.readUInt16LE(at + 10), size: buf.readUInt32LE(at + 20), usize: buf.readUInt32LE(at + 24), offset: buf.readUInt32LE(at + 42), flags: buf.readUInt16LE(at + 8), ...(host === 3 ? { unixMode: attrs >>> 16 } : {}) });
     at += 46 + nameLen + extra + comment;
   }
+  if (strict && (out.length !== count || count === 0xffff)) throw new Error("the zip directory is damaged or too large");
   return out;
 }
 

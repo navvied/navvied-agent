@@ -9,6 +9,7 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { PermMode } from "@navvied/protocol";
 import { defaultTools, type Skill, type Tool } from "@navvied/engine";
+import { addToken, revokeToken } from "../a2a-admin.ts";
 import { DEFAULT_LIMITS, type A2aConfig } from "../a2a-config.ts";
 import { engineRunner } from "../a2a-runner.ts";
 import { startA2aServer, type A2aServer } from "../a2a-server.ts";
@@ -91,13 +92,14 @@ export function a2aCommand(text: string | undefined, io: IO): number {
   const [verb, name] = (text ?? "").trim().split(/\s+/);
   const tokens = new PeerTokens(a2aTokensPath(io.env));
   if (verb === "add" && name) {
-    const made = tokens.add(name);
+    const made = addToken(tokens, name);
     if (!made.ok) { io.stderr.write(`error: ${made.error}\n`); return EXIT.usage; }
-    io.stdout.write(`Token for ${name}. It is shown only now; give it to that agent and keep it private.\n\n  ${made.token}\n`);
+    io.stdout.write(`Token for ${name}. It is shown only now; give it to that agent and keep it private.\n\n  ${made.value.token}\n`);
     return EXIT.ok;
   }
   if (verb === "revoke" && name) {
-    if (tokens.revoke(name) === undefined) { io.stderr.write(`error: no agent is called "${name}"\n`); return EXIT.usage; }
+    const gone = revokeToken(tokens, name);
+    if (!gone.ok) { io.stderr.write(`error: ${gone.error}\n`); return EXIT.usage; }
     io.stdout.write(`The token of ${name} no longer works.\n`);
     return EXIT.ok;
   }

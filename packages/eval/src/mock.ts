@@ -152,6 +152,9 @@ export function startMock(tasks: readonly Task[], behaviour: Behaviour | ((task:
       // A helper is asked with the tools that only read: it answers with what the task says it found.
       const tools = ((body as { tools?: { function?: { name?: string } }[] }).tools ?? []).map((t) => t.function?.name);
       const helper = task && !tools.includes("Write") ? task.oracle?.helpers?.find((h) => JSON.stringify(messages).includes(h.prompt)) : undefined;
+      // A connected program that asks for a model answer is sent no tools and none of the task: a model that follows repeats the code it was asked for.
+      const asked = !task && !tools.length ? /CODE-\w+/.exec(JSON.stringify(messages.at(-1)))?.[0] : undefined;
+      if (asked) return sse([{ choices: [{ delta: { content: asked } }] }, { choices: [{ delta: {}, finish_reason: "stop" }] }, { choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: 3 } }]);
       const rounds = task && !helper ? roundsFor(task, how, leaves, results) : [];
       let used = 0;
       const round = rounds.find((r) => (used += r.length) > results.length);

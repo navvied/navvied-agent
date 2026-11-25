@@ -1,0 +1,17 @@
+{
+  "id": "memory-note-chinese",
+  "title": "Find the note for a question in Chinese, among many notes",
+  "kind": "terminal",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "bun"
+  ],
+  "prompt": "数据库什么时候迁移？请看这个项目记住的笔记，把答案写进 ANSWER.txt，单独一行。",
+  "check": "test \"$(tr -d '[:space:]' < ANSWER.txt)\" = \"周五\" && bun \"$BENCH_FIXTURES/skills-check.ts\" cjk-found",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 600
+}

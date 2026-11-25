@@ -3,7 +3,9 @@ import { extname } from "node:path";
 import { classifyFile } from "@navvied/protocol";
 import type { Tool, ToolContext } from "../types.ts";
 import { DOCUMENT_EXTENSIONS, pageBlock, pdfPagesAt, readDocument } from "./documents.ts";
+import { fit } from "../media/fit.ts";
 import { hashFile, hashOf } from "./file-state.ts";
+import { mediaOf, showPages, withScratch } from "./page-images.ts";
 import { renderNotebook } from "./notebook.ts";
 import { bomOf } from "./text-file.ts";
 import { lineCount } from "./write.ts";
@@ -66,13 +68,14 @@ function numbered(content: string, offset: number, limit: number): string {
   return clip(shown + (rest > 0 ? `\n… [${rest} more lines — raise offset to continue]` : ""));
 }
 
-function picture(path: string, bytes: Buffer, ctx: ToolContext): string | undefined {
+async function picture(path: string, bytes: Buffer, ctx: ToolContext): Promise<string | undefined> {
   const kind = classifyFile(bytes);
   if (kind.kind !== "image") return undefined;
   if (bytes.length > MAX_IMAGE_BYTES) return `Error: ${path} is a picture of ${bytes.length} bytes, too large to show. Make a smaller copy (for example with a shell command) and read that.`;
   if (ctx.vision === false || !ctx.show) return `${path} is a picture (${kind.mime}, ${bytes.length} bytes). This model cannot see pictures, so it is not shown.`;
-  ctx.show({ type: "image", mime: kind.mime, data: bytes.toString("base64") });
-  return `${path} is a picture (${kind.mime}, ${bytes.length} bytes), shown to you in the next message.`;
+  const image = await withScratch((dir) => fit(mediaOf(ctx).shrinker(), path, bytes, dir, ctx.signal));
+  ctx.show({ type: "image", mime: image.mime, data: image.data });
+  return `${path} is a picture (${kind.mime}, ${bytes.length} bytes${image.smaller ? ", made smaller" : ""}), shown to you in the next message.`;
 }
 
 export const read: Tool = {
@@ -115,8 +118,8 @@ export const read: Tool = {
       return clip(w.lines.map((l, i) => gutter(offset + i, l)).join("\n") + (w.more ? `\n… [more lines follow — raise offset to ${offset + w.lines.length} to continue]` : ""));
     }
     const bytes = readFileSync(path);
-    if (!document && ext !== ".ipynb" && (IMAGES.has(ext) || (bytes.includes(0) && !bomOf(bytes)))) { const shown = picture(path, bytes, ctx); if (shown) { seen(bytes, 0); return shown; } }
-    let content: string;
+    if (!document && ext !== ".ipynb" && (IMAGES.has(ext) || (bytes.includes(0) && !bomOf(bytes)))) { const shown = await picture(path, bytes, ctx); if (shown) { seen(bytes, 0); return shown; } }
+    let content: string, drawn = "";
     if (ext === ".pdf") {
       let all: string[];
       try { all = pdfPagesAt(bytes, path); } catch (e) { return `Error: ${path}: ${e instanceof Error ? e.message : "could not be read"}.`; }
@@ -124,6 +127,8 @@ export const read: Tool = {
       if (typeof wanted === "string") return wanted;
       const chosen = wanted.slice(0, MOST_PAGES);
       const more = pages ? wanted.length - chosen.length : all.length - chosen.length;
+      // Page images are drawn only for pages that were asked for by number, and only for a model that sees; the text is always there.
+      if (pages && ctx.vision !== false && ctx.show) drawn = await showPages(ctx, path, chosen);
       content = `PDF of ${all.length} page${all.length === 1 ? "" : "s"}${chosen.length < all.length ? `; pages ${chosen[0]}-${chosen.at(-1)} follow${more > 0 ? `, ${more} more not shown: ask for them with pages "${chosen.at(-1)! + 1}-${Math.min(all.length, chosen.at(-1)! + MOST_PAGES)}"` : ""}` : ""}\n${chosen.map((p) => pageBlock(p, all[p - 1]!.trim())).join("\n\n")}`;
     } else if (document) {
       const doc = readDocument(path, bytes);
@@ -137,6 +142,6 @@ export const read: Tool = {
     }
     const out = numbered(content, offset, limit);
     seen(bytes, Math.min(limit, lineCount(content) - offset + 1));
-    return out;
+    return drawn ? `${out}\n${drawn}` : out;
   },
 };

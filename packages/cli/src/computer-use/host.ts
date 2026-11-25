@@ -72,6 +72,8 @@ export class DriverHost {
   private client?: McpClient;
   private stopping = false;
   private generation = 0;
+  private gone: Promise<void> = Promise.resolve();
+  private last?: Child;
 
   constructor(private i: HostInput) {}
 
@@ -83,8 +85,10 @@ export class DriverHost {
     const { i } = this;
     const env = driverEnv(i.env, i.pin);
     const path = socketPath(i.platform, i.stateDir, i.pid);
-    const daemon = this.daemon = i.spawn(i.entry, ["serve", "--embedded", "--socket", path, "--parent-liveness-stdio"], env);
-    daemon.onExit(() => { if (gen === this.generation && !this.stopping) { this.stopping = true; i.onStopped?.(true); this.drop(); } });
+    const daemon = this.daemon = this.last = i.spawn(i.entry, ["serve", "--embedded", "--socket", path, "--parent-liveness-stdio"], env);
+    let exited!: () => void;
+    this.gone = new Promise<void>((r) => { exited = r; });
+    daemon.onExit(() => { exited(); if (gen === this.generation && !this.stopping) { this.stopping = true; i.onStopped?.(true); this.drop(); } });
 
     const until = Date.now() + (i.readyMs ?? 10_000);
     let ready = false;
@@ -125,6 +129,17 @@ export class DriverHost {
     this.stopping = true;
     this.drop();
     this.i.onStopped?.(false);
+  }
+
+  /** Stops, then waits for the daemon to be gone (it ends when its input does) and ends it by force if it is not gone in time: for a program that is about to exit and would leave it behind. */
+  async close(graceMs = 3000): Promise<void> {
+    const gone = this.gone, daemon = this.last;
+    this.stop();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<"late">((r) => { timer = setTimeout(() => r("late"), graceMs); });
+    const result = await Promise.race([gone.then(() => "gone" as const), late]);
+    clearTimeout(timer);
+    if (result === "late") daemon?.kill();
   }
 
   get running(): McpClient | undefined { return this.client; }

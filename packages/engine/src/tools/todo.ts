@@ -42,11 +42,17 @@ export function unfinished(entries: readonly PlanEntry[]): string {
 export const STALE_AFTER_STEPS = 6;
 export const staleNote = (steps: number): string => `[Reminder: your task list has not been updated for ${steps} steps. If an item is done, mark it completed with TodoWrite; start the next one as in_progress.]`;
 
+/** The least items a list in one sentence has to count as several parts, and the least length of an item in bytes, so a character of Chinese counts for more than one of English (so "in app.py, line 3, change it" is not a list). */
+const SEVERAL = 3, ITEM = 12;
+/** Whether one sentence of the request lists several things to do, split by commas or semicolons (so it reads the same in any language). Separate sentences are not counted: they are often one task and its limits. */
+export const hasSeveralParts = (text: string): boolean =>
+  text.split(/\n|[。！？]|[.!?]+(?:\s|$)/).some((sentence) => sentence.split(/[;；,，、]/).filter((p) => Buffer.byteLength(p.trim()) >= ITEM).length >= SEVERAL);
+
 export const todo: Tool = {
   name: TODO_TOOL_NAME,
   readOnly: true,
-  /** Work that is long or listed: after a few steps of it, or when the request is long or a list. Not for small models. */
-  offeredWhen: ({ small, userText, steps }) => !small && ((steps ?? 0) >= 4 || userText.length > 400 || /(^|\n)\s*(\d+[.)]|[-*])\s/.test(userText)),
+  /** Work that is long or listed: from the first step when the request has several parts or is long or a list, else after a few steps of it. Not for small models. */
+  offeredWhen: ({ small, userText, steps }) => !small && ((steps ?? 0) >= 4 || userText.length > 400 || /(^|\n)\s*(\d+[.)]|[-*])\s/.test(userText) || hasSeveralParts(userText)),
   description: "Keep a task list for work in several steps. Send the whole list each time. Exactly one item in_progress; mark it completed as soon as it is done.",
   parameters: {
     type: "object",

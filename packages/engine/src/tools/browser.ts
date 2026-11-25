@@ -1,13 +1,14 @@
 import { statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import type { Tool, ToolContext } from "../types.ts";
 import { isPrivateHost } from "./web-fetch.ts";
 import { untrusted } from "./untrusted.ts";
 import { num, place, str } from "./util.ts";
 import { holdsSecret, hideSecrets, originOf, whyNotHere, type Credentials } from "./browser/credentials.ts";
 import { describeReading, describeView, shoot } from "./browser/page.ts";
+import { keepPicture } from "./picture-file.ts";
 import { Session } from "./browser/session.ts";
-import { DialogOpen, KEY_NAMES, RefError, type Tab } from "./browser/tab.ts";
+import { DialogOpen, KEY_NAMES, RefError, type Point, type Tab } from "./browser/tab.ts";
 import { findChrome } from "./browser/launch.ts";
 import type { Ref } from "./browser/ax.ts";
 
@@ -48,7 +49,17 @@ const QUESTIONS = {
 /** The text of what a tool must hand the model right away: a trusted line of ours, then what the page said inside its frame. */
 const said = (note: string, page?: string): string => (page ? `${note}\n\n${page}` : note);
 
-const dialogNote = (d: NonNullable<Tab["dialog"]>): string =>
+/**
+ * The page the model was just given takes the place of the one it was given before of the same tab: a long visit does not fill the window
+ * with stale text. What stays of an old page is a short note, with the host only, since the rest of an address is the page's to write.
+ */
+function supersede(ctx: ToolContext, s: Session, tab: Tab, reading: string): void {
+  let host = "";
+  try { host = new URL(tab.url).host; } catch { /* no address yet */ }
+  ctx.keepOut?.(`[page of tab ${s.tabs.indexOf(tab) + 1}${host ? ` (${host})` : ""} was shown to the model only: ${reading.split("\n").length} lines]`, `browser:${tab.targetId}`);
+}
+
+const dialogNote =(d: NonNullable<Tab["dialog"]>): string =>
   said(`A ${d.type} dialog is open on the page, and nothing else works until it is answered: Browser {"action": "dialog", "accept": true or false${d.type === "prompt" ? ', "text": the answer' : ""}}.`, untrusted("browser", `${d.message}${d.defaultPrompt ? `\n(default answer: ${d.defaultPrompt})` : ""}`));
 
 async function pageOrigin(tab: Tab): Promise<string | undefined> {
@@ -69,25 +80,51 @@ async function challenge(tab: Tab, ctx: ToolContext): Promise<string> {
   return `\nThis page asks for ${what}. The person was asked: ${answer}${kind === "captcha" ? "\nDo not try to solve the check yourself." : ""}`;
 }
 
-const ACTIONS = ["open", "read", "click", "type", "choose", "press", "scroll", "back", "screenshot", "dialog", "tabs", "switch", "new", "close", "wait", "upload", "console", "eval"];
+const ACTIONS = ["open", "read", "click", "hover", "drag", "type", "fill", "choose", "press", "scroll", "back", "screenshot", "dialog", "tabs", "switch", "new", "close", "wait", "upload", "console", "eval"];
+const NUMBERS = ["ref", "tab", "offset", "seconds", "x", "y", "to", "x2", "y2"];
+
+/** Controls to fill in as the model writes them: an object of number to text, or a list of {ref, text}, or either as JSON text. */
+function fieldList(v: unknown): [number, string][] | undefined {
+  let value = v;
+  if (typeof value === "string") { try { value = JSON.parse(value); } catch { return undefined; } }
+  const pairs: [unknown, unknown][] = Array.isArray(value) ? value.map((f) => [f?.ref, f?.text ?? f?.value]) : value && typeof value === "object" ? Object.entries(value) : [];
+  const list = pairs.map(([k, t]): [number, string] => [Number(k), typeof t === "string" ? t : t === undefined || t === null ? "" : String(t)]);
+  return list.length && list.length <= 30 && list.every(([n]) => Number.isInteger(n)) ? list : undefined;
+}
+
+/** What a control of a form is, and where it is, before anything is put in it. */
+interface Probe { password: boolean; origin: string; kind: "list" | "check" | "text" }
+const PROBE = "function () { return { password: this.type === 'password', origin: location.origin, kind: this.options ? 'list' : this.type === 'checkbox' || this.type === 'radio' ? 'check' : 'text' }; }";
+const CHOOSE = `function (want) { if (!this.options) return "not a list"; const o = [...this.options].find((x) => x.text.trim().toLowerCase() === want.toLowerCase() || x.value === want); if (!o) return "none"; this.value = o.value; this.dispatchEvent(new Event("input", { bubbles: true })); this.dispatchEvent(new Event("change", { bubbles: true })); return "ok"; }`;
+const CHECK = `function (expected, text) { if (location.origin !== expected) return "moved"; const want = !/^(false|no|off|unchecked|0|)$/i.test(text.trim()); if (this.checked !== want) this.click(); return "ok"; }`;
+const WRITE = `function (expected, text) {
+  if (location.origin !== expected) return "moved";
+  this.scrollIntoView({ block: "center" }); this.focus();
+  if ("value" in this) { const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(this), "value")?.set; if (set) set.call(this, text); else this.value = text; }
+  else if (this.isContentEditable) { document.execCommand("selectAll"); document.execCommand("insertText", false, text); }
+  else return "not a field";
+  this.dispatchEvent(new Event("input", { bubbles: true })); this.dispatchEvent(new Event("change", { bubbles: true })); return "ok";
+}`;
+const LINK_AT = `((x, y) => { const a = document.elementFromPoint(x, y)?.closest("a[href]"); return a ? a.href : ""; })`;
 
 export const browser: Tool = {
   name: "Browser",
   readOnly: false,
-  offeredWhen: ({ userText }) => !!(findChrome() || process.env.NAVVIED_BROWSER_ENDPOINT) && /https?:\/\/|\bbrowse|\bbrowser\b|web ?(site|page)|\bonline\b|\blog ?in\b|\bsign ?in\b|\bscreenshot\b|\bclick\b|\bsite\b/i.test(userText),
-  description: "Use a real web browser. Read the page as numbered text, then act by number; numbers expire when the page changes. Actions: open (url), read, click, type (ref, text, submit), choose (ref, text), press (text: key), scroll (direction), back, screenshot, dialog (accept, text), tabs, switch/new/close (tab, url), wait (text, selector, seconds), upload (ref, path), console, eval (text). A login the person gave may be typed on the site they named.",
+  offeredWhen: ({ userText }) => !!(findChrome() || process.env.NAVVIED_BROWSER_ENDPOINT) && /https?:\/\/|\bbrowse|\bbrowser\b|web ?(site|page)|\bonline\b|\blog ?in\b|\bsign ?in\b|\bscreenshot\b|\bclick\b|\bhover\b|\bdrag\b|\biframe\b|\bsite\b/i.test(userText),
+  description: "Use a real web browser. Read the page as numbered text (frames too), then act by number; numbers expire when the page changes. Actions: open (url), read, click/hover (ref, or x y of the last screenshot), drag (ref or x y, to or x2 y2), type (ref, text, submit), fill (fields), choose (ref, text), press (text: key), scroll (direction), back, screenshot, dialog (accept, text), tabs, switch/new/close (tab, url), wait (text, selector, seconds), upload (ref, path), console, eval (text). A login the person gave may be typed on the site they named.",
   parameters: {
     type: "object",
     properties: {
       action: { type: "string", enum: ACTIONS },
-      url: { type: "string" }, ref: { type: "number", description: "the number on a control" }, text: { type: "string" },
-      offset: { type: "number", description: "with read: characters already read" }, submit: { type: "boolean" }, direction: { type: "string", enum: ["up", "down"] },
-      tab: { type: "number" }, accept: { type: "boolean" }, selector: { type: "string" }, seconds: { type: "number" }, path: { type: "string", description: "file to upload; folder for downloads" },
+      url: { type: "string" }, ref: { type: "number" }, text: { type: "string" }, fields: { type: "object", description: "ref: text" },
+      offset: { type: "number", description: "read from" }, submit: { type: "boolean" }, direction: { type: "string", enum: ["up", "down"] },
+      tab: { type: "number" }, accept: { type: "boolean" }, selector: { type: "string" }, seconds: { type: "number" }, path: { type: "string", description: "upload file; download folder" },
+      x: { type: "number" }, y: { type: "number" }, to: { type: "number" }, x2: { type: "number" }, y2: { type: "number" },
     },
     required: ["action"],
   },
   // A small model writes numbers as text ("3"): the tool takes them as numbers.
-  fixArgs: (a) => Object.fromEntries(Object.entries(a).map(([k, v]) => [k, ["ref", "tab", "offset", "seconds"].includes(k) && typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)) ? Number(v) : v])),
+  fixArgs: (a) => Object.fromEntries(Object.entries(a).map(([k, v]) => [k, NUMBERS.includes(k) && typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)) ? Number(v) : v])),
   title: (a) => (str(a.action) === "open" ? `Open ${str(a.url)}` : `Browser: ${str(a.action)}${a.ref !== undefined ? ` ${a.ref}` : ""}`),
 
   async run(a, ctx) {
@@ -109,13 +146,14 @@ export const browser: Tool = {
       if (!session || session.closed) session = await Session.open(chrome);
       const s = session;
       s.allowPrivate = ctx.allowPrivateNetwork;
+      s.say = (note) => ctx.emit({ ev: "browser", ...note });
       s.touch();
       let tab = s.current;
       const folder = place(ctx, str(a.path) && action !== "upload" ? a.path : join(ctx.cwd, "downloads"));
       const downloadMark = s.downloads.length;
 
       // A secret the person gave goes to the site they named and nowhere else: not typed, not put in an address, not run in a script.
-      if (cred && ["open", "new", "type", "eval", "wait", "press"].includes(action) && holdsSecret([a.text, a.url, a.selector].map((v) => str(v)).join("\n"), cred)) {
+      if (cred && ["open", "new", "type", "fill", "eval", "wait", "press"].includes(action) && holdsSecret([a.text, a.url, a.selector, ...(fieldList(a.fields) ?? []).map(([, t]) => t)].map((v) => str(v)).join("\n"), cred)) {
         const where = url ? originOf(url.href) : await pageOrigin(tab).catch(() => undefined);
         const why = whyNotHere(where, cred);
         if (why) return why;
@@ -134,45 +172,85 @@ export const browser: Tool = {
         if (!tab.dialog) return "There is no dialog open.";
         const was = tab.dialog;
         await tab.send("Page.handleJavaScriptDialog", { accept: a.accept !== false, ...(a.text !== undefined ? { promptText: str(a.text) } : {}) });
+        s.say({ what: "dialog", state: "answered", type: was.type, accepted: a.accept !== false });
         await tab.settle();
-        return out(said(`The ${was.type} dialog was ${a.accept === false ? "dismissed" : "accepted"}.`, describeReading(await tab.read(), ctx.window)));
+        const reading = await tab.read();
+        supersede(ctx, s, tab, reading);
+        return out(said(`The ${was.type} dialog was ${a.accept === false ? "dismissed" : "accepted"}.`, describeReading(reading, ctx.window)));
       }
       if (tab.dialog && !["console", "switch", "new"].includes(action)) return out(dialogNote(tab.dialog));
 
       await s.downloadsTo(folder);
       let note = "";
       const numbered = (): Promise<Ref> => tab.ref(Math.floor(num(a.ref, 0)));
+      // What an action is aimed at: a control by its number, or a place in the last picture of the window.
+      const target = async (ref: unknown, x: unknown, y: unknown): Promise<{ ref: Ref } | { point: Point } | string> => {
+        if (ref !== undefined) return { ref: await tab.ref(Math.floor(num(ref, 0))) };
+        if (typeof x !== "number" || typeof y !== "number") return "Error: say what to aim at: ref, the number of a control, or x and y, a place in the last screenshot.";
+        const point = tab.fromShot(x, y);
+        return point ? { point } : `Error: ${x}, ${y} is outside the last screenshot${tab.shot ? ` (${tab.shot.width} x ${tab.shot.height})` : ""}.`;
+      };
+      const spot = (t: { ref: Ref } | { point: Point }): Promise<Point | undefined> => ("ref" in t ? tab.point(t.ref) : Promise.resolve(t.point));
+      // A password field takes text only on a site the person named, whatever the text is.
+      const barred = (probe: Probe, text: string): string | undefined => (probe.password || holdsSecret(text, cred) ? whyNotHere(originOf(probe.origin), cred) : undefined);
+      const put = (ref: Ref, probe: Probe, text: string): Promise<string | undefined> =>
+        tab.onElement<string>(ref, probe.kind === "list" ? CHOOSE : probe.kind === "check" ? CHECK : WRITE, probe.kind === "list" ? [text] : [probe.origin, text]).then((r) => (r === "ok" ? undefined : r));
+      const problem = (n: number, what: string, text: string): string => (what === "none" ? `Error: control ${n} has no choice "${text}".` : `Error: control ${n} cannot be typed into.`);
       if (action === "new") { tab = await s.newTab(url?.href); }
       else if (action === "open") { await tab.navigate(url!.href); }
       else if (action === "back") { if (!(await tab.back())) return "Error: there is no earlier page."; }
       else if (action === "scroll") { await tab.eval(`window.scrollBy(0, ${a.direction === "up" ? "-" : ""}Math.round(innerHeight * 0.85))`); await waits(300); }
-      else if (action === "click") {
-        const ref = await numbered();
+      else if (action === "click" || action === "hover") {
+        const at = await target(a.ref, a.x, a.y);
+        if (typeof at === "string") return at;
         // A link to somewhere that must not be reached is not followed; the browser would be stopped at the request, but the model is told why now.
-        if (ref.href) { try { const no = refused(new URL(ref.href), ctx.allowPrivateNetwork); if (no) return no; } catch { /* not an address */ } }
-        await tab.click(ref);
+        const href = "ref" in at ? at.ref.href ?? "" : await tab.eval<string>(`${LINK_AT}(${at.point.x}, ${at.point.y})`).catch(() => "");
+        if (href && action === "click") { try { const no = refused(new URL(href), ctx.allowPrivateNetwork); if (no) return no; } catch { /* not an address */ } }
+        if ("ref" in at && action === "click") await tab.click(at.ref);
+        else {
+          const p = await spot(at);
+          if (!p) return `Error: control ${num(a.ref, 0)} is not on screen, so there is no place to ${action}.`;
+          await (action === "click" ? tab.clickAt(p) : tab.hoverAt(p));
+        }
+        await tab.settle();
+      } else if (action === "drag") {
+        const from = await target(a.ref, a.x, a.y);
+        if (typeof from === "string") return from;
+        const to = await target(a.to, a.x2, a.y2);
+        if (typeof to === "string") return to;
+        const [start, end] = [await spot(from), await spot(to)];
+        if (!start || !end) return "Error: the control to drag, or the one to drop it on, is not on screen.";
+        await tab.dragBetween(start, end);
         await tab.settle();
       } else if (action === "type") {
         const ref = await numbered();
-        const probe = await tab.onElement<{ password: boolean; origin: string }>(ref, "function () { return { password: this.type === 'password', origin: location.origin }; }");
-        // A password field takes text only on a site the person named, whatever the text is.
-        const why = probe.password || holdsSecret(str(a.text), cred) ? whyNotHere(originOf(probe.origin), cred) : undefined;
+        const probe = await tab.onElement<Probe>(ref, PROBE);
+        const why = barred(probe, str(a.text));
         if (why) return why;
-        const done = await tab.onElement<string>(ref, `function (expected, text) {
-          if (location.origin !== expected) return "moved";
-          this.scrollIntoView({ block: "center" }); this.focus();
-          if ("value" in this) { const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(this), "value")?.set; if (set) set.call(this, text); else this.value = text; }
-          else if (this.isContentEditable) { document.execCommand("selectAll"); document.execCommand("insertText", false, text); }
-          else return "not a field";
-          this.dispatchEvent(new Event("input", { bubbles: true })); this.dispatchEvent(new Event("change", { bubbles: true })); return "ok";
-        }`, [probe.origin, str(a.text)]);
-        if (done === "moved") return "Not typed: the page moved to another site while this was being typed.";
-        if (done === "not a field") return `Error: control ${num(a.ref, 0)} cannot be typed into.`;
+        const done = await put(ref, probe, str(a.text));
+        if (done) return done === "moved" ? "Not typed: the page moved to another site while this was being typed." : problem(num(a.ref, 0), done, str(a.text));
         if (a.submit === true) await tab.press("Enter");
+        await tab.settle();
+      } else if (action === "fill") {
+        const list = fieldList(a.fields);
+        if (!list) return 'Error: fill needs fields, the number of each control and what goes in it: {"3": "ann", "4": "yes"}.';
+        // Every control is looked at before one is changed, so a refusal leaves the form as it was.
+        const planned: { ref: Ref; probe: Probe; text: string; n: number }[] = [];
+        for (const [n, text] of list) {
+          const ref = await tab.ref(n);
+          const probe = await tab.onElement<Probe>(ref, PROBE);
+          const why = barred(probe, text);
+          if (why) return why;
+          planned.push({ ref, probe, text, n });
+        }
+        for (const [i, f] of planned.entries()) {
+          const done = await put(f.ref, f.probe, f.text);
+          if (done) return `${done === "moved" ? "Not typed: the page moved to another site while this was being typed." : problem(f.n, done, f.text)}${i ? ` The ${i} before it ${i === 1 ? "was" : "were"} filled.` : ""}`;
+        }
         await tab.settle();
       } else if (action === "choose") {
         const ref = await numbered();
-        const done = await tab.onElement<string>(ref, `function (want) { if (!this.options) return "not a list"; const o = [...this.options].find((x) => x.text.trim().toLowerCase() === want.toLowerCase() || x.value === want); if (!o) return "none"; this.value = o.value; this.dispatchEvent(new Event("input", { bubbles: true })); this.dispatchEvent(new Event("change", { bubbles: true })); return "ok"; }`, [str(a.text)]);
+        const done = await tab.onElement<string>(ref, CHOOSE, [str(a.text)]);
         if (done === "not a list") return `Error: control ${num(a.ref, 0)} is not a list to choose from; click it, then click the choice.`;
         if (done === "none") return `Error: control ${num(a.ref, 0)} has no choice "${str(a.text)}".`;
         await tab.settle();
@@ -198,22 +276,21 @@ export const browser: Tool = {
         let size = -1;
         try { const st = statSync(file); size = st.isFile() ? st.size : -1; } catch { /* not there */ }
         if (size < 0) return `Error: ${file} is not a file to upload.`;
-        const node = a.ref !== undefined ? (await numbered()).node : tab.chooser;
+        const field = a.ref !== undefined ? await numbered() : undefined;
+        const node = field ? field.node : tab.chooser;
         if (node === undefined) return "Error: say which field with ref (a file field), or click the button that opens the file chooser first.";
-        await tab.send("DOM.setFileInputFiles", { files: [file], backendNodeId: node });
+        await tab.send("DOM.setFileInputFiles", { files: [file], backendNodeId: node }, field?.place?.session);
         tab.chooser = undefined;
         note = `Uploaded ${relative(ctx.cwd, file) || file} (${size} bytes).`;
+        s.say({ what: "upload", state: "done", name: basename(file), bytes: size });
         await tab.settle();
       } else if (action === "screenshot") {
-        let box: { x: number; y: number; width: number; height: number } | undefined;
-        if (a.ref !== undefined) {
-          const q = (await tab.send<{ quads: number[][] }>("DOM.getContentQuads", { backendNodeId: (await numbered()).node })).quads[0];
-          if (q && q.length >= 8) { const xs = [q[0]!, q[2]!, q[4]!, q[6]!], ys = [q[1]!, q[3]!, q[5]!, q[7]!]; box = { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(1, Math.max(...xs) - Math.min(...xs)), height: Math.max(1, Math.max(...ys) - Math.min(...ys)) }; }
-        }
+        const box = a.ref !== undefined ? await tab.box(await numbered()) : undefined;
         // A picture goes only to a model that can see; any other gets the page in words.
         if (ctx.vision === true && ctx.show) {
           const shot = await shoot(tab, box);
           ctx.show({ type: "image", mime: "image/jpeg", data: shot.data });
+          keepPicture(ctx, "browser", Buffer.from(shot.data, "base64"), "image/jpeg", "jpg");
           return `Screenshot of ${tab.url} (${shot.bytes} bytes), shown to you in the next message.`;
         }
         return out(said("This model cannot see pictures, so this is the page in words.", await describeView(tab)));
@@ -233,12 +310,15 @@ export const browser: Tool = {
       if (tab.chooser !== undefined) tail.push("A file chooser is open: use upload with path.");
       const asked = ["open", "click", "type", "press", "new", "wait"].includes(action) ? await challenge(tab, ctx) : "";
       const head = [note, ...tail].filter(Boolean).join("\n");
+      if (!(action === "read" && num(a.offset, 0) > 0)) supersede(ctx, s, tab, reading);
       return out(`${head ? `${head}\n\n` : ""}${describeReading(reading, ctx.window, action === "read" ? Math.max(0, Math.floor(num(a.offset, 0))) : 0)}${asked}`);
     } catch (e) {
       if (e instanceof DialogOpen) return out(dialogNote(e.dialog));
       if (e instanceof RefError) {
+        session?.say?.({ what: "ref", state: "expired", why: e.why, ...(a.ref !== undefined ? { ref: Math.floor(num(a.ref, 0)) } : {}) });
         // The numbers are given again with the answer, so the next call can use them.
-        const fresh = session && !session.closed ? await session.current.read().then((r) => describeReading(r, ctx.window)).catch(() => "") : "";
+        const live = session && !session.closed ? session : undefined;
+        const fresh = live ? await live.current.read().then((r) => { supersede(ctx, live, live.current, r); return describeReading(r, ctx.window); }).catch(() => "") : "";
         return out(said(`Error: ${e.message}${fresh ? " These are the numbers now." : ""}`, fresh || undefined));
       }
       const dead = session?.closed;

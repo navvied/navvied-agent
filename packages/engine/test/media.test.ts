@@ -152,6 +152,16 @@ describe.skipIf(win)("the engines on this computer", () => {
     await expect(media.pick("image")!.run({ prompt: "x", size: "huge" }, signal)).rejects.toThrow("not like 512x512");
   });
 
+  test("the settings of a turbo model go to stable-diffusion.cpp as it names them, and a model with none gets none", async () => {
+    const dir = scratch(); files(dir);
+    const log = join(dir, "sd2.txt");
+    const sd = program(dir, "sd", `echo "$@" > ${log}\nwhile [ "$1" != "-o" ]; do shift; done\nprintf '\\211PNG\\r\\n\\032\\n' > "$2"`);
+    await new Media({ local: { image: { bin: sd, model: join(dir, "sd.safetensors"), steps: 1, cfg: 1 } } }).pick("image")!.run({ prompt: "a cat" }, signal);
+    expect(readFileSync(log, "utf8")).toContain("--steps 1 --cfg-scale 1");
+    await new Media({ local: { image: { bin: sd, model: join(dir, "sd.safetensors") } } }).pick("image")!.run({ prompt: "a cat" }, signal);
+    expect(readFileSync(log, "utf8")).not.toContain("--steps");
+  });
+
   test("a program that fails is a sentence with its last line, and one that hangs is stopped", async () => {
     const dir = scratch(); files(dir);
     const bad = program(dir, "sd", 'echo "out of memory" >&2\nexit 3');

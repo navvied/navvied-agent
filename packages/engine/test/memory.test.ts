@@ -179,7 +179,7 @@ describe("the Remember tool", () => {
       expect(first.tools.map((t) => t.name)).toContain("Remember");
       expect(first.system).toContain("save lasting facts about the person and project");
     }
-    const small = rig(() => ({ text: "x" }), { window: 8_000, memory: paths() });
+    const small = rig(() => ({ text: "x" }), { window: 8_000, small: true, memory: paths() });
     await small.turn(prompt("from now on, answer in short sentences"));
     const first = small.provider.requests[0]!;
     expect(first.tools.map((t) => t.name)).not.toContain("Remember");

@@ -4,6 +4,7 @@ import type { MediaProvider } from "../media/types.ts";
 import { MediaError } from "../media/types.ts";
 import type { Tool, ToolContext } from "../types.ts";
 import { wrote } from "./file-state.ts";
+import { pictureInfo } from "./picture-file.ts";
 import { writeAtomic } from "./text-file.ts";
 import { place, str } from "./util.ts";
 
@@ -26,11 +27,18 @@ export function sourceFile(ctx: ToolContext, p: unknown, most: number, what: str
 
 const EXT: Record<string, string> = { "audio/wav": "wav", "audio/x-wav": "wav", "audio/mpeg": "mp3", "audio/ogg": "ogg", "audio/flac": "flac", "audio/mp4": "m4a", "audio/aac": "aac", "audio/opus": "opus", "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov" };
 
+/** The type of a sound, picture or video file by its name, for one that was not made by a provider (a video the person gave to Watch). */
+export function mimeOfFile(path: string): string {
+  const ext = extname(path).slice(1).toLowerCase();
+  const made = Object.entries(EXT).find(([, e]) => e === ext)?.[0];
+  return made ?? (ext === "m4v" ? "video/mp4" : ext === "mkv" ? "video/x-matroska" : ext === "avi" ? "video/x-msvideo" : ext === "jpeg" ? "image/jpeg" : "application/octet-stream");
+}
+
 /**
  * Where a made file goes, and saving it: the named path (inside the project), or `stem` and the next free number when none is named. A file that is already there is never
  * replaced unless the call says so. The result names the path and the size.
  */
-export function save(ctx: ToolContext, a: Record<string, unknown>, stem: string, fallback: string, made: { bytes: Uint8Array; mime: string }): string {
+export function save(ctx: ToolContext, a: Record<string, unknown>, stem: string, fallback: string, made: { bytes: Uint8Array; mime: string; seconds?: number }): string {
   const ext = EXT[made.mime] ?? fallback;
   const named = str(a.file_path).trim();
   let path: string;
@@ -44,6 +52,8 @@ export function save(ctx: ToolContext, a: Record<string, unknown>, stem: string,
   mkdirSync(dirname(path), { recursive: true });
   writeAtomic(path, made.bytes);
   wrote(ctx, path, made.bytes);
+  const picture = made.mime.startsWith("image/") ? pictureInfo(path, made.bytes, made.mime) : undefined;
+  ctx.report?.({ ...(picture ? { picture } : {}), media: { path, mime: made.mime, ...(typeof made.seconds === "number" ? { seconds: made.seconds } : {}) } });
   return `Saved ${path} (${sizeWords(made.bytes.length)}).`;
 }
 

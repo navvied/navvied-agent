@@ -1,0 +1,13 @@
+{
+  "jobs": [
+    {
+      "id": "a1b2c3",
+      "prompt": "Summarise today's commits as changelog entries. Only read; change nothing.",
+      "cwd": ".",
+      "mode": "plan",
+      "cron": "0 18 * * *",
+      "title": "changelog",
+      "created": 1700000000000
+    }
+  ]
+}

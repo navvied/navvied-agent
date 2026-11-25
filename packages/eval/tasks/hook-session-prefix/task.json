@@ -1,0 +1,25 @@
+{
+  "id": "hook-session-prefix",
+  "title": "A start-up hook tells the commit message style: fix the typo and write the message",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "bun",
+    "python3"
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "fixture": "hook-session-prefix.ts"
+      }
+    ]
+  },
+  "prompt": "Fix the typo in greet.txt, then write the one-line commit message for that change, \"fix the typo in the greeting\", into COMMIT.txt the way this project writes its commit messages.",
+  "check": "test \"$(cat greet.txt)\" = 'Hello, world' && test \"$(cat COMMIT.txt)\" = \"$(python3 -c \"import hashlib,os; print(hashlib.sha1((os.environ['BENCH_SECRET']+'prefix').encode()).hexdigest()[:8] + ': fix the typo in the greeting')\")\"",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 15,
+  "timeoutSeconds": 300
+}

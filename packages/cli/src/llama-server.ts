@@ -6,6 +6,8 @@ export interface ServerInput {
   binary: string;
   /** The model file. */
   model: string;
+  /** The file that lets a model read pictures, when it is one that does. */
+  mmproj?: string;
   /** The context of the conversation (the size of the cache is made for it). */
   window: number;
   /** How many layers the card takes: 0 for none, a large number for all. */
@@ -25,8 +27,9 @@ export interface RunningServer { pid: number; port: number; url: string; stop():
 const LISTENING = /listening on http:\/\/127\.0\.0\.1:(\d+)/;
 
 /** The arguments of the pinned release's server (each is in its own `--help`; the notes have the lines). It listens on this computer only. */
-export function argsOf(i: Pick<ServerInput, "model" | "window" | "layers" | "alias">, port: number): string[] {
-  return ["-m", i.model, "-c", String(i.window), "-ngl", String(i.layers), "--host", "127.0.0.1", "--port", String(port), "--jinja", "-a", i.alias, "-np", "1"];
+export function argsOf(i: Pick<ServerInput, "model" | "window" | "layers" | "alias" | "mmproj">, port: number): string[] {
+  // With no layers on a card, the picture reader stays on the processor too.
+  return ["-m", i.model, "-c", String(i.window), "-ngl", String(i.layers), "--host", "127.0.0.1", "--port", String(port), "--jinja", "-a", i.alias, "-np", "1", ...(i.mmproj ? ["--mmproj", i.mmproj, ...(i.layers === 0 ? ["--no-mmproj-offload"] : [])] : [])];
 }
 
 interface Note { pid: number; binary: string; port: number; startedAt: number }

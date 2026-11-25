@@ -156,7 +156,7 @@ describe("the hub switches one tool at a time and reports every tool", () => {
     await until(() => last().entries.find((e) => e.id === "memory")!.on === false);
     expect(last().entries.find((e) => e.id === "session-search")!.on).toBe(false);
     expect(new PluginState(pluginStatePath(env)).disabled()).toEqual(new Set(["tool:session-search", "tool:memory"]));
-    send({ cmd: "tool.setup", id: "browser" });
+    send({ cmd: "tool.setup", id: "terminal" });
     await until(() => got.some((e) => e.ev === "error" && e.msg === "That tool has nothing to set up."));
     await hub.stop();
     mock.stop();

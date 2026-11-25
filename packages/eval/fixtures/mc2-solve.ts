@@ -110,7 +110,26 @@ function* promptStep(): Solver {
   yield write("step.txt", `${/Step 1: run `([^`]+)`/.exec(text)![1]}\n`);
 }
 
+/** The tasks of the program that asks things of the agent (see mcp-asks.ts): a model answer it asks for, and a person's answer nobody gives. */
+const lab = (tool: string, args: Record<string, unknown>): Step => ({ tool: `mcp__lab__${tool}`, args });
+
+function* sampleCode(): Solver {
+  const said = unframed(yield lab("condense", { ticket: "T-1" }));
+  yield write("label.txt", `${said.replace(/^condensed: /, "")}\n`);
+}
+
+function* sampleUnattended(): Solver {
+  const said = unframed(yield lab("condense", { ticket: "T-1" }));
+  yield write("label.txt", `${said.startsWith("condensed: ") ? said.slice("condensed: ".length) : "unavailable"}\n`);
+}
+
+function* elicitUnattended(): Solver {
+  const said = unframed(yield lab("deploy", { target: "staging" }));
+  yield write("deploy.txt", `${said.startsWith("deployed: ") ? said.slice("deployed: ".length) : "stopped"}\n`);
+}
+
 export const SOLVERS: Record<string, () => Solver> = {
+  "mcp-sample-code": sampleCode, "mcp-sample-unattended": sampleUnattended, "mcp-elicit-unattended": elicitUnattended,
   "mcp-resource-version": resourceVersion, "mcp-deferred-archive": deferredArchive, "mcp-prompt-step": promptStep,
   "mc2-fan-out": fanOut, "mc2-page-walk": pageWalk, "mc2-ticket-pipeline": ticketPipeline,
   "mc2-compare-pages": comparePages, "mc2-pages-to-accounts": pagesToAccounts, "mc2-first-account": firstAccount,

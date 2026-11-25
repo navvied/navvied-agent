@@ -4,5 +4,6 @@ dist
 .env
 .env.*
 !.env.example
+!packages/eval/tasks/*/repo/.env
 /providers.json
 .navvied-native

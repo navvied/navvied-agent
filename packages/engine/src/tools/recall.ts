@@ -39,9 +39,10 @@ export const recallTool: Tool = {
       return redact(`Messages ${items[from]!.n}-${items[end - 1]!.n}${next ? ` (more: around=${next})` : ""}:\n${rows.join("\n")}`);
     }
     if (query) {
-      const hits = ctx.recall.search(query, limit);
-      if (!hits.length) return `No earlier conversation mentions "${query}". Try other words, or fewer.`;
-      return redact(hits.map((h) => `- ${h.title} (id ${h.id}, ${when(h.updated)}, message ${h.n})${h.snippet ? `: ${h.snippet}` : ""}`).join("\n"));
+      const hits = await ctx.recall.search(query, limit);
+      const notice = ctx.recall.notice?.();
+      if (!hits.length) return `No earlier conversation mentions "${query}". Try other words, or fewer.${notice ? `\n${notice}` : ""}`;
+      return redact(hits.map((h) => `- ${h.title} (id ${h.id}, ${when(h.updated)}, message ${h.n})${h.snippet ? `: ${h.snippet}` : ""}`).join("\n")) + (notice ? `\n${notice}` : "");
     }
     const recent = ctx.recall.recent(limit);
     return recent.length ? redact(recent.map((r) => `- ${r.title} (id ${r.id}, ${when(r.updated)})`).join("\n")) : "There are no earlier conversations yet.";

@@ -1,0 +1,14 @@
+{
+  "id": "schedule-first-of-month",
+  "title": "Schedule a read-only job on the first of every month in a time zone",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": ["bun"],
+  "prompt": "Set up a scheduled job named invoices that runs on the first of every month at 8:30 in the Europe/Berlin time zone and lists the unpaid invoices mentioned in this project. It must only read.",
+  "check": "bun \"$BENCH_FIXTURES/schedule-check.ts\" first-of-month",
+  "protect": ["README.md"],
+  "env": { "XDG_STATE_HOME": "{dir}/.state" },
+  "maxSteps": 20,
+  "timeoutSeconds": 120
+}

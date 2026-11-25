@@ -1,0 +1,16 @@
+{
+  "jobs": [
+    {
+      "id": "a1b2c3",
+      "prompt": "Remind me to prepare the standup notes from this project's README.",
+      "cwd": ".",
+      "mode": "plan",
+      "cron": "",
+      "at": 1700038800000,
+      "tz": "UTC",
+      "title": "standup",
+      "created": 1700000000000,
+      "lastRun": 1700000000000
+    }
+  ]
+}

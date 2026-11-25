@@ -3,6 +3,9 @@ import { gitEnv } from "../../engine/src/git-env.ts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseEvent } from "@navvied/protocol";
+import { skillHash } from "../../engine/src/index.ts";
+import { skillTrustPath } from "../src/config.ts";
+import { SkillTrust } from "../src/plugins.ts";
 import { main } from "../src/main.ts";
 import { fakeIO, remove, startMockModel, tempDir, until } from "./helpers.ts";
 
@@ -162,6 +165,10 @@ describe("skills", () => {
     writeFileSync(join(mine, "SKILL.md"), "---\ndescription: Cut a release\n---\nTag it.");
     writeFileSync(config, JSON.stringify({ default: "m", models: { m: { baseUrl: mock.url, model: "mock-model", apiKey: "k", window: 100000 } } }));
     const f = fakeIO({ env });
+    expect(await main(["run", "hello", "--config", config, "--cwd", work], f.io)).toBe(0);
+    expect(String(mock.requests.at(-1)!.body.messages[0].content)).not.toContain("- release: Cut a release");
+    const mineText = readFileSync(join(mine, "SKILL.md"), "utf8");
+    new SkillTrust(skillTrustPath(env)).answer({ name: "release", hash: skillHash(mineText) }, true);
     expect(await main(["run", "hello", "--config", config, "--cwd", work], f.io)).toBe(0);
     const request = mock.requests.at(-1)!.body;
     const system = String(request.messages[0].content);

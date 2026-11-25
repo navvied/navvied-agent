@@ -1,11 +1,13 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
+import type { ScheduleRunInfo, ScheduleWhen } from "@navvied/protocol";
 import { SHORTEST_REPEAT_MS, isTimeZone } from "@navvied/engine";
 import { dueSince, nextRun, parseCron } from "./cron.ts";
+import { withFileLock } from "./file-lock.ts";
 
 /** One start of a task. `code` is none while it runs and null when it could not start; `due` is only there when the start was late. */
-export interface RunRecord { at: number; due?: number; code?: number | null; /** Where what it said is kept. */ file?: string }
+export interface RunRecord { at: number; due?: number; code?: number | null; /** Where what it said is kept. */ file?: string; /** Stopped by a person or the model before it finished. */ cancelled?: true; /** A short text of what it said, secrets hidden (at most 200 characters). */ said?: string }
 
 const MOST_RUNS = 20;
 export const MOST_JOBS = 50;
@@ -20,6 +22,8 @@ export interface Job {
   cron: string;
   /** Run every so many ms, counted from the last start. */
   every?: number;
+  /** The first start of an `every` task that keeps to a grid (every 2 weeks on friday): its starts are this time plus whole intervals. */
+  start?: number;
   /** Run once, at this time in ms since the epoch. */
   at?: number;
   /** The time zone the cron fields are in; this computer's own when none. */
@@ -43,6 +47,8 @@ export interface Job {
   kind?: "agent" | "chat";
   /** How the last run ended: the exit code (0 = fine). */
   lastCode?: number | null;
+  /** The most recent due time nothing ran at; cleared when the next run starts on time. */
+  missed?: { at: number; reason: "off" };
 }
 
 /** The tasks the person scheduled, kept in a private file. */
@@ -56,6 +62,15 @@ export class ScheduleStore {
     } catch { return []; }
   }
 
+  /** One change to the file: read, change and write under the lock, so the hub's timer and the tool never overwrite each other. */
+  #change<T>(fn: (jobs: Job[]) => { jobs?: Job[]; result: T }): T {
+    return withFileLock(this.path, () => {
+      const done = fn(this.list());
+      if (done.jobs) this.#save(done.jobs);
+      return done.result;
+    });
+  }
+
   #save(jobs: Job[]): void {
     mkdirSync(dirname(this.path), { recursive: true });
     const tmp = `${this.path}.${process.pid}.tmp`;
@@ -64,84 +79,108 @@ export class ScheduleStore {
     renameSync(tmp, this.path);
   }
 
-  add(input: { cron?: string; every?: number; at?: number; tz?: string; prompt: string; cwd: string; mode?: "plan" | "auto"; title?: string; kind?: "agent" | "chat" }, now = Date.now()): Job | string {
+  add(input: { cron?: string; every?: number; start?: number; at?: number; tz?: string; prompt: string; cwd: string; mode?: "plan" | "auto"; title?: string; kind?: "agent" | "chat" }, now = Date.now()): Job | string {
     const timing = checkTiming(input);
     if (typeof timing === "string") return timing;
     if (!input.prompt.trim()) return "say what the task is";
-    const jobs = this.list();
-    if (jobs.length >= MOST_JOBS) return `that is the most tasks (${MOST_JOBS}): remove one first`;
-    const job: Job = { id: randomBytes(3).toString("hex"), prompt: input.prompt.trim().slice(0, 4000), cwd: input.cwd, mode: input.mode ?? "plan", ...timing, created: now, ...(input.title?.trim() ? { title: input.title.trim().slice(0, 80) } : {}), ...(input.kind === "chat" ? { kind: "chat" as const } : {}), lastRun: now };
-    this.#save([...jobs, job]);
-    return job;
+    return this.#change<Job | string>((jobs) => {
+      if (jobs.length >= MOST_JOBS) return { result: `that is the most tasks (${MOST_JOBS}): remove one first` };
+      const job: Job = { id: randomBytes(3).toString("hex"), prompt: input.prompt.trim().slice(0, 4000), cwd: input.cwd, mode: input.mode ?? "plan", ...timing, created: now, ...(input.title?.trim() ? { title: input.title.trim().slice(0, 80) } : {}), ...(input.kind === "chat" ? { kind: "chat" as const } : {}), lastRun: now };
+      return { jobs: [...jobs, job], result: job };
+    });
   }
 
   remove(id: string): boolean {
-    const jobs = this.list();
-    const rest = jobs.filter((j) => j.id !== id);
-    if (rest.length === jobs.length) return false;
-    this.#save(rest);
-    return true;
+    return this.#change<boolean>((jobs) => {
+      const rest = jobs.filter((j) => j.id !== id);
+      return rest.length === jobs.length ? { result: false } : { jobs: rest, result: true };
+    });
   }
 
   /** Changes a task. Returns the task, or why it could not be changed. */
-  update(id: string, change: { title?: string; cron?: string; every?: number; at?: number; tz?: string; prompt?: string; mode?: "plan" | "auto"; cwd?: string; enabled?: boolean }, now = Date.now()): Job | string {
-    const jobs = this.list();
-    const had = jobs.find((j) => j.id === id);
-    if (!had) return "that task was not found";
-    const retimed = change.cron !== undefined || change.every !== undefined || change.at !== undefined;
-    const timing = retimed || change.tz !== undefined ? checkTiming({ cron: retimed ? change.cron : had.cron, every: retimed ? change.every : had.every, at: retimed ? change.at : had.at, tz: change.tz ?? had.tz }) : undefined;
-    if (typeof timing === "string") return timing;
-    if (change.prompt !== undefined && !change.prompt.trim()) return "say what the task is";
-    const { cron: _c, every: _e, at: _a, tz: _z, ...rest } = had;
-    const next: Job = {
-      ...(timing ? { ...rest, ...timing, ...(retimed ? { from: now } : {}) } : had),
-      ...(change.title !== undefined ? { title: change.title.trim().slice(0, 80) } : {}),
-      ...(change.prompt !== undefined ? { prompt: change.prompt.trim().slice(0, 4000) } : {}),
-      ...(change.mode !== undefined ? { mode: change.mode } : {}),
-      ...(change.cwd !== undefined ? { cwd: change.cwd } : {}),
-    };
-    if (change.enabled !== undefined) { if (change.enabled) { if (had.disabled) next.from = now; delete next.disabled; } else next.disabled = true; }
-    this.#save(jobs.map((j) => (j.id === id ? next : j)));
-    return next;
+  update(id: string, change: { title?: string; cron?: string; every?: number; start?: number; at?: number; tz?: string; prompt?: string; mode?: "plan" | "auto"; cwd?: string; enabled?: boolean }, now = Date.now()): Job | string {
+    return this.#change<Job | string>((jobs) => {
+      const had = jobs.find((j) => j.id === id);
+      if (!had) return { result: "that task was not found" };
+      const retimed = change.cron !== undefined || change.every !== undefined || change.at !== undefined;
+      const timing = retimed || change.tz !== undefined ? checkTiming({ cron: retimed ? change.cron : had.cron, every: retimed ? change.every : had.every, start: retimed ? change.start : had.start, at: retimed ? change.at : had.at, tz: change.tz ?? had.tz }) : undefined;
+      if (typeof timing === "string") return { result: timing };
+      if (change.prompt !== undefined && !change.prompt.trim()) return { result: "say what the task is" };
+      const { cron: _c, every: _e, start: _s, at: _a, tz: _z, ...rest } = had;
+      const next: Job = {
+        ...(timing ? { ...rest, ...timing, ...(retimed ? { from: now } : {}) } : had),
+        ...(change.title !== undefined ? { title: change.title.trim().slice(0, 80) } : {}),
+        ...(change.prompt !== undefined ? { prompt: change.prompt.trim().slice(0, 4000) } : {}),
+        ...(change.mode !== undefined ? { mode: change.mode } : {}),
+        ...(change.cwd !== undefined ? { cwd: change.cwd } : {}),
+      };
+      if (change.enabled !== undefined) { if (change.enabled) { if (had.disabled) next.from = now; delete next.disabled; } else next.disabled = true; }
+      return { jobs: jobs.map((j) => (j.id === id ? next : j)), result: next };
+    });
   }
 
   /** Remembers how a run ended: on the start that is still open, or, for a run started by hand, as a start of its own. */
-  finished(id: string, code: number | null, file?: string, now = Date.now()): void {
-    this.#save(this.list().map((j) => {
-      if (j.id !== id) return j;
-      const open = j.runs?.[0] && j.runs[0].code === undefined ? j.runs[0] : undefined;
-      const done: RunRecord = { ...(open ?? { at: now }), code, ...(file ? { file } : {}) };
-      return { ...j, lastCode: code, runs: [done, ...(j.runs ?? []).slice(open ? 1 : 0)].slice(0, MOST_RUNS) };
+  finished(id: string, code: number | null, file?: string, now = Date.now(), cancelled = false, said?: string): void {
+    this.#change((jobs) => ({
+      jobs: jobs.map((j) => {
+        if (j.id !== id) return j;
+        const open = j.runs?.[0] && j.runs[0].code === undefined ? j.runs[0] : undefined;
+        const done: RunRecord = { ...(open ?? { at: now }), code, ...(file ? { file } : {}), ...(cancelled ? { cancelled: true as const } : {}), ...(said ? { said } : {}) };
+        return { ...j, lastCode: code, runs: [done, ...(j.runs ?? []).slice(open ? 1 : 0)].slice(0, MOST_RUNS) };
+      }),
+      result: undefined,
     }));
   }
 
-  /** Remembers that a run started; `due` is when it should have, kept only when it is late. */
+  /** Remembers that a run started; `due` is when it should have, kept only when it is late. A late start is a missed time (the computer was off); the next start on time clears it. */
   markRun(id: string, at: number, due?: number): void {
-    this.#save(this.list().map((j) => (j.id === id ? { ...j, lastRun: at, runs: [{ at, ...(due !== undefined && at - due > LATE_MS ? { due } : {}) }, ...(j.runs ?? [])].slice(0, MOST_RUNS) } : j)));
+    this.#change((jobs) => ({
+      jobs: jobs.map((j) => {
+        if (j.id !== id) return j;
+        const late = due !== undefined && at - due > LATE_MS;
+        const { missed: _gone, ...rest } = j;
+        return { ...rest, ...(late ? { missed: { at: due, reason: "off" as const } } : {}), lastRun: at, runs: [{ at, ...(late ? { due } : {}) }, ...(j.runs ?? [])].slice(0, MOST_RUNS) };
+      }),
+      result: undefined,
+    }));
   }
   get exists(): boolean { return existsSync(this.path); }
 }
 
 /** Exactly one of cron, every and at, with `tz`: the fields to keep, or why not in words. */
-function checkTiming(t: { cron?: string | undefined; every?: number | undefined; at?: number | undefined; tz?: string | undefined }): { cron: string; every?: number; at?: number; tz?: string } | string {
+function checkTiming(t: { cron?: string | undefined; every?: number | undefined; start?: number | undefined; at?: number | undefined; tz?: string | undefined }): { cron: string; every?: number; start?: number; at?: number; tz?: string } | string {
   const given = [t.cron?.trim() ? "cron" : "", t.every !== undefined ? "every" : "", t.at !== undefined ? "at" : ""].filter(Boolean);
   if (given.length !== 1) return "say when with one schedule: a cron of five fields, an interval, or one time";
   if (t.tz && !isTimeZone(t.tz)) return `"${t.tz}" is not a time zone`;
   const zone = t.tz ? { tz: t.tz } : {};
-  if (t.every !== undefined) return t.every < SHORTEST_REPEAT_MS ? "a task may repeat at most once every 60 seconds" : { cron: "", every: t.every, ...zone };
+  if (t.every !== undefined) return t.every < SHORTEST_REPEAT_MS ? "a task may repeat at most once every 60 seconds" : { cron: "", every: t.every, ...(t.start !== undefined ? { start: t.start } : {}), ...zone };
   if (t.at !== undefined) return Number.isFinite(t.at) ? { cron: "", at: t.at, ...zone } : "that time is not valid";
   const parsed = parseCron(t.cron!);
   return typeof parsed === "string" ? parsed : { cron: t.cron!.trim(), ...zone };
 }
 
+/** The fields of the store for a timing of the shared shape (the Schedule tool and the screens). */
+export const fieldsOf = (w: ScheduleWhen): { cron: string } | { every: number; start?: number } | { at: number } => (w.kind === "cron" ? { cron: w.cron } : w.kind === "every" ? { every: w.ms, ...(w.start !== undefined ? { start: w.start } : {}) } : { at: w.at });
+
+/** A task's timing in the shared shape. */
+export const whenOf = (j: Job): ScheduleWhen => (j.every !== undefined ? { kind: "every", ms: j.every, ...(j.start !== undefined ? { start: j.start } : {}) } : j.at !== undefined ? { kind: "at", at: j.at } : { kind: "cron", cron: j.cron });
+
+/** The newest runs of a task as the screens show them (`schedule.runs`). */
+export function runInfos(j: Job, limit: number): ScheduleRunInfo[] {
+  return (j.runs ?? []).slice(0, limit).map((r) => ({ at: r.at, outcome: r.code === undefined ? "running" : r.cancelled ? "stopped" : r.code === 0 ? "fine" : "failed", ...(r.due !== undefined ? { due: r.due } : {}), ...(r.said ? { said: r.said } : {}) }));
+}
+
 const anchor = (j: Job): number => Math.max(j.lastRun ?? j.created, j.from ?? 0);
+
+/** The first start of an interval task after `from`: one interval later, or, on a grid, the next time that is the first start plus whole intervals. */
+const nextStart = (j: Job, from: number): number => (j.start === undefined ? from + j.every! : j.start + (from < j.start ? 0 : Math.floor((from - j.start) / j.every!) + 1) * j.every!);
 
 /** When a task was due since it last started, or none. It is the first time it should have started, so a task whose time came more than once while nothing ran starts once, not many times. */
 export function dueAt(j: Job, now: number): number | undefined {
   if (j.disabled) return undefined;
   const from = anchor(j);
   if (j.at !== undefined) return j.at <= now && from < j.at ? j.at : undefined;
-  if (j.every !== undefined) { const t = from + j.every; return t <= now ? t : undefined; }
+  if (j.every !== undefined) { const t = nextStart(j, from); return t <= now ? t : undefined; }
   const c = parseCron(j.cron);
   return typeof c === "string" ? undefined : dueSince(c, from, now, j.tz);
 }
@@ -150,12 +189,12 @@ export function dueAt(j: Job, now: number): number | undefined {
 export function nextDue(j: Job, now: number): number | undefined {
   if (j.disabled) return undefined;
   if (j.at !== undefined) return anchor(j) < j.at ? j.at : undefined;
-  if (j.every !== undefined) return anchor(j) + j.every;
+  if (j.every !== undefined) return nextStart(j, anchor(j));
   const c = parseCron(j.cron);
   return typeof c === "string" ? undefined : nextRun(c, now, j.tz);
 }
 
-const EVERY: [number, string][] = [[86_400_000, "d"], [3_600_000, "h"], [60_000, "m"], [1_000, "s"]];
+const EVERY: [number, string][] = [[604_800_000, "w"], [86_400_000, "d"], [3_600_000, "h"], [60_000, "m"], [1_000, "s"]];
 
 /** The timing in a few words: the cron, "every 2h", or "once 2026-12-01 09:00 UTC". */
 export function timingText(j: Job): string {

@@ -3,7 +3,7 @@ import { approvalScope, type Scope } from "./approval-scope.ts";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { needsApproval } from "./permissions.ts";
 import { riskOf, type Risk } from "./risk.ts";
-import { afterOutside, type Outside } from "./taint.ts";
+import { afterOutside, type Outside, type Turn } from "./taint.ts";
 import { hardBlock, type Rules } from "./rules.ts";
 import { readPaths } from "./tools/changed.ts";
 import { COMPUTER_TOOL, PLAN_COMPUTER_ACTIONS } from "./tools/computer.ts";
@@ -22,7 +22,9 @@ export interface JudgeInput {
   /** Folders outside the project that the program itself keeps things in (attachments, notes, long output): reading is free there. When this is not given, a look outside the project is not asked about. */
   readable?: readonly string[] | undefined;
   /** What this turn has read from outside. Once it has read something, a few actions are asked about even in Auto (see `afterOutside`). */
-  outside?: Pick<Outside, "seen" | "copied"> | undefined;
+  outside?: (Pick<Outside, "seen" | "copied"> & Turn["outside"]) | undefined;
+  /** The values this conversation knows as secrets: an address that carries one is asked about after outside text was read. */
+  secrets?: (() => readonly string[]) | undefined;
 }
 
 const within = (root: string, path: string, cwd: string): boolean => { const r = relative(resolve(cwd, root), resolve(cwd, path)); return r !== ".." && !r.startsWith("../") && !r.startsWith("..\\") && !isAbsolute(r); };
@@ -61,7 +63,7 @@ export function judge(i: JudgeInput): Judgement {
   }
   // What cannot be undone is asked about in every mode but Bypass, and a rule that allows "git" does not allow it: what is allowed is a kind of thing.
   // What an instruction in outside text would need is asked about too, unless the person's own allow rule names the call; Bypass is the person's word, Plan changes nothing.
-  const tainted = i.outside?.seen && mode !== "plan" && mode !== "bypass" && verdict.kind !== "allow" ? afterOutside(tool, args, cwd) : undefined;
+  const tainted = i.outside?.seen && mode !== "plan" && mode !== "bypass" && verdict.kind !== "allow" ? afterOutside(tool, args, cwd, undefined, { outside: i.outside, secrets: i.secrets?.() }) : undefined;
   const risk = (tool.readOnly || mode === "plan" || mode === "bypass" ? undefined : riskOf(tool.name, args, cwd)) ?? tainted;
   const riskAsked = risk !== undefined && !i.allowed.has(risk.key);
   // An address nobody gave is the way out for what an injected page asks for: asked about, or refused where nobody is asked.

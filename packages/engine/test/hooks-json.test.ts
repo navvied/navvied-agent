@@ -25,11 +25,13 @@ const seen = (): Record<string, unknown>[] => (existsSync(log) ? readFileSync(lo
 describe("a JSON answer on standard output", () => {
   test("block gives its reason; allow changes nothing; ask asks", async () => {
     const block = commandHooks({ PreToolUse: [{ command: js(`say({decision:"block",reason:"not on Fridays"})`) }] }, dir, () => "s");
-    expect(await block.pre({ tool: "Bash", input: {} }, signal)).toEqual({ block: "not on Fridays", notes: [] });
+    expect(await block.pre({ tool: "Bash", input: {} }, signal)).toMatchObject({ block: "not on Fridays", notes: [] });
     const allow = commandHooks({ PreToolUse: [{ command: js(`say({decision:"allow",reason:"fine"})`) }] }, dir, () => "s");
-    expect(await allow.pre({ tool: "Bash", input: {} }, signal)).toEqual({ notes: [] });
+    const allowed = await allow.pre({ tool: "Bash", input: {} }, signal);
+    expect(allowed).toMatchObject({ notes: [] });
+    expect([allowed.block, allowed.ask, allowed.updatedInput]).toEqual([undefined, undefined, undefined]);
     const ask = commandHooks({ PreToolUse: [{ command: js(`say({decision:"ask",reason:"check the target"})`) }] }, dir, () => "s");
-    expect(await ask.pre({ tool: "Bash", input: {} }, signal)).toEqual({ ask: "check the target", notes: [] });
+    expect(await ask.pre({ tool: "Bash", input: {} }, signal)).toMatchObject({ ask: "check the target", notes: [] });
   });
   test("updatedInput replaces keys, and the next hook sees the changed input", async () => {
     const hooks = commandHooks({ PreToolUse: [{ command: js(`say({updatedInput:{command:"echo safe"}})`) }, { command: record }] }, dir, () => "s");
@@ -40,7 +42,7 @@ describe("a JSON answer on standard output", () => {
   test("additionalContext is returned for the model, after a tool too", async () => {
     const hooks = commandHooks({ PreToolUse: [{ command: js(`say({additionalContext:"the repo uses tabs"})`) }], PostToolUse: [{ command: js(`say({additionalContext:"output was "+ev.tool_response.length+" long"})`) }] }, dir, () => "s");
     expect((await hooks.pre({ tool: "Edit", input: {} }, signal)).context).toBe("the repo uses tabs");
-    expect(await hooks.post({ tool: "Edit", input: {}, output: "abcd" }, signal)).toEqual({ notes: [], context: "output was 4 long" });
+    expect(await hooks.post({ tool: "Edit", input: {}, output: "abcd" }, signal)).toMatchObject({ notes: [], context: "output was 4 long" });
   });
   test("the answer of other agents' hooks is understood, and the first block wins", async () => {
     expect(parseAnswer(JSON.stringify({ hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "no", updatedInput: { a: 1 } } }))).toEqual({ decision: "block", reason: "no", updatedInput: { a: 1 } });
@@ -53,7 +55,7 @@ describe("a JSON answer on standard output", () => {
   });
   test("exit code 2 wins over JSON; broken JSON is a note and is ignored", async () => {
     const two = commandHooks({ PreToolUse: [{ command: js(`say({decision:"allow"});console.error("stop it");process.exit(2)`) }] }, dir, () => "s");
-    expect(await two.pre({ tool: "X", input: {} }, signal)).toEqual({ block: "stop it", notes: [] });
+    expect(await two.pre({ tool: "X", input: {} }, signal)).toMatchObject({ block: "stop it", notes: [] });
     const broken = commandHooks({ PreToolUse: [{ command: js(`console.log("{oops")`) }] }, dir, () => "s");
     const verdict = await broken.pre({ tool: "X", input: {} }, signal);
     expect(verdict.block).toBeUndefined();
