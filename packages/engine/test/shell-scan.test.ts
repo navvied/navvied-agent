@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { win32, posix } from "node:path";
 import { hardBlock, onlyLooks, riskOf } from "../src/index.ts";
+import type { Paths } from "../src/rules.ts";
 import { shellView } from "../src/shell-scan.ts";
 
 const cwd = "/work/project";
@@ -255,5 +257,32 @@ describe("the view", () => {
     const c = shellView("make 2>&1 > out.log 2>/dev/null").cmds[0]!;
     expect(c.words).toEqual(["make"]);
     expect(c.redirects.map((r) => r.target)).toEqual(["out.log", "/dev/null"]);
+  });
+});
+
+describe("a path in a command is read the way the shell that runs it reads it, on every computer", () => {
+  const as = (paths: Paths, cwd: string) => (command: string): string | undefined => riskOf("Bash", { command }, cwd, paths)?.key.replace("risk:", "");
+  const onWindows = as({ isAbsolute: win32.isAbsolute, relative: win32.relative, resolve: win32.resolve, sep: "\\", caseless: true }, "D:\\work\\proj");
+  const onUnix = as({ isAbsolute: posix.isAbsolute, relative: posix.relative, resolve: posix.resolve, sep: "/", caseless: false }, "/work/proj");
+
+  test("a POSIX path of a bash command is the system's on a Windows computer too (Git Bash)", () => {
+    for (const [command, key] of [["sed -i s/a/b/ /etc/fstab", "system-write"], ["cp a /usr/local/bin/x", "system-write"], ["cat x | tee /etc/foo", "system-write"], ["echo x > /etc/hosts", "system-write"], ["dd if=a of=/etc/x", "dd-write"], ["dd if=img of=/dev/sdb1", "dd-write"]] as const) {
+      expect(onWindows(command), command).toBe(key);
+      expect(onUnix(command), command).toBe(key);
+    }
+  });
+
+  test("a Windows system folder is the system's wherever the command is judged, however the shell spells it", () => {
+    for (const command of ['echo x > "C:\\Windows\\win.ini"', "tee C:/Windows/System32/drivers/etc/hosts", "cp a '/c/Program Files/x/y.dll'", "cp a /c/Windows/x", "echo x > C:/tmp/../Windows/x", "echo x > C:/../Windows/x", "echo x > C:/a/../../Windows/x", "echo x > 'C:\\tmp\\..\\Windows\\x'", "echo x > /tmp/../etc/hosts", "cp a /c/tmp/../Windows/x", 'echo x > "D:\\ProgramData\\x.cfg"', 'echo x > "C:\\boot.ini"']) {
+      expect(onWindows(command), command).toBe("system-write");
+      expect(onUnix(command), command).toBe("system-write");
+    }
+  });
+
+  test("the project's own files and a plain folder named like a drive are not the system's", () => {
+    for (const command of ["echo x > out.log", "cp a src/b", "echo x > /tmp/x", 'echo x > "D:\\work\\proj\\out.txt"', "echo x > /home/me/notes", "cp a /c/projects/x"]) {
+      expect(onWindows(command), command).toBeUndefined();
+      expect(onUnix(command), command).toBeUndefined();
+    }
   });
 });

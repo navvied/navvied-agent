@@ -1,4 +1,4 @@
-import { isAbsolute } from "node:path";
+import { isAbsolute, posix } from "node:path";
 import { changedPaths } from "./tools/changed.ts";
 import { caselessFor, nativePaths, type Paths } from "./rules.ts";
 import { programName, shellView, type Flat } from "./shell-scan.ts";
@@ -47,10 +47,24 @@ const SYSTEM = /^\/(etc|boot|usr|bin|sbin|lib|lib64|System|dev\/(sd|nvme|hd|vd|d
 const LAST_ONLY = /^(cp|mv|install|ln|sed|chmod|chown|chgrp|truncate)$/;
 const WRITERS = new Set(["tee", "cp", "mv", "install", "ln", "truncate", "touch", "mkdir", "rm", "rmdir", "chmod", "chown", "chgrp", "sed", "dd"]);
 
+/** The system's own folders on Windows, spelt with `/`: whatever runs the command, PowerShell or cmd writes them like this, and so does Git Bash as `/c/Windows`. A file directly on a drive's root is the system's too (only when it is spelt with its drive letter). */
+const WINDOWS_SYSTEM = /^[a-z]:\/(windows|program files|program files \(x86\)|programdata)(\/|$)/i;
+const DRIVE_ROOT_FILE = /^[a-z]:\/[^/]*$/i;
+const GIT_BASH_DRIVE = /^\/([a-z])(\/.*)?$/i;
+
+/**
+ * Where a command writes, judged the way the shell that runs it reads the path, not the way this computer does: `/etc/hosts` in a command is the
+ * system's file on every computer (on Windows too, where the shell is Git Bash), and `C:\Windows\x` is the system's on every computer.
+ * Only a path that is not absolute is made from the folder the command runs in, by this computer's rules.
+ */
 function ofWrite(target: string, cwd: string, p: Paths): Risk | undefined {
   if (!target || target === "/dev/null" || /^\/dev\/(stdout|stderr|tty)$/.test(target)) return undefined;
-  const full = p.resolve(cwd, target).replace(/\\/g, "/");
-  if (SYSTEM.test(full)) return risk("system-write", "This changes a file of the system itself.", "changes to system files");
+  const flat = target.replace(/\\/g, "/");
+  const posixAbsolute = target.startsWith("/");
+  const full = posixAbsolute ? posix.normalize(flat) : /^[a-z]:\//i.test(flat) ? flat.slice(0, 2) + posix.normalize(flat.slice(2)) : p.resolve(cwd, target).replace(/\\/g, "/");
+  const drive = posixAbsolute ? GIT_BASH_DRIVE.exec(full) : null;
+  const asWindows = drive ? `${drive[1]}:${drive[2] ?? "/"}` : /^[a-z]:\//i.test(full) ? full : undefined;
+  if (SYSTEM.test(full) || (asWindows !== undefined && WINDOWS_SYSTEM.test(asWindows)) || (!posixAbsolute && DRIVE_ROOT_FILE.test(full))) return risk("system-write", "This changes a file of the system itself.", "changes to system files");
   return ofPath(target, cwd, p);
 }
 
