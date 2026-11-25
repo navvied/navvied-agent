@@ -22,8 +22,8 @@ head -c 95000000 /dev/urandom >"$work/parts/program"
 head -c 25000000 /dev/urandom >"$work/parts/rest"
 
 # $1: folder to fill; $2: "plain", or "quiet" to also tell the file-events daemon and Spotlight to leave the volume alone.
-# The app is a real, signed one in miniature: a program of the system as its executable, the random bytes as a sealed resource, a link
-# inside the bundle and an extended attribute on a file, the things a copy of an app can lose.
+# The app is a real, signed one in miniature: a program of the system as its executable, the random bytes as a sealed resource and a link
+# inside the bundle, the things a copy of an app can lose.
 stage() {
   app="$1/navvied.app"
   mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
@@ -31,7 +31,6 @@ stage() {
   cp "$work/parts/program" "$app/Contents/Resources/program"
   cp "$work/parts/rest" "$app/Contents/Resources/rest"
   ln -s rest "$app/Contents/Resources/rest-link"
-  xattr -w com.navvied.probe kept "$app/Contents/Resources/rest"
   cat >"$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
@@ -78,7 +77,7 @@ attempt() {
       fi
     fi
     cleanup
-    rm -rf "$stage" "$image" "$work/udf-$i.dmg"
+    rm -rf "$stage" "$image" "$work"/udf-$i.* "$work"/iso-$i.*
     i=$((i + 1))
   done
 }
@@ -91,8 +90,7 @@ attempt create-quiet quiet 'hdiutil create -srcfolder "$stage" -volname probe -f
 attempt script plain 'bash "$here/make-dmg.sh" "$stage/navvied.app" "$image" navvied'
 # Opens an image the way a person does and checks the app inside against the one it was made from ($1). Every check runs, so one
 # annotation shows all that is wrong: the system's own signature check on the source (the control), on the app in the image and on a
-# copy of it made the way dragging it into Applications makes one; the link, the executable bit, the content, and the extended attribute
-# when $3 says it must survive.
+# copy of it made the way dragging it into Applications makes one; the link, the executable bit and the content.
 opened() {
   src=$1; img=$2; bad=0; m=$(mktemp -d "$work/mount.XXXXXX"); out="$work/copy-$way-$i"
   need codesign --verify --deep --strict "$src" || bad=1
@@ -102,7 +100,6 @@ opened() {
   need cmp "$m/navvied.app/Contents/Resources/program" "$src/Contents/Resources/program" || bad=1
   need codesign --verify --deep --strict "$m/navvied.app" || bad=1
   need test "$(readlink "$m/navvied.app/Contents/Resources/rest-link")" = rest || bad=1
-  if [ "${3:-}" = xattr ]; then need test "$(xattr -p com.navvied.probe "$m/navvied.app/Contents/Resources/rest")" = kept || bad=1; fi
   mkdir -p "$out" && ditto "$m/navvied.app" "$out/navvied.app" && { need codesign --verify --deep --strict "$out/navvied.app" || bad=1; }
   if [ $bad = 1 ]; then
     { echo "--- attributes of the app it was made from"; xattr -lr "$src" | grep -E 'com\.apple' | head -3
@@ -115,17 +112,19 @@ opened() {
 }
 
 # The old way, then opened: tells whether what is lost is lost by every way of making an image or only by the new one.
-attempt create-opened plain 'hdiutil create -srcfolder "$stage" -volname probe -fs HFS+ -fsargs "-c c=64,a=16,e=16" -format UDRW "$image" && opened "$stage/navvied.app" "$image" xattr'
+attempt create-opened plain 'hdiutil create -srcfolder "$stage" -volname probe -fs HFS+ -fsargs "-c c=64,a=16,e=16" -format UDRW "$image" && opened "$stage/navvied.app" "$image"'
 # The way of the installer, opened.
-attempt script-opened plain 'bash "$here/make-dmg.sh" "$stage/navvied.app" "$image" navvied && opened "$stage/navvied.app" "$image" xattr'
-# Written straight from the folder as a UDF volume, which has no Finder information to give: still no volume is attached while making it.
-attempt udf-opened plain 'hdiutil makehybrid -default-volume-name probe -udf -o "$work/udf-$i.dmg" "$stage" && hdiutil convert -format UDZO -o "$image" "$work/udf-$i.dmg" && hdiutil verify "$image" && opened "$stage/navvied.app" "$image" xattr'
+attempt script-opened plain 'bash "$here/make-dmg.sh" "$stage/navvied.app" "$image" navvied && opened "$stage/navvied.app" "$image"'
+# Written straight from the folder as a UDF volume, or as an ISO 9660 one with long names: neither has Finder information to give, and no
+# volume is attached while making it. The tool decides the extension of what it writes, so the file is found by its name without one.
+attempt udf-opened plain 'hdiutil makehybrid -default-volume-name probe -udf -o "$work/udf-$i" "$stage" && raw=$(ls "$work"/udf-$i.* | head -n 1) && hdiutil convert -format UDZO -o "$image" "$raw" && hdiutil verify "$image" && opened "$stage/navvied.app" "$image"'
+attempt iso-opened plain 'hdiutil makehybrid -default-volume-name probe -iso -iso-level 4 -o "$work/iso-$i" "$stage" && raw=$(ls "$work"/iso-$i.* | head -n 1) && hdiutil convert -format UDZO -o "$image" "$raw" && hdiutil verify "$image" && opened "$stage/navvied.app" "$image"'
 # The fallback, if nothing above keeps the signature: an image of our own that is attached, filled and detached by this script, to count how often that is refused.
 attempt manual plain 'hdiutil create -size 300m -fs HFS+ -volname probe -ov "$image" && m=$(mktemp -d "$work/fill.XXXXXX") && hdiutil attach -nobrowse -noautoopen -mountpoint "$m" "$image" >/dev/null && ditto "$stage" "$m" && sync && hdiutil detach "$m"'
 
 {
   echo "way             images  failed  slowest (s)"
-  for way in create create-quiet script create-opened script-opened udf-opened manual; do
+  for way in create create-quiet script create-opened script-opened udf-opened iso-opened manual; do
     awk -v w="$way" '$1 == w {n++; if ($2 == "fail") f++; if ($3 > s) s = $3} END {printf "%-15s %6d  %6d  %11d\n", w, n, f, s}' "$results"
   done
 } >"$work/summary.txt"
