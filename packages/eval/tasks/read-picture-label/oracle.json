@@ -1,0 +1,15 @@
+[
+  {
+    "tool": "Read",
+    "args": {
+      "file_path": "chart.png"
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "answer.txt",
+      "content": "${picture}\n"
+    }
+  }
+]

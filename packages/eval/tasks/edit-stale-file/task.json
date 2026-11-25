@@ -1,0 +1,17 @@
+{
+  "id": "edit-stale-file",
+  "title": "Edit a file that another process is also changing",
+  "kind": "fix",
+  "level": 2,
+  "lang": "ts",
+  "requires": [
+    "bun"
+  ],
+  "prompt": "Set retries to 5 in src/config.ts. Another process is changing the same file while you work: keep its changes (the tests check both). Do not change the tests.",
+  "check": "bun test",
+  "protect": [
+    "tests/**"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 300
+}

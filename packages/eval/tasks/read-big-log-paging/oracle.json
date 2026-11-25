@@ -1,0 +1,24 @@
+[
+  {
+    "tool": "Read",
+    "args": {
+      "file_path": "logs/big.log",
+      "limit": 3
+    }
+  },
+  {
+    "tool": "Read",
+    "args": {
+      "file_path": "logs/big.log",
+      "offset": 78995,
+      "limit": 10
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "answer.txt",
+      "content": "${result:code=([A-Z0-9-]+)}\n"
+    }
+  }
+]

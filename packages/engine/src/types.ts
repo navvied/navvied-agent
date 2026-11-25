@@ -1,9 +1,11 @@
+import type { FileState } from "./tools/file-state.ts";
 import type { ShellState } from "./tools/shell-state.ts";
 import type { Backend } from "./backend.ts";
 import type { Jobs } from "./jobs.ts";
 import type { MemoryPaths } from "./memory.ts";
 import type { SkillInfo } from "./skills.ts";
-import type { EngineEvent } from "@navvied/protocol";
+import type { SkillBook } from "./skill-book.ts";
+import type { EngineEvent, PermMode, QuestionItem } from "@navvied/protocol";
 
 export type Role = "system" | "user" | "assistant" | "tool";
 
@@ -21,8 +23,12 @@ export interface Message {
 export type JsonSchema = Record<string, unknown>;
 /** The earlier conversations of the person, as a tool may look through them. */
 export interface Recall {
-  search(query: string, limit: number): { id: string; title: string; snippet: string; updated: number }[];
+  /** The conversations that match, best first: the message that matched is `n` (1-based) in the conversation. */
+  search(query: string, limit: number): { id: string; title: string; snippet: string; updated: number; n: number }[];
+  /** Every message of one conversation, in order. */
   read(id: string): { k: string; text: string }[] | undefined;
+  /** The conversations most recently worked on. */
+  recent(limit: number): { id: string; title: string; updated: number }[];
 }
 export interface ToolSpec { name: string; description: string; parameters: JsonSchema }
 
@@ -65,6 +71,12 @@ export interface Provider {
 export interface WebProxy { url: string; token: string }
 
 export interface ToolContext {
+  /** What this conversation has read or written of files: the tools that change a file check it. */
+  files?: FileState;
+  /** Whether the model can see pictures (not set: not known). */
+  vision?: boolean;
+  /** Gives the model a picture with the result of the tool. */
+  show?: (part: Part) => void;
   /** What this conversation's commands remember between calls (the folder, the exports). */
   shell?: ShellState;
   /** The model's context window in tokens, for tools that size what they return to it. */
@@ -79,6 +91,8 @@ export interface ToolContext {
   allowPrivateNetwork: boolean;
   /** Commands that keep running after the turn that started them. */
   jobs: Jobs;
+  /** What a command starts with: this program's environment without the keys it uses itself (see child-env.ts). */
+  env?: NodeJS.ProcessEnv;
   /** Where Bash runs its commands (on this computer when it is not set). */
   backend?: Backend;
   /** The person's earlier conversations, for the Recall tool. */
@@ -91,12 +105,22 @@ export interface ToolContext {
   skills?: () => SkillInfo[];
   /** Where the agent keeps notes for later. */
   memory?: MemoryPaths;
+  /** The permission mode of the conversation now. */
+  mode?: PermMode;
+  /** This turn has read text from the web, so what the agent saves now may have been put in its head by a page. */
+  untrusted?: boolean;
+  /** How the agent makes and changes skills, and keeps the record of it. */
+  skillBook?: SkillBook;
+  /** `ask`: a change to a skill waits for the person; `auto` (default): it is made and can be undone. */
+  skillApproval?: () => "ask" | "auto";
   /** What a command printed, as it prints (the engine passes it on, a little at a time). */
   live?: (chunk: string) => void;
   /** Facts about how the work ended, for the step's card: the exit code, that the output was cut, that it timed out, or that it went on as a job. */
   report?: (meta: { code?: number | null; truncated?: boolean; timedOut?: boolean; background?: boolean; cached?: boolean }) => void;
   /** Runs a research task in a helper of its own and returns what it found. */
-  helper?: (task: { description: string; prompt: string; agent?: string }, signal: AbortSignal) => Promise<string>;
+  helper?: (task: { description: string; prompt: string; agent?: string; background?: boolean }, signal: AbortSignal) => Promise<string>;
+  /** Asks the person the questions and returns what they answered (or why nobody did), as the model reads it. */
+  ask?: (questions: QuestionItem[], signal: AbortSignal) => Promise<string>;
 }
 
 export interface Tool extends ToolSpec {

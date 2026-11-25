@@ -1,0 +1,13 @@
+{
+  "id": "skill-create-and-patch",
+  "title": "Turn a routine into a skill, then correct one step of it",
+  "kind": "terminal",
+  "level": 2,
+  "lang": "none",
+  "requires": ["bun"],
+  "prompt": "The routine in ROUTINE.md will be repeated every week. Keep it as a skill called weekly-report in the .agents/skills folder of this project (SKILL.md with a name and a description in front matter, then the steps). Then correct step 3: the report goes to reports/, not to out/.",
+  "check": "bun \"$BENCH_FIXTURES/skills-check.ts\" created weekly-report",
+  "protect": ["README.md", "ROUTINE.md"],
+  "maxSteps": 25,
+  "timeoutSeconds": 600
+}

@@ -1,0 +1,48 @@
+[
+  {
+    "tool": "Read",
+    "args": {
+      "file_path": "src/cart.ts"
+    }
+  },
+  {
+    "tool": "MultiEdit",
+    "args": {
+      "file_path": "src/cart.ts",
+      "edits": [
+        {
+          "old_string": "qty: number; unit: number }",
+          "new_string": "quantity: number; unit: number }"
+        },
+        {
+          "old_string": "text that is not in the file",
+          "new_string": "x"
+        }
+      ]
+    }
+  },
+  {
+    "tool": "MultiEdit",
+    "args": {
+      "file_path": "src/cart.ts",
+      "edits": [
+        {
+          "old_string": "qty: number; unit: number }",
+          "new_string": "quantity: number; unit: number }"
+        },
+        {
+          "old_string": "l.qty * l.unit",
+          "new_string": "l.quantity * l.unit"
+        },
+        {
+          "old_string": "s + l.qty,",
+          "new_string": "s + l.quantity,"
+        },
+        {
+          "old_string": "sku: string, qty: number, unit: number): Line[] { return [...lines, { sku, qty, unit }]",
+          "new_string": "sku: string, quantity: number, unit: number): Line[] { return [...lines, { sku, quantity, unit }]"
+        }
+      ]
+    }
+  }
+]

@@ -67,6 +67,9 @@ export function authHeaders(api: ModelEntry["api"], key: string | undefined): Re
 }
 
 /** The files a project may keep its standing instructions in. NAVVIED.md first; the others are read when it is absent, so projects set up for other agents work as they are. */
+/** The folders a project may keep skills in, from the lowest priority to the highest: the layouts other agents use are read as they are, navvied's own wins. */
+export const SKILL_FOLDERS: readonly string[] = [".claude/skills", ".agents/skills", ".navvied/skills"];
+
 export const INSTRUCTION_FILE_NAMES: readonly string[] = ["NAVVIED.md", "AGENTS.md", "CLAUDE.md"];
 
 /**

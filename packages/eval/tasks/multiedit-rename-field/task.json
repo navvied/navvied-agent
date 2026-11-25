@@ -1,0 +1,17 @@
+{
+  "id": "multiedit-rename-field",
+  "title": "Rename a field in several places of one file",
+  "kind": "refactor",
+  "level": 2,
+  "lang": "ts",
+  "requires": [
+    "bun"
+  ],
+  "prompt": "In src/cart.ts the field qty must be called quantity: in the type, in the functions and in their parameters. Behaviour stays the same. The tests already use the new name. Do not change the tests.",
+  "check": "bun test",
+  "protect": [
+    "tests/**"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 300
+}

@@ -136,13 +136,16 @@ export function pdfPages(buf: Buffer): string[] {
   return pages;
 }
 
-const pdfPlain = (buf: Buffer): string => pdfPages(buf).map((p, i) => `--- Page ${i + 1} ---\n${p}`).join("\n\n");
-
-function pdf(buf: Buffer, path: string): string {
+/** The pages of a PDF: by `pdftotext` when this computer has it (the best way), else by the plain reader. */
+export function pdfPagesAt(buf: Buffer, path: string): string[] {
   const r = spawnSync("pdftotext", ["-layout", "-q", path, "-"], { encoding: "utf8", timeout: 30_000, maxBuffer: 50_000_000 });
-  if (r.status === 0 && r.stdout.trim()) return r.stdout.trim();
-  return pdfPlain(buf);
+  if (r.status === 0 && r.stdout.trim()) { const pages = r.stdout.split("\f"); if (!pages.at(-1)?.trim()) pages.pop(); return pages; }
+  return pdfPages(buf);
 }
+
+export const pageBlock = (n: number, text: string): string => `--- Page ${n} ---\n${text}`;
+
+const pdf = (buf: Buffer, path: string): string => pdfPagesAt(buf, path).map((p, i) => pageBlock(i + 1, p.trim())).join("\n\n");
 
 /** The text of a document file, or a plain reason it cannot be read. */
 export function readDocument(path: string, bytes: Buffer): { ok: true; text: string } | { ok: false; error: string } {

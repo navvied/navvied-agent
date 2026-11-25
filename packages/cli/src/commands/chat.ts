@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { remember } from "@navvied/engine";
+import { keep } from "@navvied/engine";
 import { PERM_MODES, encodeQr, parseEvent, qrText, type CheckpointInfo, type EngineEvent, type PermMode } from "@navvied/protocol";
 import type { Options } from "../args.ts";
 import { MODE_LABEL, renderBanner } from "../banner.ts";
@@ -13,6 +13,7 @@ import { makeSuggest } from "../complete.ts";
 import { SLASH_COMMANDS } from "../slash.ts";
 import type { Created } from "../create.ts";
 import { askApproval, askPlan } from "../approval-ui.ts";
+import { askQuestions } from "../question-ui.ts";
 import { effortLabel, effortRows, modelRows } from "../model-ui.ts";
 import { Presenter } from "../presenter.ts";
 import { createHub } from "./hub.ts";
@@ -104,7 +105,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
     // A conversation that was put aside while it was being answered goes on without this screen: it only says when it is done, or waits for an answer.
     if ((e as { bg?: string }).bg !== undefined) {
       if (e.ev === "done") say(`${paint(io.color, "cyan", "✓")} A conversation finished in the background. /resume opens it.`);
-      else if (e.ev === "approval") say(`${paint(io.color, "yellow", "!")} A conversation in the background waits for your answer. /resume opens it.`);
+      else if (e.ev === "approval" || e.ev === "question") say(`${paint(io.color, "yellow", "!")} A conversation in the background waits for your answer. /resume opens it.`);
       return;
     }
     // Another conversation is now the open one: this screen is not waiting for the old one's reply.
@@ -132,6 +133,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
     if (e.ev === "phase" && e.name === "compacting") summarised = true;
     if (e.ev === "usage") { context = { ctx: e.ctx, win: e.win }; dock?.refresh(); }
     if (e.ev === "approval") { approval = e.id; if (presenter && io.choose) void answerApproval(e); }
+    if (e.ev === "question" && presenter && io.choose) void answerQuestion(e);
     if (e.ev === "plan_proposal") proposed = true;
     if (e.ev === "checkpoints") { listed = e.items; if (checkpointsAsked) { checkpointsAsked = false; void chooseCheckpoint(e.items); } }
     if (e.ev === "found" && searchAsked === e.query) { searchAsked = undefined; void chooseHit(e.query, e.items); }
@@ -179,7 +181,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
   const signedIn = io.interactive ? readAccount(accountPath(io.env, options.config)) : undefined;
   if (signedIn) void joinAccount(signedIn).catch(() => relay().start().catch(() => undefined));
   else if (io.interactive && devices.list().some((d) => d.kind === "relay")) void relay().start().catch(() => undefined);
-  hub.attach({ send: (line) => { const parsed = parseEvent(String(line)); if (parsed.ok) emit(parsed.value); } }, 0);
+  hub.attach({ send: (line) => { const parsed = parseEvent(String(line)); if (parsed.ok) emit(parsed.value); }, ...(presenter && io.choose ? { answers: true as const } : {}) }, 0);
   const start = (): boolean => {
     const restarted = hub.restart();
     if (!restarted.ok) { say(`${paint(io.color, "yellow", "!")} ${restarted.error}`); return false; }
@@ -237,6 +239,11 @@ export async function chatCommand(initial: string | undefined, options: Options,
       say(saved.ok ? `${paint(io.color, "cyan", "✓")} Will always allow "${answer.pattern}" from now on.` : `${paint(io.color, "yellow", "!")} Could not save that: ${saved.error}`);
     }
     current?.engine.handle({ cmd: "approve", id: e.id, optionId: answer.optionId, ...(answer.input !== undefined ? { input: answer.input } : {}) });
+  };
+
+  const answerQuestion = async (e: Extract<EngineEvent, { ev: "question" }>): Promise<void> => {
+    const answers = await askQuestions(io, e);
+    current?.engine.handle({ cmd: "answer", id: e.id, answers });
   };
 
   const answerPlan = async (): Promise<void> => {
@@ -472,7 +479,10 @@ export async function chatCommand(initial: string | undefined, options: Options,
     if (action?.kind === "open") { ensureFile(action.file, action.header); io.system.open(action.file); say(`Opened ${paint(io.color, "dim", action.file)}`); }
     else if (action?.kind === "add") {
       const note = await io.text?.("What should it remember?", "", { heading: head });
-      if (typeof note === "string" && note.trim()) say(remember(paths, "project", note, new Date().toISOString().slice(0, 10)).replace(/^Remembered/, `${paint(io.color, "cyan", "✓")} Remembered`));
+      if (typeof note === "string" && note.trim()) {
+        const result = keep(paths, { action: "add", scope: "project", text: note }, { today: new Date().toISOString().slice(0, 10), origin: "user" });
+        say(result.startsWith("Remembered") ? `${paint(io.color, "cyan", "✓")} Remembered for this project: ${note.replace(/\s+/g, " ").trim()}` : result);
+      }
     }
     marker();
   };

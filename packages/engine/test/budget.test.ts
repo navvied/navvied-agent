@@ -47,7 +47,8 @@ describe("a list of matches or files is short, and says what it left out", () =>
   const search = (pattern: string, path: string, noPrograms = false): Promise<string> => {
     const before = process.env.PATH;
     if (noPrograms) process.env.PATH = "";
-    return tool("Grep").run({ pattern, path }, ctx()).finally(() => { process.env.PATH = before; });
+    // The search done in the program says so after its result; what is left out is told before it.
+    return tool("Grep").run({ pattern, path }, ctx()).then((out) => out.replace(/\n\[searched without ripgrep:[^\]]*\]$/, "")).finally(() => { process.env.PATH = before; });
   };
   const several = (): void => {
     mkdirSync(join(dir, "three"), { recursive: true });
@@ -61,7 +62,7 @@ describe("a list of matches or files is short, and says what it left out", () =>
       const out = await search(" 500 ", "logs", noPrograms);
       const lines = out.split("\n");
       expect(lines.length).toBe(101);
-      expect(lines.at(-1)).toBe("[2900 more matches were not shown: narrow the pattern, add a glob, or search one file]");
+      expect(lines.at(-1)).toBe("[2900 more matches were not shown: narrow the pattern, add a glob, search one file, or continue with offset 100]");
     });
     test(`${way}: matches in several files show 50 of each up to 100, and say how many files hid some`, async () => {
       several();
@@ -72,7 +73,7 @@ describe("a list of matches or files is short, and says what it left out", () =>
       const perFile = new Map<string, number>();
       for (const l of lines.slice(0, -1)) perFile.set(l.split(":")[0]!, (perFile.get(l.split(":")[0]!) ?? 0) + 1);
       expect([...perFile.values()]).toEqual([50, 50]);
-      expect(lines.at(-1)).toBe("[140 more matches in 3 files were not shown: narrow the pattern, add a glob, or search one file]");
+      expect(lines.at(-1)).toBe("[140 more matches in 3 files were not shown: narrow the pattern, add a glob, search one file, or continue with offset 100]");
     });
     test(`${way}: a result that is whole says nothing about what is left`, async () => {
       writeFileSync(join(dir, "few.txt"), "needle 1\nneedle 2\nother\n");

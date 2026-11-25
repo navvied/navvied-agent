@@ -1,18 +1,9 @@
 import { USER_AGENT } from "./user-agent.ts";
 import { whyUnreached, type Unreached } from "./web-errors.ts";
+import { parseJsonResults, type Backend, type Outcome, type SearchHit } from "./web-search-hits.ts";
+import { RING } from "./web-search-ring.ts";
 
-export interface SearchHit { title: string; url: string; snippet: string }
-
-/** What one search site made of a question: results (possibly none, when the site is plainly working), a request for a human, or why it was not usable. */
-export type Outcome = { hits: SearchHit[] } | { human: true } | { failed: Unreached | "blocked" | "status"; status?: number; /** What the server itself said, when it said it in a sentence. */ said?: string };
-
-export interface Backend {
-  id: string;
-  /** How a person or model names it: "DuckDuckGo". */
-  label: string;
-  ask(query: string, limit: number, signal: AbortSignal): Promise<Outcome>;
-}
-
+export { parseJsonResults, type Backend, type Outcome, type SearchHit };
 
 const text = (html: string): string =>
   html.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/\s+/g, " ").trim();
@@ -50,16 +41,6 @@ export function parseLiteResults(html: string): SearchHit[] {
     if (/^https?:\/\//.test(url)) hits.push({ title: text(m[2] ?? m[4]!), url, snippet: text(snippet) });
   }
   return hits;
-}
-
-/** Results from a search server that answers in JSON, such as SearXNG. */
-export function parseJsonResults(body: unknown): SearchHit[] {
-  const list = (body as { results?: unknown }).results;
-  if (!Array.isArray(list)) return [];
-  return list.flatMap((r: unknown) => {
-    const hit = (typeof r === "object" && r !== null ? r : {}) as Record<string, unknown>;
-    return typeof hit.url === "string" && typeof hit.title === "string" ? [{ title: hit.title, url: hit.url, snippet: typeof hit.content === "string" ? hit.content : "" }] : [];
-  });
 }
 
 /** Results of the encyclopedia's own search API (`action=query&list=search`). */
@@ -132,15 +113,23 @@ const BASE: readonly Backend[] = [
   },
 ];
 
-export const DEFAULT_ORDER: readonly string[] = ["duckduckgo", "duckduckgo-lite", "navvied", "wikipedia"];
+const REST: readonly string[] = ["duckduckgo", "duckduckgo-lite", "navvied", "wikipedia"];
+
+/** Where the ring starts: random for each program, one further for each search, so no one service takes all the questions of a person or of a fleet. */
+let turn = Math.floor(Math.random() * RING.length);
+const nextTurn = (): number => turn++ % RING.length;
+const turned = (start: number): string[] => [...RING.slice(start), ...RING.slice(0, start)].map((b) => b.id);
 
 /** Every backend there is, with navvied's own search reached the way `via` says. */
-export const backends = (via?: () => NavviedSearch | undefined): Backend[] => [...BASE, navvied(via ?? (() => undefined))];
+export const backends = (via?: () => NavviedSearch | undefined): Backend[] => [...RING, ...BASE, navvied(via ?? (() => undefined))];
 
-/** The backends in the order asked for (unknown names are ignored); an empty or unusable list is the default order. */
-export function inOrder(order: readonly string[] | undefined, via?: () => NavviedSearch | undefined): Backend[] {
+/**
+ * The backends in the order asked for (unknown names are ignored). An empty or unusable list is the default: the ring (from `start`, or the next turn), then the public pages,
+ * navvied's own search and the encyclopedia. A list that names backends is followed exactly, with no turning.
+ */
+export function inOrder(order: readonly string[] | undefined, via?: () => NavviedSearch | undefined, start?: number): Backend[] {
   const all = backends(via);
   const pick = (names: readonly string[]): Backend[] => [...new Set(names.flatMap((id) => all.filter((b) => b.id === id)))];
   const chosen = pick(order ?? []);
-  return chosen.length ? chosen : pick(DEFAULT_ORDER);
+  return chosen.length ? chosen : pick([...turned(start ?? nextTurn()), ...REST]);
 }

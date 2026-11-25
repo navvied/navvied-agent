@@ -1,0 +1,27 @@
+{
+  "id": "research-two-helpers",
+  "title": "Hand two reading jobs to two helpers at the same time",
+  "kind": "agent",
+  "level": 2,
+  "lang": "none",
+  "requires": [],
+  "prompt": "docs/alpha.txt and docs/beta.txt each name a codename. Give one helper each file to read, both at the same time, and write the two codenames into summary.txt, alpha's on the first line and beta's on the second.",
+  "check": "test \"$(sed -n 1p summary.txt)\" = heron && test \"$(sed -n 2p summary.txt)\" = otter",
+  "protect": [
+    "docs/**"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 120,
+  "oracle": {
+    "helpers": [
+      {
+        "prompt": "Read docs/alpha.txt and report its codename, with the line it is on.",
+        "says": "heron"
+      },
+      {
+        "prompt": "Read docs/beta.txt and report its codename, with the line it is on.",
+        "says": "otter"
+      }
+    ]
+  }
+}

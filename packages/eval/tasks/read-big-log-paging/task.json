@@ -1,0 +1,18 @@
+{
+  "id": "read-big-log-paging",
+  "title": "Find the one error in a log too big to read whole",
+  "kind": "terminal",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "python3"
+  ],
+  "prompt": "logs/big.log is about 6 MB with 80,000 lines. Exactly one line is an ERROR and carries a code=... value. Write that code into answer.txt, alone on one line.",
+  "check": "python3 -c \"import hashlib,os; print('PQ-' + hashlib.sha1((os.environ['BENCH_SECRET'] + 'code').encode()).hexdigest()[:8].upper())\" > .want && test \"$(tr -d '[:space:]' < answer.txt)\" = \"$(cat .want)\"",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 600,
+  "setup": "python3 - <<'EOF'\nimport hashlib, os\ncode = \"PQ-\" + hashlib.sha1((os.environ[\"BENCH_SECRET\"] + \"code\").encode()).hexdigest()[:8].upper()\nos.makedirs(\"logs\", exist_ok=True)\nwith open(\"logs/big.log\", \"w\") as f:\n    for i in range(1, 80001):\n        f.write(\"2026-11-25T10:00:00Z ERROR code=%s job failed\\n\" % code if i == 79000 else \"2026-11-25T10:00:00Z INFO request %d finished normally and was logged in full detail\\n\" % i)\nEOF"
+}

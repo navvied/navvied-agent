@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { LineSplitter, parseEvent } from "@navvied/protocol";
+import { LineSplitter, parseEvent, type PlanEntry } from "@navvied/protocol";
 import type { Adapter } from "./adapter.ts";
 import { instantiate } from "./adapter.ts";
 import { watchMemory } from "./memory.ts";
@@ -74,6 +74,13 @@ export function webOf(steps: readonly { name: string; input?: unknown; output?: 
   return w;
 }
 
+/** Whether a task list was kept the way it should be: at least one list, one item in progress at most in each, and the last with everything done. Says what is wrong, or nothing. */
+export function planKept(lists: readonly (readonly PlanEntry[])[]): string | undefined {
+  if (!lists.length) return "no task list was kept";
+  if (lists.some((l) => l.filter((e) => e.status === "in_progress").length > 1)) return "two items were in progress at once";
+  return lists.at(-1)!.every((e) => e.status === "completed") ? undefined : "the last list still has unfinished items";
+}
+
 export interface TaskResult {
   task: string;
   /** What kind of work the task is, how hard, in which language (as the task says), for the report. */
@@ -82,7 +89,7 @@ export interface TaskResult {
   lang?: Task["lang"];
   model: string;
   passed: boolean;
-  reason: "solved" | "check failed" | "protected files changed" | "timeout" | "agent failed" | "left a process running" | "setup failed" | "skipped";
+  reason: "solved" | "check failed" | "protected files changed" | "timeout" | "agent failed" | "left a process running" | "setup failed" | "skipped" | "task list not kept";
   ms: number;
   modelCalls: number;
   toolCalls: number;
@@ -116,7 +123,7 @@ export interface TaskResult {
   workspace?: string;
 }
 
-interface Metrics { misuse?: Misuse; web?: WebUse; modelCalls: number; toolCalls: number; outTokens: number; peakContext: number; error?: string; /** What the agent said in its last turn. */ said?: string; /** The tools it used, in order, with how each ended. */ steps?: string[] }
+interface Metrics { /** Every task list the agent sent. */ plans?: PlanEntry[][]; misuse?: Misuse; web?: WebUse; modelCalls: number; toolCalls: number; outTokens: number; peakContext: number; error?: string; /** What the agent said in its last turn. */ said?: string; /** The tools it used, in order, with how each ended. */ steps?: string[] }
 
 function measure(stdout: string, known = ""): Metrics {
   const m: Metrics = { modelCalls: 0, toolCalls: 0, outTokens: 0, peakContext: 0 };
@@ -133,6 +140,7 @@ function measure(stdout: string, known = ""): Metrics {
       if (e.input !== undefined) inputs.set(e.id, e.input);
       if (e.status !== "running") { (m.steps ??= []).push(`${e.name}:${e.status}`); ended.push({ name: e.name, status: e.status, input: inputs.get(e.id), ...(e.output !== undefined ? { output: e.output } : {}) }); }
     }
+    else if (e.ev === "plan") (m.plans ??= []).push(e.entries);
     else if (e.ev === "error" && !m.error) m.error = e.msg;
     else if (e.ev === "text") m.said = `${m.said ?? ""}${e.text}`;
   }
@@ -162,8 +170,8 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
   // Another agent is started as its file says, in the workspace; ours is started with its own `run`.
   const other = opts.agent ? instantiate(opts.agent, { prompt: task.prompt, dir, ...(opts.model ? { model: opts.model } : {}), ...(opts.meter && opts.agent.pointable ? { baseUrl: opts.meter.url(runId) } : {}), ...(opts.key ? { key: opts.key } : {}) }) : undefined;
   const proc = Bun.spawn(
-    other ? other.argv : [program!, ...base, "run", task.prompt, "--cwd", dir, "--json", "--mode", "auto", "--max-steps", String(task.maxSteps), ...(opts.model ? ["--model", opts.model] : [])],
-    { cwd: dir, env: { ...process.env, ...secret, ...opts.env, ...taskEnv(dir, task), ...counted, ...other?.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+    other ? other.argv : [program!, ...base, "run", task.prompt, "--cwd", dir, "--json", "--mode", "auto", "--max-steps", String(task.maxSteps), ...(task.answers ? ["--answers", JSON.stringify(task.answers)] : []), ...(opts.model ? ["--model", opts.model] : [])],
+    { cwd: dir, env: { ...process.env, ...secret, NAVVIED_TERMINAL_ENV: "BENCH_SECRET", ...opts.env, ...taskEnv(dir, task), ...counted, ...other?.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
   );
   const memory = watchMemory(proc.pid);
   let timedOut = false;
@@ -192,8 +200,8 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
   killProcesses(left);
   if (task.teardown) await shell(dir, task.teardown, scriptEnv(secret)).catch(() => undefined);
 
-  const reason: TaskResult["reason"] = timedOut ? "timeout" : tampered ? "protected files changed" : !result?.ok ? (exitCode !== 0 && exitCode !== null ? "agent failed" : "check failed") : left.length ? "left a process running" : "solved";
-  const error = metrics.error ?? (reason === "agent failed" ? stderr.trim().split("\n").at(-1) : undefined);
+  const reason: TaskResult["reason"] = timedOut ? "timeout" : tampered ? "protected files changed" : !result?.ok ? (exitCode !== 0 && exitCode !== null ? "agent failed" : "check failed") : left.length ? "left a process running" : task.plan && !opts.agent && planKept(metrics.plans ?? []) ? "task list not kept" : "solved";
+  const error = metrics.error ?? (reason === "agent failed" ? stderr.trim().split("\n").at(-1) : reason === "task list not kept" ? planKept(metrics.plans ?? []) : undefined);
   // A secret the agent was given never reaches a result, whatever the agent or the model printed.
   const secrets = [opts.env?.NAVVIED_API_KEY, opts.key].filter((k): k is string => !!k && k.length >= 8 && k !== "none");
   const clean = (text: string): string => secrets.reduce((t, k) => t.split(k).join("[key]"), text);

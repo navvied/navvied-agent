@@ -67,8 +67,9 @@ export interface McpEntry { command?: string; args?: string[]; env?: Record<stri
 const HOOK_EVENTS = ["PreToolUse", "PostToolUse", "Stop", "UserPromptSubmit", "SessionStart", "PreCompact"];
 
 /** Where the Bash tool may run its commands besides this computer. The host and the image are set here, never from a page. */
-export interface TerminalConfig { docker?: { image?: string }; ssh?: { host: string; user?: string; dir?: string } }
-export interface ConfigFile { default?: string; terminal?: TerminalConfig; /** Folders an agent may be started in, besides the one the program starts in and the ones worked in lately. Added here, never from a page. */ folders?: string[]; /** `false`: do not use the free models of navvied.com without an account (the default is to use them, as listed by the server). */ guestModels?: boolean; /** `list` (default): every step is one line, a failure or a change shows more. `fold`: steps that went well are folded away. `all`: everything every step printed. */ steps?: "list" | "fold" | "all"; /** Models to use, in this order, when the one chosen cannot be reached (names of entries in `models`). */ fallback?: string[]; theme?: string; accent?: string; autoUpdate?: boolean; /** Where a hosted session reaches the web, and the token to ask with. Written by the service that runs the session. */ webProxy?: { url: string; token: string }; models: Record<string, ModelEntry>; /** What this computer keeps for the providers a person has a key of their own for (see providers.ts). Never sent anywhere. */ providers?: Record<string, SavedProvider>; /** The servers of the person's own that were added from a page (see endpoints.ts). Never sent anywhere, keys included. */ endpoints?: Record<string, EndpointRecord>; mcp?: Record<string, McpEntry>; hooks?: HookConfig; /** `false` keeps this computer's conversations off the account (default: they are kept there while signed in) */ syncConversations?: boolean; /** allow / ask / deny rules; see docs/CLI.md */ permissions?: RuleSet }
+/** `env`: names of environment variables a command may keep although they look like secrets (the keys navvied itself uses are never passed on). */
+export interface TerminalConfig { docker?: { image?: string }; ssh?: { host: string; user?: string; dir?: string }; env?: string[] }
+export interface ConfigFile { default?: string; terminal?: TerminalConfig; /** Folders an agent may be started in, besides the one the program starts in and the ones worked in lately. Added here, never from a page. */ folders?: string[]; /** `false`: do not use the free models of navvied.com without an account (the default is to use them, as listed by the server). */ guestModels?: boolean; /** `list` (default): every step is one line, a failure or a change shows more. `fold`: steps that went well are folded away. `all`: everything every step printed. */ steps?: "list" | "fold" | "all"; /** Whether the model is offered the `apply_patch` tool: `auto` (default: when its window is not small), `on` or `off`. */ applyPatch?: "auto" | "on" | "off"; /** Models to use, in this order, when the one chosen cannot be reached (names of entries in `models`). */ fallback?: string[]; theme?: string; accent?: string; autoUpdate?: boolean; /** Where a hosted session reaches the web, and the token to ask with. Written by the service that runs the session. */ webProxy?: { url: string; token: string }; models: Record<string, ModelEntry>; /** What this computer keeps for the providers a person has a key of their own for (see providers.ts). Never sent anywhere. */ providers?: Record<string, SavedProvider>; /** The servers of the person's own that were added from a page (see endpoints.ts). Never sent anywhere, keys included. */ endpoints?: Record<string, EndpointRecord>; mcp?: Record<string, McpEntry>; hooks?: HookConfig; /** `false` keeps this computer's conversations off the account (default: they are kept there while signed in) */ syncConversations?: boolean; /** allow / ask / deny rules; see docs/CLI.md */ permissions?: RuleSet; /** `approval`: a skill the agent makes or changes waits for the person (`ask`) or is made and can be undone (`auto`, the default). `trust: "confirm"`: a skill that comes with a project is not offered to the model until the person accepts it. */ skills?: { approval?: "ask" | "auto"; trust?: "confirm" }; }
 
 export interface ResolvedModel {
   name: string;
@@ -112,6 +113,8 @@ export const searchIndexPath = (env: Env, platform: Platform = process.platform)
 /** The tasks the person scheduled, and where what each one produced is kept. */
 /** Where commands run (this computer, a container, another machine) and how many times each tool was used, kept in the computer's own state. */
 export const terminalStatePath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "terminal.json");
+/** Where background commands keep their whole output and the record a restart finds them by. */
+export const jobsDir = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "jobs");
 export const draftsPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "drafts.json");
 export const toolUsagePath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "tool-usage.json");
 export const schedulesPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "schedules.json");
@@ -132,6 +135,9 @@ export const chatSearchIndexPath = (env: Env, platform: Platform = process.platf
 export const accountPath = (env: Env, flag?: string, platform: Platform = process.platform): string => joiner(platform)(dirnameOf(configPath(env, flag, platform), platform), "account.json");
 /** The free models of navvied.com for a computer without an account, as last listed by the server. */
 export const guestModelsPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "guest-models.json");
+/** What the person accepted among the skills that come with projects, and the record of every change the agent made to a skill. */
+export const skillTrustPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "skill-trust.json");
+export const skillLedgerPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "skills-ledger.jsonl");
 /** What the person switched off among skills, tool servers and hooks. */
 export const pluginStatePath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "plugins.json");
 /** The folders worked in lately, so a page can offer them. */
@@ -271,6 +277,11 @@ function loadConfigFile(path: string): Result<ConfigFile | null> {
     if (!Array.isArray(raw.fallback) || !raw.fallback.every((n) => typeof n === "string" && n in models)) return { ok: false, error: `${path}: "fallback" must be a list of names of models in "models"` };
     if (raw.fallback.length) config.fallback = raw.fallback as string[];
   }
+  if (raw.skills !== undefined) {
+    const k = raw.skills as { approval?: unknown; trust?: unknown } | null;
+    if (!k || typeof k !== "object" || Array.isArray(k) || (k.approval !== undefined && k.approval !== "ask" && k.approval !== "auto") || (k.trust !== undefined && k.trust !== "confirm")) return { ok: false, error: `${path}: "skills" may have "approval" ("ask" or "auto") and "trust" ("confirm")` };
+    config.skills = { ...(k.approval ? { approval: k.approval as "ask" | "auto" } : {}), ...(k.trust ? { trust: "confirm" as const } : {}) };
+  }
   if (raw.steps !== undefined) {
     if (raw.steps !== "list" && raw.steps !== "fold" && raw.steps !== "all") return { ok: false, error: `${path}: "steps" must be "list", "fold" or "all"` };
     config.steps = raw.steps;
@@ -287,6 +298,11 @@ function loadConfigFile(path: string): Result<ConfigFile | null> {
     if (t.ssh !== undefined) {
       if (typeof t.ssh !== "object" || t.ssh === null || !text(t.ssh.host) || (t.ssh.user !== undefined && !text(t.ssh.user)) || (t.ssh.dir !== undefined && typeof t.ssh.dir !== "string")) return { ok: false, error: `${path}: "terminal.ssh" needs a "host" (and may have "user" and "dir")` };
       terminal.ssh = { host: t.ssh.host as string, ...(t.ssh.user ? { user: t.ssh.user as string } : {}), ...(t.ssh.dir ? { dir: t.ssh.dir as string } : {}) };
+    }
+    const env = (t as { env?: unknown }).env;
+    if (env !== undefined) {
+      if (!Array.isArray(env) || !env.every((n) => typeof n === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(n))) return { ok: false, error: `${path}: "terminal.env" must be a list of variable names such as ["GITHUB_TOKEN"]` };
+      if (env.length) terminal.env = env as string[];
     }
     config.terminal = terminal;
   }
@@ -318,6 +334,10 @@ function loadConfigFile(path: string): Result<ConfigFile | null> {
       endpoints[id] = { name: v.name, baseUrl: v.baseUrl, api: v.api, ...(typeof v.key === "string" && v.key ? { key: v.key } : {}), models };
     }
     if (Object.keys(endpoints).length) config.endpoints = endpoints;
+  }
+  if (raw.applyPatch !== undefined) {
+    if (raw.applyPatch !== "auto" && raw.applyPatch !== "on" && raw.applyPatch !== "off") return { ok: false, error: `${path}: "applyPatch" must be "auto", "on" or "off"` };
+    config.applyPatch = raw.applyPatch;
   }
   if (raw.guestModels !== undefined) {
     if (typeof raw.guestModels !== "boolean") return { ok: false, error: `${path}: "guestModels" must be true or false` };

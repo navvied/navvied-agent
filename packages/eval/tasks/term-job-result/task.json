@@ -1,0 +1,19 @@
+{
+  "id": "term-job-result",
+  "title": "Start a slow build in the background and act on its result without running it again",
+  "kind": "terminal",
+  "level": 2,
+  "lang": "sh",
+  "requires": [
+    "python3",
+    "bash"
+  ],
+  "prompt": "Run the build in this folder (`bash build.sh`). It takes a while, so start it in the background and do not poll it. When it has finished, write the value after `result:` that it printed into result.txt, alone on one line. Run the build only once.",
+  "check": "test \"$(tr -d \"[:space:]\" < result.txt)\" = \"$(python3 -c \"import hashlib,os; print(hashlib.sha1((os.environ['BENCH_SECRET']+'jobresult').encode()).hexdigest()[:12])\")\" && test \"$(wc -l < runs.log | tr -d ' ')\" = 1",
+  "protect": [
+    "build.sh",
+    "README.md"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 600
+}

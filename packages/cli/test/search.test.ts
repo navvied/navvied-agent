@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -19,6 +20,34 @@ describe("the words of a search", () => {
     expect(matchQuery('weird" OR NEAR( * ) --')).toBe('"weird" AND "or" AND "near"*');
     expect(matchQuery("   ")).toBeUndefined();
     expect(matchQuery("日本語のテスト")).toBe('"日本語のテスト"*');
+  });
+});
+
+describe("the search index for the agent", () => {
+  test("each hit says which item matched, a loose search finds any word, recent lists the latest, and an index of an older shape is rebuilt", () => {
+    const db = new SearchIndex(":memory:");
+    db.put("a", "Tresor", 10, [say("user", "hallo"), say("tool", "Read"), say("assistant", "der Ersatzschluessel liegt im Tresor im Buero")]);
+    db.put("b", "lain", 20, [say("user", "Rezept fuer Pfannkuchen")]);
+    expect(db.search("tresor")[0]).toMatchObject({ id: "a", n: 3 });
+    expect(db.search("tresor haus")).toEqual([]);
+    expect(db.search("tresor haus", 5, true)[0]).toMatchObject({ id: "a", n: 3 });
+    expect(db.recent(5).map((r) => r.id)).toEqual(["b", "a"]);
+    expect(matchQuery("a b", true)).toBe('"a" OR "b"*');
+  });
+  test("a file made before the item number was kept is dropped and starts again", () => {
+    const dir = tempDir();
+    dirs.push(dir);
+    const path = join(dir, "old.sqlite");
+    const old = new Database(path, { create: true });
+    old.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, updated INTEGER NOT NULL)");
+    old.exec("CREATE VIRTUAL TABLE turns USING fts5(session UNINDEXED, text)");
+    old.exec("INSERT INTO sessions VALUES ('x', 't', 1)");
+    old.close();
+    const db = new SearchIndex(path);
+    expect(db.empty).toBe(true);
+    db.put("x", "t", 1, [say("user", "hello world")]);
+    expect(db.search("hello")[0]!.n).toBe(1);
+    db.close();
   });
 });
 

@@ -12,7 +12,7 @@ describe("a tool that exists and is not offered", () => {
     await r.turn(prompt("fix the bug in a.ts", { mode: "auto" }));
     const first = r.provider.requests[0]!;
     expect(first.tools.map((t) => t.name)).not.toContain("TodoWrite");
-    expect(first.system).toContain("Also available, by name: WebFetch, WebSearch, Agent, Remember, TodoWrite.");
+    expect(first.system).toContain("Also available, by name: WebFetch, WebSearch, Remember, TodoWrite.");
     expect(r.of("plan").length).toBe(1);
     expect(outputs(r).join("")).not.toContain("there is no tool");
     r.cleanup();
@@ -24,7 +24,7 @@ describe("a tool that exists and is not offered", () => {
     await r.turn(prompt("and now the other file", { mode: "auto" }));
     const later = r.provider.requests.at(-1)!;
     expect(later.tools.map((t) => t.name)).toContain("TodoWrite");
-    expect(later.system).toContain("Also available, by name: WebFetch, WebSearch, Agent, Remember.");
+    expect(later.system).toContain("Also available, by name: WebFetch, WebSearch, Remember.");
     r.cleanup();
   });
 

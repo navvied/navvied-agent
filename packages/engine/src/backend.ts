@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { relative, sep } from "node:path";
 import { shellFor } from "./platform.ts";
 
 /**
@@ -8,8 +9,8 @@ import { shellFor } from "./platform.ts";
  */
 export interface Backend {
   readonly id: "local" | "docker" | "ssh";
-  /** What to start for `command` while working in `cwd`: the program with its arguments, and the folder to start it in on this computer. Throws a sentence a person can read. */
-  prepare(command: string, cwd: string): { argv: string[]; cwd: string };
+  /** What to start for `command` while working in `cwd`, a folder of the project at `root` (the working folder, when not given): the program with its arguments, and the folder to start it in on this computer. Throws a sentence a person can read. */
+  prepare(command: string, cwd: string, root?: string): { argv: string[]; cwd: string };
 }
 
 /** The command on this computer, with no isolation: how it always worked. */
@@ -22,8 +23,14 @@ const sh = (program: string, args: string[], seconds = 60): { ok: boolean; out: 
   return { ok: r.status === 0, out: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim() };
 };
 
+/** The containers this program made or started, removed when it ends: they were made for it, and a stopped one left behind would hold the folder and the name. */
+const made = new Map<string, () => void>();
+let removing = false;
+export function removeContainers(): void { for (const [name, remove] of [...made]) { remove(); made.delete(name); } }
+
 /**
- * A container that stays between commands, with the working folder mounted in it, so files and installed programs persist.
+ * A container that stays between commands, with the project folder mounted in it, so files and installed programs persist while the program runs; a command works in
+ * the same folder of the project it would work in here. The container is removed when the program ends.
  * `program` is docker or a program that answers like it, alone or with the arguments it starts with.
  */
 export function dockerBackend(o: { program: string | string[]; image: string }): Backend {
@@ -32,20 +39,24 @@ export function dockerBackend(o: { program: string | string[]; image: string }):
   const ready = new Set<string>();
   return {
     id: "docker",
-    prepare(command, cwd) {
-      const name = `navvied-${createHash("sha1").update(cwd).digest("hex").slice(0, 10)}`;
+    prepare(command, cwd, root = cwd) {
+      const inside = relative(root, cwd);
+      if (inside === ".." || inside.startsWith(`..${sep}`) || /^[a-z]:/i.test(inside)) throw new Error(`${cwd} is outside the project folder, which is all the container can see`);
+      const name = `navvied-${createHash("sha1").update(root).digest("hex").slice(0, 10)}`;
       if (!ready.has(name)) {
         const state = docker(["inspect", "-f", "{{.State.Running}}", name]);
         if (!state.ok) {
-          const made = docker(["run", "-d", "--name", name, "-v", `${cwd}:/work`, "-w", "/work", o.image, "sleep", "infinity"], 300);
+          const made = docker(["run", "-d", "--name", name, "-v", `${root}:/work`, "-w", "/work", o.image, "sleep", "infinity"], 300);
           if (!made.ok) throw new Error(`The container could not be started: ${made.out.split("\n").pop() ?? "unknown error"}`);
         } else if (state.out !== "true") {
           const started = docker(["start", name]);
           if (!started.ok) throw new Error(`The container could not be started: ${started.out.split("\n").pop() ?? "unknown error"}`);
         }
         ready.add(name);
+        made.set(name, () => { docker(["rm", "-f", name], 30); });
+        if (!removing) { removing = true; process.on("exit", removeContainers); }
       }
-      return { argv: [program, ...lead, "exec", "-w", "/work", name, "sh", "-c", command], cwd };
+      return { argv: [program, ...lead, "exec", "-w", inside ? `/work/${inside.split(sep).join("/")}` : "/work", name, "sh", "-c", command], cwd };
     },
   };
 }

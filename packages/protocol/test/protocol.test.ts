@@ -25,6 +25,7 @@ describe("commands", () => {
     { cmd: "effort", level: "high" },
     { cmd: "effort", level: "auto" },
     { cmd: "approve", id: "perm1", optionId: "allow" },
+    { cmd: "answer", id: "q1", answers: [["Postgres"], [], ["a", "b"]] },
     { cmd: "load", id: "session-1" },
     { cmd: "checkpoints" },
     { cmd: "restore", id: "k1" },
@@ -56,6 +57,9 @@ describe("commands", () => {
     ["prompt without text", '{"cmd":"prompt"}', /text must be a string/],
     ["file without a name", '{"cmd":"prompt","text":"x","files":[{"mime":"text/plain","data":"AA=="}]}', /needs name, mime and data/],
     ["file with a blank name", '{"cmd":"prompt","text":"x","files":[{"name":" ","mime":"text/plain","data":"AA=="}]}', /short name/],
+    ["answer without a list", '{"cmd":"answer","id":"q1","answers":"yes"}', /answer.answers must be a list/],
+    ["answer with a list that is not text", '{"cmd":"answer","id":"q1","answers":[[1]]}', /each answer must be a list/],
+    ["answer to five questions", '{"cmd":"answer","id":"q1","answers":[[],[],[],[],[]]}', /at most 4/],
     ["empty prompt", '{"cmd":"prompt","text":"   "}', /needs text, an image or a file/],
     ["bad mode", '{"cmd":"prompt","text":"x","mode":"yolo"}', /mode must be one of/],
     ["bad effort", '{"cmd":"prompt","text":"x","effort":"ludicrous"}', /effort must be one of/],
@@ -190,3 +194,18 @@ describe("the commands of the list of conversations, and the kind", () => {
   });
 });
 
+
+describe("the commands for notes and skills that wait for the person", () => {
+  test("a list needs nothing; an answer needs an id (and for a skill, accept)", () => {
+    expect(parseCommand('{"cmd":"memory.pending"}')).toEqual({ ok: true, value: { cmd: "memory.pending" } });
+    expect(parseCommand('{"cmd":"memory.pending","action":"accept","id":"p1","x":1}')).toEqual({ ok: true, value: { cmd: "memory.pending", action: "accept", id: "p1" } });
+    expect(parseCommand('{"cmd":"memory.pending","action":"accept"}').ok).toBe(false);
+    expect(parseCommand('{"cmd":"memory.pending","action":"maybe","id":"p1"}').ok).toBe(false);
+    expect(parseCommand('{"cmd":"skill.review"}')).toEqual({ ok: true, value: { cmd: "skill.review" } });
+    expect(parseCommand('{"cmd":"skill.review","id":"trust:x","accept":false}')).toEqual({ ok: true, value: { cmd: "skill.review", id: "trust:x", accept: false } });
+    expect(parseCommand('{"cmd":"skill.review","id":"c1"}').ok).toBe(false);
+    expect(parseCommand('{"cmd":"skill.rollback"}')).toEqual({ ok: true, value: { cmd: "skill.rollback" } });
+    expect(parseCommand('{"cmd":"skill.rollback","id":"c1"}')).toEqual({ ok: true, value: { cmd: "skill.rollback", id: "c1" } });
+    expect(parseCommand('{"cmd":"skill.rollback","id":7}').ok).toBe(false);
+  });
+});

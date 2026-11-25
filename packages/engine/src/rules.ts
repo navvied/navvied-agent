@@ -1,4 +1,6 @@
 import nativePath from "node:path";
+import { shellView } from "./shell-scan.ts";
+import { EDIT_LIKE, FILE_WRITERS, changedPaths } from "./tools/changed.ts";
 
 /** The path rules of the computer the files are on; tests pass the other system's. */
 export type Paths = Pick<typeof nativePath, "isAbsolute" | "relative" | "resolve" | "sep"> & { caseless?: boolean };
@@ -89,6 +91,9 @@ function covers(tool: string, pattern: string | undefined, subject: string, cwd:
   return matcher(p.isAbsolute(pattern) ? p.resolve(cwd, pattern).replace(/\\/g, "/") : pattern, true, caselessFor(p)).test(subject);
 }
 
+/** The names a rule may use for a tool: its own, and `Edit` for the other tools that edit. */
+const named = (tool: string): string[] => (EDIT_LIKE.has(tool) ? [tool, "Edit"] : [tool]);
+
 export class Rules {
   readonly #parsed: { allow: Parsed[]; ask: Parsed[]; deny: Parsed[] };
   constructor(set: RuleSet, private readonly cwd: string, private readonly paths: Paths = nativePaths) {
@@ -100,12 +105,12 @@ export class Rules {
   check(tool: string, args: Record<string, unknown>): Verdict {
     const subjects = this.#subjects(tool, args);
     for (const kind of ["deny", "ask"] as const) {
-      for (const r of this.#parsed[kind]) if (r.tool === tool && subjects.some((s) => covers(tool, r.pattern, s, this.cwd, this.paths))) return { kind, rule: r.text };
+      for (const r of this.#parsed[kind]) if (named(tool).includes(r.tool) && subjects.some((s) => covers(tool, r.pattern, s, this.cwd, this.paths))) return { kind, rule: r.text };
     }
     // To allow, every part must be covered, and a command that hides one inside another is never allowed by a rule.
     if (tool === "Bash" && opaque(String(args.command ?? ""))) return { kind: "none" };
     if (subjects.length === 0) return { kind: "none" };
-    const mine = this.#parsed.allow.filter((r) => r.tool === tool);
+    const mine = this.#parsed.allow.filter((r) => named(tool).includes(r.tool));
     const whole = mine.find((r) => subjects.every((s) => covers(tool, r.pattern, s, this.cwd, this.paths)));
     if (whole) return { kind: "allow", rule: whole.text };
     const parts = subjects.map((s) => mine.find((r) => covers(tool, r.pattern, s, this.cwd, this.paths)));
@@ -115,8 +120,9 @@ export class Rules {
   #subjects(tool: string, args: Record<string, unknown>): string[] {
     if (tool === "Bash") return splitCommand(String(args.command ?? ""));
     if (tool === "WebFetch" || tool === "Browser") { const h = hostOf(args.url); return h ? [h] : tool === "Browser" ? [""] : []; }
+    if (FILE_WRITERS.has(tool)) return changedPaths(tool, args).flatMap((f) => pathOf(f, this.cwd, this.paths) ?? []);
     const file = pathOf(args.file_path ?? args.path, this.cwd, this.paths);
-    return file ? [file] : tool === "Write" || tool === "Edit" || tool === "Read" ? [] : [""];
+    return file ? [file] : tool === "Read" ? [] : [""];
   }
 }
 
@@ -141,30 +147,37 @@ const DRIVE = String.raw`(?:[a-z]:|/[a-z])`;
 const SPELLED = String.raw`(?:%(?:userprofile|systemdrive|homedrive|homepath|windir|systemroot)%|\$env:(?:userprofile|systemdrive|homedrive|windir|systemroot)|\$\{?(?:userprofile|systemdrive)\}?)`;
 const WINDOWS_WHOLE = new RegExp(String.raw`(?:^|\s)(?:${SPELLED}|${DRIVE}(?:/(?:windows|programdata|program files(?: \(x86\))?|users(?:/[^/\s]+)?))?)/?\*?(?=\s|$)`);
 
-/** The reason a shell command may never run, or nothing. A command inside `sh -c '…'` is looked at too, and quotes do not hide a path. */
-function blockedCommand(command: string, depth = 0): string | undefined {
-  for (const part of splitCommand(command)) {
-    const plain = part.replace(/^(sudo|doas|env)\s+/, "").trim();
-    const inner = /^(?:ba|z|da|k)?sh\s+-[a-z]*c\s+(["'])([\s\S]*)\1\s*$/.exec(plain)?.[2]
-      ?? /^cmd(?:\.exe)?\s+(?:\/[a-z]\s+)*\/[ck]\s+(["']?)([\s\S]*?)\1\s*$/i.exec(plain)?.[2]
-      ?? /^(?:powershell|pwsh)(?:\.exe)?\s+(?:-\S+\s+)*?-c(?:ommand)?\s+(["']?)([\s\S]*?)\1\s*$/i.exec(plain)?.[2];
-    if (inner !== undefined && depth < 3) { const why = blockedCommand(inner, depth + 1); if (why) return why; }
-    const words = plain.replace(/["']/g, "");
-    if (/^(rm|ri|rmdir|rd|del|erase|remove-item)\s/i.test(words)) {
-      const args = words.split(/\s+/).slice(1);
-      const recursive = args.some((a) => /^-[a-zA-Z]*[rR]/.test(a) || a === "--recursive" || /^\/s$/i.test(a));
-      // `/q` after rd, rmdir, del or erase is a switch, not the folder /q.
-      const targets = /^(rm|ri|remove-item)\s/i.test(words) ? args : args.filter((a) => !/^\/[a-z]$/i.test(a));
-      const everything = args.some((a) => !a.startsWith("-") && WHOLE.test(a)) || WINDOWS_WHOLE.test(targets.join(" ").toLowerCase().replace(/\\/g, "/"));
-      if (recursive && everything) return "this would delete the whole home folder, a system folder or the whole disk";
+/** The reason one command, as the shell will run it, may never run. */
+function blockedLine(line: string): string | undefined {
+  const words = line.trim();
+  if (/^(rm|ri|rmdir|rd|del|erase|remove-item)\s/i.test(words)) {
+    const args = words.split(/\s+/).slice(1);
+    const recursive = args.some((a) => /^-[a-zA-Z]*[rR]/.test(a) || a === "--recursive" || /^\/s$/i.test(a));
+    // `/q` after rd, rmdir, del or erase is a switch, not the folder /q.
+    const targets = /^(rm|ri|remove-item)\s/i.test(words) ? args : args.filter((a) => !/^\/[a-z]$/i.test(a));
+    const everything = args.some((a) => !a.startsWith("-") && WHOLE.test(a)) || WINDOWS_WHOLE.test(targets.join(" ").toLowerCase().replace(/\\/g, "/"));
+    if (recursive && everything) return "this would delete the whole home folder, a system folder or the whole disk";
+  }
+  if (/^format(\.com)?\s+[a-z]:/i.test(words) || /^(format-volume|clear-disk|remove-partition)(\s|$)/i.test(words)) return "this would format a disk";
+  if (/^mkfs(\.|\s|$)/.test(words)) return "this would format a disk";
+  if (/^dd\s.*\bof=\/dev\/(sd|nvme|hd|vd|disk|mmcblk)/.test(words)) return "this would overwrite a disk";
+  if (/^(shutdown|reboot|halt|poweroff|stop-computer|restart-computer)(\s|$)/i.test(words)) return "this would switch the computer off";
+  if (/^chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)\S+\s+\/(\s|$)/.test(words) || /^chown\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)\S+\s+\/(\s|$)/.test(words)) return "this would change the rights of every file on the computer";
+  if (/>\s*\/dev\/(sd|nvme|hd|vd|disk|mmcblk)/.test(words)) return "this would overwrite a disk";
+  if (/^kill\s+(?:-\S+\s+)*-1(\s|$)/.test(words)) return "this would stop every program you have running";
+  return undefined;
+}
+
+/**
+ * The reason a shell command may never run, or nothing. It is judged as the shell will run it, in the way a POSIX shell reads it and in
+ * the way Windows' shells do: quotes, escapes, variables, wrappers (`sudo`, `env`, `xargs`…), `sh -c`, `eval` and heredocs do not hide it.
+ */
+function blockedCommand(command: string): string | undefined {
+  for (const mode of ["posix", "windows"] as const) {
+    for (const c of shellView(command, mode).cmds) {
+      const why = blockedLine(c.words.join(" ")) ?? c.redirects.map((r) => blockedLine(`${r.op} ${r.target}`)).find(Boolean);
+      if (why) return why;
     }
-    if (/^format(\.com)?\s+[a-z]:/i.test(words) || /^(format-volume|clear-disk|remove-partition)(\s|$)/i.test(words)) return "this would format a disk";
-    if (/^mkfs(\.|\s|$)/.test(words)) return "this would format a disk";
-    if (/^dd\s.*\bof=\/dev\/(sd|nvme|hd|vd|disk|mmcblk)/.test(words)) return "this would overwrite a disk";
-    if (/^(shutdown|reboot|halt|poweroff|stop-computer|restart-computer)(\s|$)/i.test(words)) return "this would switch the computer off";
-    if (/^chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)\S+\s+\/(\s|$)/.test(words) || /^chown\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)\S+\s+\/(\s|$)/.test(words)) return "this would change the rights of every file on the computer";
-    if (/>\s*\/dev\/(sd|nvme|hd|vd|disk|mmcblk)/.test(words)) return "this would overwrite a disk";
-    if (/^kill\s+(?:-\S+\s+)*-1(\s|$)/.test(words)) return "this would stop every program you have running";
   }
   if (/:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/.test(command)) return "this is a fork bomb";
   return undefined;
@@ -177,14 +190,11 @@ function blockedCommand(command: string, depth = 0): string | undefined {
  */
 export function hardBlock(tool: string, args: Record<string, unknown>, cwd: string, p: Paths = nativePaths): string | undefined {
   if (tool === "Bash") return blockedCommand(String(args.command ?? ""));
-  if (tool === "Write" || tool === "Edit") {
-    const file = args.file_path;
-    if (typeof file === "string") {
-      const full = p.resolve(cwd, file).replace(/\\/g, "/");
-      const caseless = caselessFor(p);
-      if ((caseless ? SYSTEM_DIRS_CASELESS : SYSTEM_DIRS).test(full) || WINDOWS_SYSTEM_DIRS.test(full)) return "this would change a system folder";
-      if ((caseless ? OWN_PERMISSIONS_CASELESS : OWN_PERMISSIONS).test(full)) return "this would change what the agent is allowed to do";
-    }
+  for (const file of changedPaths(tool, args)) {
+    const full = p.resolve(cwd, file).replace(/\\/g, "/");
+    const caseless = caselessFor(p);
+    if ((caseless ? SYSTEM_DIRS_CASELESS : SYSTEM_DIRS).test(full) || WINDOWS_SYSTEM_DIRS.test(full)) return "this would change a system folder";
+    if ((caseless ? OWN_PERMISSIONS_CASELESS : OWN_PERMISSIONS).test(full)) return "this would change what the agent is allowed to do";
   }
   return undefined;
 }

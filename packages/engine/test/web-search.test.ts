@@ -1,9 +1,10 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { defaultTools, Jobs } from "../src/index.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseHtmlResults, parseJsonResults, parseLiteResults, parseWikipediaResults } from "../src/tools/web-search.ts";
 import { backends, inOrder } from "../src/tools/web-search-backends.ts";
+import { searches } from "../src/tools/web-search-cache.ts";
 import { unreachedSentence, whyUnreached } from "../src/tools/web-errors.ts";
 import { toolsFor } from "../src/permissions.ts";
 import type { Tool, ToolContext } from "../src/types.ts";
@@ -11,7 +12,10 @@ import type { Tool, ToolContext } from "../src/types.ts";
 const tool = defaultTools().find((t) => t.name === "WebSearch") as Tool;
 const jobs = new Jobs(() => {});
 afterAll(() => jobs.close());
-const ctx = (extra: Partial<ToolContext> = {}): ToolContext => ({ cwd: "/", signal: new AbortController().signal, emit: () => {}, allowPrivateNetwork: false, jobs, ...extra });
+/** These tests are about the public pages and what follows them: the ring has its own file (web-search-ring.test.ts). */
+const PUBLIC = ["duckduckgo", "duckduckgo-lite", "navvied", "wikipedia"];
+const ctx = (extra: Partial<ToolContext> = {}): ToolContext => ({ cwd: "/", signal: new AbortController().signal, emit: () => {}, allowPrivateNetwork: false, jobs, ...extra, search: { order: PUBLIC, ...extra.search } });
+beforeEach(() => searches.clear());
 
 const fixture = (name: string): string => readFileSync(join(import.meta.dir, "fixtures", "search", name), "utf8");
 
@@ -205,9 +209,9 @@ describe("a network that blocks a search site", () => {
 
   test("the order is the person's: unknown names are ignored, an empty list is the default", async () => {
     expect(inOrder(["wikipedia", "nonsense", "duckduckgo", "wikipedia"]).map((b) => b.id)).toEqual(["wikipedia", "duckduckgo"]);
-    expect(inOrder([]).map((b) => b.id)).toEqual(["duckduckgo", "duckduckgo-lite", "navvied", "wikipedia"]);
-    expect(inOrder(["x"]).map((b) => b.id)).toEqual(["duckduckgo", "duckduckgo-lite", "navvied", "wikipedia"]);
-    expect(backends().map((b) => b.id)).toEqual(["duckduckgo", "duckduckgo-lite", "wikipedia", "navvied"]);
+    expect(inOrder([], undefined, 0).map((b) => b.id)).toEqual(["exa", "parallel", "keenable", "tavily", ...PUBLIC]);
+    expect(inOrder(["x"], undefined, 0).map((b) => b.id)).toEqual(["exa", "parallel", "keenable", "tavily", ...PUBLIC]);
+    expect(backends().map((b) => b.id)).toEqual(["exa", "parallel", "keenable", "tavily", "duckduckgo", "duckduckgo-lite", "wikipedia", "navvied"]);
     await withFetch((url) => (wikipedia(url) ? new Response(fixture("wikipedia.json")) : SELF_SIGNED), async (asked) => {
       const out = await tool.run({ query: "x" }, ctx({ search: { order: ["wikipedia", "duckduckgo"] } }));
       expect(asked.map((u) => new URL(u).hostname)).toEqual(["en.wikipedia.org"]);

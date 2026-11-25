@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Jobs, defaultTools, dockerBackend, localBackend, sshBackend } from "../src/index.ts";
+import { Jobs, defaultTools, dockerBackend, localBackend, removeContainers, sshBackend } from "../src/index.ts";
 import type { Backend } from "../src/backend.ts";
 import type { ToolContext } from "../src/types.ts";
 import { stopAllJobs } from "../src/index.ts";
@@ -39,6 +39,27 @@ describe("where Bash runs its commands", () => {
     expect(calls.filter((l) => l.startsWith("run ")).length).toBe(1);
     expect(calls.find((l) => l.startsWith("run "))).toContain(`-v ${dir}:/work -w /work debian:stable-slim sleep infinity`);
     expect(calls.filter((l) => l.startsWith("exec ")).length).toBe(2);
+  });
+
+  test("a command works in the folder of the project it was given, in the same container, and the container is removed when the program ends", async () => {
+    const log = join(dir, "docker2.log");
+    const fake = join(dir, "docker2.js");
+    writeFileSync(fake, [
+      'const { appendFileSync } = require("node:fs");',
+      'const args = process.argv.slice(2);',
+      `appendFileSync(${JSON.stringify(log)}, args.join(" ") + "\\n");`,
+      'if (args[0] === "inspect") process.exit(1);',
+      "",
+    ].join("\n"));
+    const root = join(dir, "proj");
+    mkdirSync(join(root, "sub/deep"), { recursive: true });
+    const backend = dockerBackend({ program: [process.execPath, fake], image: "img" });
+    expect(backend.prepare("ls", root).argv).toContain("/work");
+    expect(backend.prepare("ls", join(root, "sub/deep"), root).argv.slice(0, 5)).toEqual([process.execPath, fake, "exec", "-w", "/work/sub/deep"]);
+    expect(() => backend.prepare("ls", dir, root)).toThrow("outside the project folder");
+    expect(readFileSync(log, "utf8").split("\n").filter((l) => l.startsWith("run ")).length).toBe(1);
+    removeContainers();
+    expect(readFileSync(log, "utf8")).toMatch(/rm -f navvied-[0-9a-f]{10}/);
   });
 
   test("a container that cannot be started is a sentence, not a crash", async () => {

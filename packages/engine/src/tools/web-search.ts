@@ -3,15 +3,17 @@ import { clip, num, str } from "./util.ts";
 import { fixSearchArgs } from "./web-names.ts";
 import { inOrder, parseJsonResults, type Backend, type Outcome, type SearchHit } from "./web-search-backends.ts";
 import { USER_AGENT } from "./user-agent.ts";
+import { untrusted } from "./untrusted.ts";
+import { searches } from "./web-search-cache.ts";
 import { unreachedSentence, whyUnreached } from "./web-errors.ts";
 import { viaProxy } from "./web-proxy.ts";
 
 export { parseHtmlResults, parseJsonResults, parseLiteResults, parseWikipediaResults, type SearchHit } from "./web-search-backends.ts";
 
-const short = (s: string): string => (s.length > 200 ? `${s.slice(0, 199).trimEnd()}…` : s);
+const short = (s: string): string => { const one = s.replace(/\s+/g, " ").trim(); return one.length > 200 ? `${one.slice(0, 199).trimEnd()}…` : one; };
 
 const format = (query: string, hits: SearchHit[]): string =>
-  hits.length ? clip(`Results for "${query}":\n\n${hits.map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}${h.snippet ? `\n   ${short(h.snippet)}` : ""}`).join("\n\n")}`) : `No results for "${query}". Try other words: ${JSON.stringify({ query: `${query.split(/\s+/).slice(0, 3).join(" ")} documentation` })}`;
+  hits.length ? untrusted("search", clip(`Results for "${query}":\n\n${hits.map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}${h.snippet ? `\n   ${short(h.snippet)}` : ""}`).join("\n\n")}`)) : `No results for "${query}". Try other words: ${JSON.stringify({ query: `${query.split(/\s+/).slice(0, 3).join(" ")} documentation` })}`;
 
 const SERVER = "who can set NAVVIED_SEARCH_URL to a search server that answers in JSON";
 const HUMAN_CHECK = `Error: the search engine asked for a human check, so the search could not run. Do not search again; say so to the user, ${SERVER}.`;
@@ -20,20 +22,24 @@ const HUMAN_CHECK = `Error: the search engine asked for a human check, so the se
 function said(b: Backend, o: Exclude<Outcome, { hits: SearchHit[] }>): string {
   if ("human" in o) return `${b.label} asked for a human check.`;
   if (o.failed === "blocked") return `${b.label} answered with a page that is not its own, which usually means the network blocks it.`;
-  if (o.failed === "status") return o.status === 401 ? `${b.label} did not accept this computer's sign-in. Sign in again.` : o.said ? `${b.label}: ${o.said}` : `${b.label} answered ${o.status}.`;
+  if (o.failed === "status") return o.status === 401 ? `${b.label} did not accept this computer's sign-in. Sign in again.` : o.said ? `${b.label}: ${o.said}` : o.status === 429 ? `${b.label} is limiting its free searches for now.` : `${b.label} answered ${o.status}.`;
   return unreachedSentence(o.failed, b.label);
 }
 
+/** The whole ladder gets this long, however many sites are slow: a person is not kept waiting for eight of them. */
+const LADDER_MS = 30_000;
+
 /**
- * The keyless ladder: each search site in turn, until one answers. A site that cannot be reached (a network that blocks it, with a certificate that is not its own), that answers
+ * The keyless ladder: the ring of search services (see web-search-ring.ts), then each public search site in turn, until one answers. A site that cannot be reached (a network that blocks it, with a certificate that is not its own), that answers
  * with a page that is not its own, or that asks for a human, hands over to the next one; a site that works and finds nothing is an answer. A bad certificate is never accepted.
  */
 async function ladder(query: string, limit: number, search: ToolContext["search"], ctx: { signal: AbortSignal }): Promise<string> {
   const failures: string[] = [];
   let human = false, first: Backend | undefined;
+  const all = AbortSignal.any([ctx.signal, AbortSignal.timeout(LADDER_MS)]);
   for (const backend of inOrder(search?.order, search?.navvied)) {
-    if (ctx.signal.aborted) break;
-    const got = await backend.ask(query, limit, AbortSignal.any([ctx.signal, AbortSignal.timeout(10_000)]));
+    if (all.aborted) break;
+    const got = await backend.ask(query, limit, AbortSignal.any([all, AbortSignal.timeout(10_000)]));
     if ("hits" in got) {
       if (got.hits.length) return `${first && first.label !== backend.label ? `Note: ${failures[0]} These results are from ${backend.label}.\n\n` : ""}${format(query, got.hits.slice(0, limit))}`;
       if (!failures.length) return format(query, []);
@@ -72,7 +78,7 @@ export const webSearch: Tool = {
         if (!res.ok) return `Error: the search server answered ${res.status}.`;
         return format(query, parseJsonResults(await res.json()).slice(0, limit));
       }
-      return await ladder(query, limit, ctx.search, ctx);
+      return await searches.get(`${ctx.search?.order?.join(",") ?? ""}|${limit}|${query.toLowerCase()}`, () => ladder(query, limit, ctx.search, ctx), (text) => !/^(Error|No results)/.test(text));
     } catch (e) {
       const why = whyUnreached(e);
       return `Error: ${why === "network" ? (e instanceof Error ? e.message : String(e)) : unreachedSentence(why, "The search server")}`;

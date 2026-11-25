@@ -7,20 +7,20 @@ import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 
 const out = process.cwd();
-const probe = Bun.serve({ port: 0, fetch: () => new Response("") });
-const port = probe.port;
-probe.stop(true);
-writeFileSync(".bench-port", `${port}\n`);
-
-const child = spawn(process.execPath, ["web-server.ts", String(port)], { cwd: import.meta.dir, env: { ...process.env, BENCH_OUT: out }, detached: true, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+const child = spawn(process.execPath, ["web-server.ts"], { cwd: import.meta.dir, env: { ...process.env, BENCH_OUT: out }, detached: true, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
 writeFileSync(".bench-pid", `${child.pid}\n`);
 
-// The server says "ready" once it listens, and the child ends if it cannot: this waits for one of the two, never for a number of seconds that a loaded machine can exceed.
-const started = await new Promise<boolean>((done) => {
-  child.stdout!.once("data", () => done(true));
-  child.once("exit", () => done(false));
+// The server says "ready <port>" once it listens, and the child ends if it cannot: this waits for one of the two, never for a number of seconds that a loaded machine can exceed.
+let said = "";
+let failure = "";
+child.stderr!.on("data", (d) => { failure += d; });
+const port = await new Promise<number | null>((done) => {
+  child.stdout!.on("data", (d) => { said += d; const m = /ready (\d+)/.exec(said); if (m) done(Number(m[1])); });
+  child.once("exit", (code, signal) => { failure += `\nthe server ended with ${signal ?? `exit code ${code}`}`; done(null); });
 });
+if (port === null) { console.error(`the fixture web did not start: ${failure.trim().slice(-600)}`); process.exit(1); }
+writeFileSync(".bench-port", `${port}\n`);
 child.stdout!.destroy();
+child.stderr!.destroy();
 child.unref();
-if (!started) { console.error("the fixture web did not start"); process.exit(1); }
 process.exit(0);

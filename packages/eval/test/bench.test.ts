@@ -34,10 +34,13 @@ describe("every task can be solved by an agent run, not only by the validator", 
       const r = await run(task, "oracle");
       expect(r, task.id).toMatchObject({ passed: true, reason: "solved" });
       // Whatever the task says, the first request stays light: a task is never a reason to send the long text about the program.
-      // A web task also offers the two web tools (about 440 characters, and a seventh and eighth tool); the one that says a browser can read what a plain fetch cannot also offers the browser, whose text is the longest.
+      // The task that is about a kept note has the note in its system text, by design (about 190 characters).
+      // A task about skills is also offered the Skill tool and the list of skills (about 500 characters), and the one that makes a skill the SkillManage tool (about 750).
+      const skills = task.id.startsWith("skill-");
+      // The task about a notebook also offers the tool for notebooks (about 400 characters with its place in the list). A web task also offers the two web tools (about 440 characters, and a seventh and eighth tool); the one that says a browser can read what a plain fetch cannot also offers the browser, whose text is the longest.
       const web = task.kind === "web";
-      expect(r.prompt!.systemChars + r.prompt!.toolChars, task.id).toBeLessThanOrEqual(task.id === "web-script-page" ? 4500 : web ? 3400 : 3000);
-      expect(r.prompt!.tools, task.id).toBeLessThanOrEqual(web ? 8 : 6);
+      expect(r.prompt!.systemChars + r.prompt!.toolChars, task.id).toBeLessThanOrEqual(task.id === "web-script-page" ? 5400 : skills ? 4900 : 4600);
+      expect(r.prompt!.tools, task.id).toBeLessThanOrEqual(web ? 10 : 9);
     }
   }, 240_000);
 });
@@ -63,10 +66,10 @@ describe("what is measured per run", () => {
 });
 
 describe("how heavy the first request is", () => {
-  test("the system prompt and the tool definitions together are at most 3,000 characters, and at most six tools are offered", async () => {
+  test("the system prompt and the tool definitions together are at most 4,000 characters, and at most eight tools are offered (the six of the work, the helper tool and the question tool; a long request adds the task list)", async () => {
     const r = await run(pick("fix-off-by-one"), "oracle");
-    expect(r.prompt!.tools).toBeLessThanOrEqual(6);
-    expect(r.prompt!.systemChars + r.prompt!.toolChars).toBeLessThanOrEqual(3000);
+    expect(r.prompt!.tools).toBeLessThanOrEqual(8);
+    expect(r.prompt!.systemChars + r.prompt!.toolChars).toBeLessThanOrEqual(4000);
   }, 60_000);
 });
 
@@ -156,5 +159,29 @@ describe("what a failed run says about itself", () => {
     expect(r.why!.said).toBe("The key I was given is Bearer [key].");
     expect(r.why!.check.length).toBeGreaterThan(0);
     expect(JSON.stringify(r)).not.toContain("not-a-real-key-123");
+  }, 60_000);
+});
+
+describe("the tasks of asking, keeping a list and handing work to helpers", () => {
+  test("the answer the person gives is what the agent writes; without the scripted answers the agent is told nobody can answer, and the task fails", async () => {
+    const asked = pick("ask-which-port");
+    expect(await run(asked, "oracle")).toMatchObject({ passed: true });
+    const unanswered = await run({ ...asked, answers: undefined } as Task, "oracle");
+    expect(unanswered).toMatchObject({ passed: false, reason: "check failed" });
+  }, 60_000);
+  test("a run that does the three steps without keeping a task list is told so", async () => {
+    expect(await run(pick("plan-three-files"), "oracle")).toMatchObject({ passed: true, reason: "solved" });
+    expect(await run(pick("plan-three-files"), "unplanned")).toMatchObject({ passed: false, reason: "task list not kept", error: "no task list was kept" });
+  }, 60_000);
+  test("two helpers are asked in one step and what they report is what the agent writes down", async () => {
+    const trace = join(home, "trace");
+    behaviour = "oracle";
+    const r = await runTask(pick("research-two-helpers"), { command: ["bun", CLI], label: "mock:oracle", env: world, meter, agentEnv: (base) => ({ NAVVIED_BASE_URL: base }), trace });
+    expect(r).toMatchObject({ passed: true });
+    const events = readFileSync(join(trace, "research-two-helpers.events.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { ev: string; name?: string; status?: string; input?: unknown });
+    const started = events.filter((e) => e.ev === "tool" && e.name === "Agent" && e.status === "running" && e.input !== undefined);
+    const firstDone = events.findIndex((e) => e.ev === "tool" && e.name === "Agent" && e.status === "done");
+    expect(started).toHaveLength(2);
+    expect(events.filter((e, i) => i < firstDone && e.ev === "tool" && e.name === "Agent" && e.status === "running" && e.input !== undefined)).toHaveLength(2);
   }, 60_000);
 });

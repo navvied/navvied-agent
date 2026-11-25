@@ -23,7 +23,7 @@ export function describeTool(name: string, input: unknown): string {
   const a = (typeof input === "object" && input !== null ? input : {}) as Record<string, unknown>;
   switch (name) {
     case "Bash": return `$ ${oneLine(str(a.command))}`;
-    case "Read": case "Write": case "Edit": return str(a.file_path);
+    case "Read": case "Write": case "Edit": case "MultiEdit": case "NotebookEdit": return str(a.file_path);
     case "Glob": case "Grep": return oneLine(str(a.pattern));
     case "WebFetch": return str(a.url);
     case "TodoWrite": return "task list";

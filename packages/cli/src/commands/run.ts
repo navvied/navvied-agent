@@ -31,6 +31,7 @@ export async function runCommand(prompt: string | undefined, options: Options, i
   let failed = false, stop = "end_turn", note = false;
   let created: ReturnType<typeof createEngine> | undefined;
 
+  const scripted = [...(options.answers ?? [])];
   const emit = (e: EngineEvent): void => {
     if (e.ev === "text") answer += e.text;
     if (e.ev === "tool" && e.status === "running") answer = "";
@@ -38,6 +39,7 @@ export async function runCommand(prompt: string | undefined, options: Options, i
     else if (e.ev === "error" || e.ev === "notice") io.stderr.write(`${e.ev === "error" ? "error: " : ""}${e.msg}\n`);
     if (e.ev === "error") failed = true;
     if (e.ev === "done") stop = e.stop;
+    if (e.ev === "question" && created?.ok) created.value.engine.handle({ cmd: "answer", id: e.id, answers: e.questions.map(() => scripted.shift() ?? []) });
     if (e.ev === "approval" && created?.ok) {
       // No person to ask: approve only when told to; otherwise refuse and say how to allow it.
       created.value.engine.handle({ cmd: "approve", id: e.id, optionId: options.yes ? "allow" : "deny" });
@@ -45,7 +47,7 @@ export async function runCommand(prompt: string | undefined, options: Options, i
     }
   };
 
-  created = createEngine(options, io, emit);
+  created = createEngine(options, io, emit, options.answers ? { attended: () => true } : {});
   if (!created.ok) { io.stderr.write(`error: ${created.error}\n`); return EXIT.usage; }
   const { engine } = created.value;
 

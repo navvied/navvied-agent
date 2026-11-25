@@ -1,0 +1,26 @@
+[
+  {
+    "tool": "Read",
+    "args": {
+      "file_path": "analysis.ipynb"
+    }
+  },
+  {
+    "tool": "NotebookEdit",
+    "args": {
+      "file_path": "analysis.ipynb",
+      "cell_id": "c2",
+      "new_source": "print(sum(data) / len(data))"
+    }
+  },
+  {
+    "tool": "NotebookEdit",
+    "args": {
+      "file_path": "analysis.ipynb",
+      "cell_id": "t1",
+      "edit_mode": "insert",
+      "cell_type": "markdown",
+      "new_source": "Mean of the data"
+    }
+  }
+]

@@ -84,7 +84,8 @@ describe("navvied schedule", () => {
   test("run-due starts what is due as a real run in its own process, keeps what it said, and then nothing is due", async () => {
     const dir = tempDir(); dirs.push(dir);
     const store = new ScheduleStore(schedulesPath(env(dir)));
-    const job = store.add({ cron: "* * * * *", prompt: "say hello", cwd: dir }, Date.now() - 5 * 60_000);
+    // Due once, two minutes ago, and not again for an hour: "every minute" would be due a second time whenever the test happens to cross a minute.
+    const job = store.add({ cron: `${new Date(Date.now() - 2 * 60_000).getMinutes()} * * * *`, prompt: "say hello", cwd: dir }, Date.now() - 5 * 60_000);
     if (typeof job === "string") throw new Error(job);
     const proc = Bun.spawn([process.execPath, join(import.meta.dir, "../src/main.ts"), "schedule", "run-due", "--cwd", dir], { env: { ...process.env, ...env(dir) }, stdout: "pipe", stderr: "pipe" });
     const out = await new Response(proc.stdout).text();

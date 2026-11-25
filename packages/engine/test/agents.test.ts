@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadAgents, parseAgent } from "../src/index.ts";
+import { agentDirs, loadAgents, parseAgent } from "../src/index.ts";
 import { cleanupAll, prompt, rig } from "./helpers.ts";
 import { stopAllJobs } from "../src/index.ts";
 import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
@@ -67,5 +67,23 @@ describe("in the engine", () => {
     expect(Date.now() - t0).toBeLessThan(560); // one after the other would take at least 600
     expect(r.of("text").map((e) => e.text).join("")).toContain("both back");
     r.cleanup();
+  });
+});
+
+describe("where helpers are read from", () => {
+  test("the folders of Claude Code's format are read as well, and navvied's own win over them in the same place", () => {
+    expect(agentDirs("/h", "/c", ["/p", "/p/sub"])).toEqual(["/h/.claude/agents", "/c/agents", "/p/.claude/agents", "/p/.navvied/agents", "/p/sub/.claude/agents", "/p/sub/.navvied/agents"]);
+    const root = join(dir, "where");
+    const claude = join(root, ".claude", "agents"), own = join(root, ".navvied", "agents");
+    mkdirSync(claude, { recursive: true }); mkdirSync(own, { recursive: true });
+    writeFileSync(join(claude, "a.md"), "---\ndescription: from claude\n---\nA.");
+    writeFileSync(join(claude, "b.md"), "---\ndescription: only claude\n---\nB.");
+    writeFileSync(join(own, "a.md"), "---\ndescription: from navvied\n---\nA.");
+    const found = loadAgents(agentDirs(join(root, "nohome"), join(root, "noconfig"), [root]));
+    expect(found.map((d) => `${d.name}:${d.description}`).sort()).toEqual(["a:from navvied", "b:only claude"]);
+  });
+  test("a helper may ask to work in a copy of the project", () => {
+    expect(parseAgent("---\ndescription: d\ntools: Write\nisolation: worktree\n---\nDo.", "w.md")).toMatchObject({ isolation: "worktree" });
+    expect(parseAgent("---\ndescription: d\nisolation: other\n---\nDo.", "w.md")).not.toHaveProperty("isolation");
   });
 });

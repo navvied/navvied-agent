@@ -1,5 +1,6 @@
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { opaque, splitCommand } from "./rules.ts";
+import { changedPaths } from "./tools/changed.ts";
 
 /** What a person agrees to when they say "do not ask again": a kind of command, a folder, a website, or one tool. */
 export interface Scope {
@@ -41,15 +42,21 @@ function bashScope(command: string): Scope {
   return { key: keys[0]!, ...(keys.length > 1 ? { keys } : {}), phrase };
 }
 
+function fileScope(file: string, cwd: string): Scope {
+  const full = isAbsolute(file) ? file : resolve(cwd, file);
+  const inside = file ? relative(resolve(cwd), full).replace(/\\/g, "/") : "";
+  // A file outside the project is never covered by a permission given for the project.
+  if (!file || inside.startsWith("..") || isAbsolute(inside)) return { key: `outside:${dirname(full)}`, phrase: `changes in ${dirname(full)}` };
+  return inside.includes("/") ? { key: `file:${inside.split("/")[0]}`, phrase: `changes in ${inside.split("/")[0]}/` } : { key: "file:.", phrase: "changes in the project folder" };
+}
+
 export function approvalScope(tool: string, args: Record<string, unknown>, cwd: string): Scope {
   if (tool === "Bash") return bashScope(text(args.command));
-  if (tool === "Write" || tool === "Edit") {
-    const file = text(args.file_path);
-    const full = isAbsolute(file) ? file : resolve(cwd, file);
-    const inside = file ? relative(resolve(cwd), full).replace(/\\/g, "/") : "";
-    // A file outside the project is never covered by a permission given for the project.
-    if (!file || inside.startsWith("..") || isAbsolute(inside)) return { key: `outside:${dirname(full)}`, phrase: `changes in ${dirname(full)}` };
-    return inside.includes("/") ? { key: `file:${inside.split("/")[0]}`, phrase: `changes in ${inside.split("/")[0]}/` } : { key: "file:.", phrase: "changes in the project folder" };
+  const files = changedPaths(tool, args);
+  if (files.length) {
+    const scopes = files.map((file) => fileScope(file, cwd));
+    const keys = [...new Set(scopes.map((s) => s.key))];
+    return keys.length === 1 ? scopes[0]! : { key: keys[0]!, keys, phrase: [...new Set(scopes.map((s) => s.phrase))].join(" and ") };
   }
   if (tool === "WebFetch" || (tool === "Browser" && text(args.url))) {
     try { const host = new URL(text(args.url)).host; return { key: `web:${host}`, phrase: `pages on ${host}` }; } catch { /* fall through */ }

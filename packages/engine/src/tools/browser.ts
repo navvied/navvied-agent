@@ -6,6 +6,7 @@ import { killTree, usesProcessGroups } from "../platform.ts";
 import type { Tool } from "../types.ts";
 import { isPrivateHost } from "./web-fetch.ts";
 import { refusal } from "./web-guard.ts";
+import { untrusted } from "./untrusted.ts";
 import { clip, num, outputBudget, str } from "./util.ts";
 
 /**
@@ -238,7 +239,7 @@ export const describeShot = (s: Shot, window: number | undefined, offset = 0): s
   // The page text takes most of what one result may be, as any tool result does; what is left is for the controls.
   const most = Math.max(2_000, Math.round(outputBudget(window) * 0.7));
   const controls = s.controls.map((c) => `[${c.n}] ${c.kind}${c.label ? ` "${c.label}"` : ""}${c.href ? ` -> ${c.href.slice(0, 100)}` : ""}${c.value !== undefined && c.value !== "" ? ` (now: ${c.value.slice(0, 40)})` : ""}${c.options ? ` (options: ${c.options.join(" | ")})` : ""}`).join("\n");
-  return clip(`Page: ${s.title || "(no title)"}\nAddress: ${s.url}\n\n${s.text.slice(offset, offset + most)}${s.text.length > offset + most ? `\n[characters ${offset}–${offset + most} of ${s.text.length}; the rest: Browser {"action": "read", "offset": ${offset + most}}]` : ""}\n\n${controls ? `What can be used on this page:\n${controls}` : "Nothing on this page can be clicked or filled in."}`);
+  return untrusted("browser", clip(`Page: ${s.title || "(no title)"}\nAddress: ${s.url}\n\n${s.text.slice(offset, offset + most)}${s.text.length > offset + most ? `\n[characters ${offset}–${offset + most} of ${s.text.length}; the rest: Browser {"action": "read", "offset": ${offset + most}}]` : ""}\n\n${controls ? `What can be used on this page:\n${controls}` : "Nothing on this page can be clicked or filled in."}`));
 };
 
 let session: Session | undefined;

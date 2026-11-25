@@ -1,0 +1,23 @@
+{
+  "id": "plan-three-files",
+  "title": "Do three steps while keeping the task list",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": [],
+  "prompt": "Do these in order, and keep a task list while you work (one item in progress at a time, each marked completed when it is done):\n1. Create a.txt containing the word alpha.\n2. Create b.txt containing the word beta.\n3. Create c.txt containing the word gamma.",
+  "check": "grep -q '^alpha$' a.txt && grep -q '^beta$' b.txt && grep -q '^gamma$' c.txt",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 120,
+  "plan": true,
+  "oracle": {
+    "plan": [
+      "Create a.txt",
+      "Create b.txt",
+      "Create c.txt"
+    ]
+  }
+}

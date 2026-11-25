@@ -19,6 +19,8 @@ export interface Options {
   json: boolean;
   /** `run`: a JSON Schema file; the answer must be JSON that matches it, and only that is printed. */
   schema?: string;
+  /** `run`: scripted answers to the agent's questions, in the order they are asked: one entry per question, a word or a list of words. Without them nobody can answer in a run. */
+  answers?: string[][];
   /** `run`: print only the final answer, not the steps. */
   last?: boolean;
   /** `run`: allow every tool call that asks for approval. `restore`: apply the restore instead of only previewing it. */
@@ -49,7 +51,7 @@ export type ParseResult =
 
 const fail = (error: string): ParseResult => ({ ok: false, error });
 
-const VALUE_FLAGS = new Set(["mode", "model", "effort", "cwd", "session", "schema", "max-steps", "config", "port", "host", "web", "allow-origin", "site", "kind"]);
+const VALUE_FLAGS = new Set(["mode", "model", "effort", "cwd", "session", "schema", "answers", "max-steps", "config", "port", "host", "web", "allow-origin", "site", "kind"]);
 const BOOLEAN_FLAGS = new Set(["last", "json", "yes", "thinking", "no-color", "color", "stdio", "http", "help", "version", "ready-line", "exit-when-stdin-closes", "sandboxed"]);
 const SHORT: Record<string, string> = { h: "help", v: "version", m: "model", y: "yes" };
 
@@ -116,6 +118,12 @@ export function parseArgs(argv: readonly string[]): ParseResult {
       case "cwd": options.cwd = value; break;
       case "session": options.session = value; break;
       case "schema": options.schema = value; break;
+      case "answers": {
+        let list: unknown;
+        try { list = JSON.parse(value); } catch { list = undefined; }
+        if (!Array.isArray(list) || list.some((a) => typeof a !== "string" && !(Array.isArray(a) && a.every((x) => typeof x === "string")))) return fail('--answers must be a JSON list of answers, each a word or a list of words, such as ["Postgres", ["a", "b"]]');
+        options.answers = list.map((a) => (Array.isArray(a) ? a as string[] : [a as string])); break;
+      }
       case "config": options.config = value; break;
       case "port": {
         const n = Number(value);

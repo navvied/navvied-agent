@@ -187,8 +187,11 @@ describe("restoring", () => {
 });
 
 describe("in the engine", () => {
-  const writer = (dir: string, name: string, content: string) => (req: { messages: { role: string }[] }): Step =>
-    req.messages.at(-1)?.role === "tool" ? { text: "done" } : { calls: [{ name: "Write", args: { file_path: join(dir, name), content } }] };
+  // The model reads a file before it replaces it, as the tools require.
+  const writer = (dir: string, name: string, content: string) => (req: { messages: { role: string }[] }): Step => {
+    const done = req.messages.filter((m) => m.role === "tool").length;
+    return done === 0 ? { calls: [{ name: "Read", args: { file_path: join(dir, name) } }] } : done === 1 ? { calls: [{ name: "Write", args: { file_path: join(dir, name), content } }] } : { text: "done" };
+  };
 
   test("capability is announced only when checkpoints are configured", () => {
     const plain = rig(() => ({ text: "x" }));
@@ -216,6 +219,18 @@ describe("in the engine", () => {
     t = await r.turn({ cmd: "restore", id: items[0]!.id });
     expect(t.find((e) => e.ev === "restore")).toMatchObject({ preview: false, undoId: expect.any(String) });
     expect(read(d, "a.txt")).toBe("one\n");
+    r.cleanup();
+  });
+
+  test("every file an apply_patch changes is covered by the turn's checkpoint", async () => {
+    const d = repo();
+    const patch = "*** Begin Patch\n*** Update File: a.txt\n@@\n-one\n+uno\n*** Update File: b.txt\n@@\n-keep\n+kept\n*** Add File: c.txt\n+new\n*** End Patch";
+    const r = rig((req) => (req.messages.some((m) => m.role === "tool") ? { text: "done" } : { calls: [{ name: "apply_patch", args: { patch } }] }), { cwd: d, checkpoints: store(), applyPatch: "on" });
+    await r.turn(prompt("change three files"));
+    expect([read(d, "a.txt"), read(d, "b.txt"), read(d, "c.txt")]).toEqual(["uno\n", "kept\n", "new\n"]);
+    const id = ((await r.turn({ cmd: "checkpoints" })).find((e) => e.ev === "checkpoints") as unknown as { items: { id: string }[] }).items[0]!.id;
+    await r.turn({ cmd: "restore", id });
+    expect([read(d, "a.txt"), read(d, "b.txt"), existsSync(join(d, "c.txt"))]).toEqual(["one\n", "keep\n", false]);
     r.cleanup();
   });
 

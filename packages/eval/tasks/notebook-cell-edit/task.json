@@ -1,0 +1,17 @@
+{
+  "id": "notebook-cell-edit",
+  "title": "Change one cell of a notebook and add a note",
+  "kind": "fix",
+  "level": 2,
+  "lang": "ts",
+  "requires": [
+    "bun"
+  ],
+  "prompt": "In analysis.ipynb make the code cell that prints the sum print the mean instead (sum divided by len(data)), and add a markdown cell with the text \"Mean of the data\" right after the title cell. Keep the other cells and their saved outputs as they are. Do not change the tests.",
+  "check": "bun test",
+  "protect": [
+    "tests/**"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 300
+}

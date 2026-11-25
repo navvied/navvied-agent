@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Env } from "../src/config.ts";
@@ -142,10 +142,13 @@ export function startMockModel() {
       const user = String([...messages].reverse().find((m) => m.role === "user")?.content ?? "");
       if (!body.stream) return Response.json({ choices: [{ message: { content: "SUMMARY" } }] });
       if (/\bfail\b/.test(user)) return new Response("model is down", { status: 500 });
+      // A model reads a file it is going to replace, as the tools require.
+      const write = /\bwrite (\S+)/.exec(user);
+      const justRead = last?.role === "tool" && messages.at(-2)?.tool_calls?.[0]?.function?.name === "Read";
+      if (write && justRead) return call("Write", { file_path: write[1], content: "hello from the agent\n" });
       if (last?.role === "tool") return text(`done: ${String(last.content).replace(/\s+/g, " ").slice(0, 60)}`);
       if (system.includes("PLAN MODE") && /\bplan\b/.test(user)) return call("ExitPlanMode", { plan: "1. First step\n2. Second step" });
-      const write = /\bwrite (\S+)/.exec(user);
-      if (write) return call("Write", { file_path: write[1], content: "hello from the agent\n" });
+      if (write) return existsSync(write[1]!) ? call("Read", { file_path: write[1] }) : call("Write", { file_path: write[1], content: "hello from the agent\n" });
       if (/\bbash\b/.test(user)) return call("Bash", { command: "echo from-shell" });
       const fetchUrl = /\bfetch (\S+)/.exec(user);
       if (fetchUrl) return call("WebFetch", { url: fetchUrl[1] });

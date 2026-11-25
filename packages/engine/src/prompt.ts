@@ -31,6 +31,10 @@ const PLAN_NOTE =
   "PLAN MODE: you may only read and research (Read, Glob, Grep, WebFetch, TodoWrite). Do NOT change anything. " +
   "When you know exactly what to do, call ExitPlanMode with a concrete step-by-step plan for the user to approve.";
 
+const REMEMBER_NOTE = "Remember: save lasting facts about the person and project, not task progress.";
+
+const remembers = (info: PromptInfo): boolean => info.tools?.includes("Remember") === true || info.also?.includes("Remember") === true;
+
 const SMALL_RULES = [
   "Answer questions and chat in plain text, directly. Use a tool only when you must read or change files or run a command.",
   "Read a file before you change it. Make the smallest change that works, then check it. Say only what you really did.",
@@ -59,6 +63,7 @@ export function systemPrompt(info: PromptInfo, mode: PermMode): string {
       info.persona?.trim(),
       `You are a coding assistant working in ${info.cwd} on ${info.platform}.${info.tools?.some((t) => t === "WebSearch" || t === "WebFetch") ? ` Date: ${info.date}.` : ""}`,
       SMALL_RULES,
+      remembers(info) ? REMEMBER_NOTE : "",
       mode === "plan" ? PLAN_NOTE : "",
       info.also?.length ? `Also available, by name: ${info.also.join(", ")}.` : "",
       info.reference,
@@ -72,6 +77,7 @@ export function systemPrompt(info: PromptInfo, mode: PermMode): string {
     `Working directory: ${info.cwd}. Platform: ${info.platform}. Date: ${info.date}.`,
     `Work carefully: read before you edit, make the smallest correct change, run the tests or the program to check it, and say what you verified. Be concise. Never claim to have done what you did not. Prefer Read, Glob and Grep to the shell for looking at code.${info.tools?.includes("TodoWrite") ? " Use TodoWrite for work in several steps." : ""} If a tool call is denied, do not retry it: ask what they prefer.`,
     mode === "plan" ? PLAN_NOTE : "",
+    remembers(info) ? REMEMBER_NOTE : "",
     info.also?.length ? `Also available, by name: ${info.also.join(", ")}.` : "",
     info.reference,
     info.finished?.length ? info.finished.join("\n") : "",

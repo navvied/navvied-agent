@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { win32 } from "node:path";
 
 export type Which = (command: string) => string | null;
@@ -62,7 +62,7 @@ export function launch(argv: string[], platform: NodeJS.Platform = process.platf
 export const usesProcessGroups = (platform: NodeJS.Platform = process.platform): boolean => platform !== "win32";
 
 /** Stop a process and everything it started. */
-export function killTree(child: ChildProcess, platform: NodeJS.Platform = process.platform): void {
+export function killTree(child: Pick<ChildProcess, "pid" | "kill">, platform: NodeJS.Platform = process.platform): void {
   const pid = child.pid;
   try {
     if (platform === "win32") { if (pid) spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" }); else child.kill(); }
@@ -70,6 +70,18 @@ export function killTree(child: ChildProcess, platform: NodeJS.Platform = proces
   } catch {
     try { child.kill("SIGKILL"); } catch { /* already gone */ }
   }
+}
+
+/**
+ * When a process started, as the system writes it down: a process number alone is not the process (numbers are used again), the number
+ * with its start time is. Nothing on Windows, where a program is not taken back after a restart.
+ */
+export function processStart(pid: number, platform: NodeJS.Platform = process.platform): string | undefined {
+  try {
+    if (platform === "linux") { const stat = readFileSync(`/proc/${pid}/stat`, "utf8"); return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]; }
+    if (platform === "darwin") { const r = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" }); return r.status === 0 ? r.stdout.trim() || undefined : undefined; }
+  } catch { /* it is not there */ }
+  return undefined;
 }
 
 const quoted = (word: string): string => `'${word.replace(/'/g, `'\\''`)}'`;

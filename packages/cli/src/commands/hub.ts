@@ -3,16 +3,18 @@
  * and a program on standard input all attach here: each gets what the engine says, and each can send it commands.
  * The session lives in this process, so a client that comes back with the last number it saw receives what it missed.
  */
-import { EventEncoder, parseCommand, type Command, type EngineEvent, type HistoryItem, type ScheduleInfo, type SessionInfo, type SessionKind } from "@navvied/protocol";
+import { EventEncoder, parseCommand, type Command, type EngineEvent, type HistoryItem, type ScheduleInfo, type SearchHit, type SessionInfo, type SessionKind } from "@navvied/protocol";
 import { historyOf } from "@navvied/engine";
 import type { Options } from "../args.ts";
-import { FileSessionStore, forgetCheckpoints, type Recall } from "@navvied/engine";
+import { FileSessionStore, SkillBook, forgetCheckpoints, loadSkills, type Recall } from "@navvied/engine";
 import { createEngine, modelInfoOf, resolved, type Created } from "../create.ts";
 import { checkTarget, handedOver, otherKind, transcriptOf } from "../handover.ts";
 import { FolderBook, folderId } from "../folders.ts";
 import { ScheduleStore, dueJobs, type Job } from "../schedules.ts";
 import { runJob } from "../schedule-run.ts";
-import { PluginState, listPlugins } from "../plugins.ts";
+import { PluginState, SkillTrust, listPlugins, projectSkillDirs } from "../plugins.ts";
+import { answerMemory, answerSkill, memoryPending, rollbackSkill, skillReview, type Review } from "../review.ts";
+import { memoryPathsFor } from "../memory-ui.ts";
 import { ArtifactBook, scanFolder } from "../artifacts.ts";
 import { nextRun, parseCron } from "../cron.ts";
 import { ToolUsage, listSets, listTools, toolId } from "../tools-info.ts";
@@ -26,7 +28,7 @@ import { askModels, detectApi, newEndpointId, reportEndpoints, type EndpointReco
 import { API_STYLES, MODEL_HUB, PROVIDERS, authHeaders } from "../presets.ts";
 import { ONLY_ON_A_COMPUTER, baseOf, entryName, headersOf, listModels, mergeSaved, modelEntryOf, reportOf, type ListedRoute } from "../providers.ts";
 import { refreshHosted } from "../hosted-refresh.ts";
-import { accountPath, hostedModelsPath, chatFilesDir, chatJournalDir, chatSearchIndexPath, chatSessionsDir, configPath, foldersPath, localDir, journalDir, loadConfig, runsInCloud, saveEndpoint, removeModel, saveModel, saveProvider, pluginStatePath, terminalStatePath, toolUsagePath, draftsPath, checkpointsDir, scheduledDir, schedulesPath, searchIndexPath, sessionsDir } from "../config.ts";
+import { accountPath, hostedModelsPath, chatFilesDir, chatJournalDir, chatSearchIndexPath, chatSessionsDir, configPath, foldersPath, localDir, journalDir, loadConfig, runsInCloud, saveEndpoint, removeModel, saveModel, saveProvider, pluginStatePath, skillLedgerPath, skillTrustPath, terminalStatePath, toolUsagePath, draftsPath, checkpointsDir, scheduledDir, schedulesPath, searchIndexPath, sessionsDir } from "../config.ts";
 import { SearchIndex } from "../search-index.ts";
 import { DEFAULT_SERVER, readAccount, type Account } from "../account.ts";
 import { deleteConversation, getConversation, listComputers, listConversations, type AccountComputer } from "../account-client.ts";
@@ -45,7 +47,7 @@ const HISTORY = 5000;
 /** While no model is connected the configuration is looked at this often, so a page connects itself once one is set up. */
 const WATCH_MS = 1000;
 
-export interface Client { send(text: string): unknown }
+export interface Client { send(text: string): unknown; /** True: this window shows the agent's questions and can answer them. A window that does not say so (a page whose question card is not built yet) is not counted as someone who can be asked. */ answers?: true }
 
 export interface HubOptions {
   /** Run the scheduled tasks while this hub is up (a server wants this; the interactive app runs them itself). Default false. */
@@ -207,8 +209,9 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   };
   /** The agent's own way to look through earlier conversations (the Recall tool): the same index and records as the `search` command. */
   const recallFor = (lane: Lane): Recall => ({
-    search: (query, limit) => { const db = searchIndexOf(lane); if (!db) return []; fillIndex(lane, db); return db.search(query, limit); },
-    read: (id) => lane.journal.items(id)?.slice(-60),
+    search: (query, limit) => { const db = searchIndexOf(lane); if (!db) return []; fillIndex(lane, db); const hits = db.search(query, limit); return hits.length ? hits : db.search(query, limit, true); },
+    read: (id) => { const items = lane.journal.items(id); if (items) return items; const m = new FileSessionStore(lane.storeDir).load(id); return m ? historyOf(m, 400) : undefined; },
+    recent: (limit) => { const db = searchIndexOf(lane); if (!db) return []; fillIndex(lane, db); return db.recent(limit); },
   });
 
   /** Which files a conversation wrote: the ones its Write and Edit steps named, and, for a chat, the ones that are new or changed in its folder after a turn. */
@@ -262,7 +265,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     lane.journal.record(e);
     if (e.ev === "taken") { lane.running = true; lane.turn = []; } else if (e.ev === "done") lane.running = false;
     if (lane.running) { lane.turn.push(e); if (lane.turn.length > 3000) lane.turn.splice(0, lane.turn.length - 3000); }
-    if (lane.slot) { if (e.ev === "approval") lane.slot.asking = true; else if (e.ev === "tool" || e.ev === "done") lane.slot.asking = false; }
+    if (lane.slot) { if (e.ev === "approval" || e.ev === "question") lane.slot.asking = true; else if (e.ev === "tool" || e.ev === "done") lane.slot.asking = false; }
     if (e.ev === "tool" && e.status === "running") toolUsage.add(e.name);
     // Whatever the engine, this hub can manage the list of conversations of its kind: say so with the abilities.
     const folders = e.ev === "caps" && lane.kind === "agent" ? folderBook.offered(resolve(lane.options.cwd ?? process.cwd()), namedFolders()).map((f) => ({ id: f.id, name: f.name, path: f.path, ...(f.last ? { last: f.last } : {}), ...(f.current ? { current: true as const } : {}) })) : undefined;
@@ -270,7 +273,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     if (e.ev === "caps") { lane.engineModels = new Set((e.models ?? []).map((m) => m.id)); lane.engineCaps = e; }
     const more = e.ev === "caps" ? otherKinds(lane) : [];
     const gone = e.ev === "caps" ? removedModels(lane) : new Set<string>();
-    const said: EngineEvent = e.ev === "caps" ? { ...e, ...(more.length || gone.size ? { models: [...(e.models ?? []).filter((m) => m.current || !gone.has(m.id)), ...more] } : {}), manage: true, rowActions: true, schedule: true, plugins: true, toolList: true, drafts: true, artifacts: true, scheduleNote: "Tasks run only while this computer is on and navvied is running.", ...(folders ? { folders } : {}) } : e;
+    const said: EngineEvent = e.ev === "caps" ? { ...e, ...(more.length || gone.size ? { models: [...(e.models ?? []).filter((m) => m.current || !gone.has(m.id)), ...more] } : {}), manage: true, rowActions: true, schedule: true, plugins: true, memory: true, skillReview: true, toolList: true, drafts: true, artifacts: true, scheduleNote: "Tasks run only while this computer is on and navvied is running.", ...(folders ? { folders } : {}) } : e;
     noteFiles(lane, e);
     // Each answer moves its conversation up the list: told just before the end of the turn, so that the end is still the last word of it.
     if (e.ev === "done" && lane.created) say(lane, { ev: "sessions", items: listSessions(lane) });
@@ -294,12 +297,12 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     if (e.ev === "session" || e.ev === "loaded") slot.id = e.id;
     if (e.ev === "taken") { slot.running = true; slot.turn = []; }
     if (slot.running) { slot.turn.push(e); if (slot.turn.length > 3000) slot.turn.splice(0, slot.turn.length - 3000); }
-    if (e.ev === "approval") slot.asking = true; else if (e.ev === "tool" || e.ev === "done") slot.asking = false;
+    if (e.ev === "approval" || e.ev === "question") slot.asking = true; else if (e.ev === "tool" || e.ev === "done") slot.asking = false;
     if (e.ev === "tool" && e.status === "running") toolUsage.add(e.name);
     noteFiles({ ...lane, created: slot.created, writing: slot.writing } as Lane, e);
     const line = JSON.stringify({ ...encoder.stamp(lane.kind === "agent" ? e : { ...e, kind: lane.kind }), bg: slot.id ?? "" });
     for (const c of clients) c.send(line);
-    if (e.ev === "done") finishAside(slot); else if (e.ev === "approval") tellBackground();
+    if (e.ev === "done") finishAside(slot); else if (e.ev === "approval" || e.ev === "question") tellBackground();
   };
   const asideSlots = new Set<Slot>();
   /** Which conversations are still being worked on while another is open, told to every window (and to one that arrives, after `synced`). */
@@ -360,7 +363,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   const engineFor = (lane: Lane, earlier?: string): ReturnType<typeof createEngine> => {
     const slot: Slot = { lane, bg: false, id: undefined, created: undefined, journal: lane.journal, running: false, asking: false, turn: [], writing: lane.writing };
     lane.slot = slot;
-    return createEngine(lane.options, io, (e) => { if (slot.bg) sayAside(slot, e); else say(lane, e); }, { recall: recallFor(lane), ...(earlier ? { earlier } : {}) });
+    return createEngine(lane.options, io, (e) => { if (slot.bg) sayAside(slot, e); else say(lane, e); }, { wake: true, recall: recallFor(lane), attended: () => [...clients].some((c) => c.answers === true), ...(earlier ? { earlier } : {}) });
   };
 
   const connect = (lane: Lane): Created | undefined => {
@@ -455,7 +458,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     const meta = lane.meta.read();
     const hidden = new Set(includeArchived ? [] : meta.archived);
     const mine = new Map(listSessions(lane, false).concat(includeArchived ? listSessions(lane, true) : []).map((s) => [s.id, s]));
-    const hits = db.search(query, limit + hidden.size).filter((h) => !hidden.has(h.id)).map((h) => { const row = mine.get(h.id); return { ...h, ...(meta.titles[h.id] ? { title: meta.titles[h.id]! } : {}), ...(row?.project ? { project: row.project } : {}) }; });
+    const hits: SearchHit[] = db.search(query, limit + hidden.size).filter((h) => !hidden.has(h.id)).map((h) => { const row = mine.get(h.id); return { ...h, ...(meta.titles[h.id] ? { title: meta.titles[h.id]! } : {}), ...(row?.project ? { project: row.project } : {}) }; });
     // What the cloud holds is not on this computer, so it is not in the index: its titles are looked at, so it still shows up.
     const words = query.toLowerCase().split(/\s+/).filter(Boolean);
     const seen = new Set(hits.map((h) => h.id));
@@ -807,6 +810,16 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     say(main, { ev: "endpoints", items: reportEndpoints(file.ok ? file.value?.endpoints : undefined) });
   };
   const tellPlugins = (): void => { say(main, { ev: "plugins", items: pluginItems() }); };
+  /** What waits for the person among the agent's notes and skills. */
+  const review = (): Review => {
+    const file = configPath(io.env, options.config), cwd = resolve(main.options.cwd ?? process.cwd()), cfg = loadConfig(file, io.env);
+    return {
+      memory: memoryPathsFor(cwd, file),
+      book: new SkillBook({ user: join(dirname(file), "skills"), project: join(cwd, ".navvied", "skills"), ledger: skillLedgerPath(io.env) }),
+      trust: new SkillTrust(skillTrustPath(io.env), cfg.ok && cfg.value?.skills?.trust === "confirm"),
+      skills: () => loadSkills({ user: join(dirname(file), "skills"), project: projectSkillDirs(cwd) }),
+    };
+  };
 
   const hub: Hub = {
     attach(client, since) {
@@ -859,6 +872,9 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
         return;
       }
       if (parsed.value.cmd === "plugins") { tellPlugins(); return; }
+      if (parsed.value.cmd === "memory.pending") { const r = review(), c = parsed.value; for (const e of c.action && c.id ? answerMemory(r, c.action, c.id, new Date().toISOString().slice(0, 10)) : [memoryPending(r)]) say(lane, e); return; }
+      if (parsed.value.cmd === "skill.review") { const r = review(), c = parsed.value; for (const e of c.id && c.accept !== undefined ? answerSkill(r, c.id, c.accept) : [skillReview(r)]) say(lane, e); return; }
+      if (parsed.value.cmd === "skill.rollback") { for (const e of rollbackSkill(review(), parsed.value.id)) say(lane, e); return; }
       if (parsed.value.cmd === "providers") { tellProviders(); return; }
       if (local.command(parsed.value)) return;
       if (accountsPage.command(parsed.value)) return;

@@ -35,8 +35,8 @@ describe("a command that is stopped", () => {
 describe("the tool set", () => {
   test("names, schemas and read-only flags", () => {
     const all = defaultTools();
-    expect(all.map((t) => t.name)).toEqual(["Read", "Write", "Edit", "Bash", "BashOutput", "BashInput", "KillShell", "Glob", "Grep", "WebFetch", "WebSearch", "Browser", "Skill", "Agent", "Remember", "Recall", "TodoWrite"]);
-    expect(all.filter((t) => t.readOnly).map((t) => t.name)).toEqual(["Read", "BashOutput", "Glob", "Grep", "WebFetch", "WebSearch", "Skill", "Agent", "Recall", "TodoWrite"]);
+    expect(all.map((t) => t.name)).toEqual(["Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch", "Bash", "BashOutput", "BashInput", "KillShell", "Glob", "Grep", "WebFetch", "WebSearch", "Browser", "Skill", "Agent", "Remember", "Recall", "SkillManage", "TodoWrite", "AskUserQuestion"]);
+    expect(all.filter((t) => t.readOnly).map((t) => t.name)).toEqual(["Read", "BashOutput", "Glob", "Grep", "WebFetch", "WebSearch", "Skill", "Agent", "Recall", "TodoWrite", "AskUserQuestion"]);
     for (const t of all) {
       expect(t.description.length).toBeGreaterThan(10);
       expect(t.parameters).toMatchObject({ type: "object" });
@@ -59,12 +59,12 @@ describe("Read", () => {
     const d = workdir();
     mkdirSync(join(d, "sub"));
     writeFileSync(join(d, "bin"), Buffer.from([1, 2, 0, 3]));
-    writeFileSync(join(d, "big.txt"), "x".repeat(5_000_001));
+    writeFileSync(join(d, "big.bin"), Buffer.alloc(5_000_001));
     const r = tool("Read");
     expect(await r.run({ file_path: "sub" }, ctx(d))).toMatch(/is a directory/);
     expect(await r.run({ file_path: "bin" }, ctx(d))).toMatch(/looks binary/);
     expect(await r.run({ file_path: "nope" }, ctx(d))).toMatch(/does not exist/);
-    expect(await r.run({ file_path: "big.txt" }, ctx(d))).toMatch(/too large/);
+    expect(await r.run({ file_path: "big.bin" }, ctx(d))).toMatch(/looks binary/);
   });
 });
 
@@ -158,6 +158,8 @@ describe("Bash", () => {
   });
 });
 
+const NOTE = "\n[searched without ripgrep: patterns follow JavaScript's rules, which differ a little from ripgrep's]";
+
 describe("Glob and Grep", () => {
   test("Glob finds files, skips node_modules and .git, newest first", async () => {
     const d = workdir();
@@ -169,7 +171,7 @@ describe("Glob and Grep", () => {
     expect(out.split("\n")).toEqual(["src/new.ts", "src/old.ts"]);
     expect(await tool("Glob").run({ pattern: "**/*.rs" }, ctx(d))).toBe("No files matched.");
   });
-  test("Grep still works on a machine with neither ripgrep nor grep", async () => {
+  test("Grep still works on a machine without ripgrep, and says its patterns are JavaScript's", async () => {
     const d = workdir(), bin = workdir();
     mkdirSync(join(d, "src")); mkdirSync(join(d, "node_modules"));
     writeFileSync(join(d, "src/a.ts"), "alpha\nNeedle one\nneedle two\n");
@@ -179,8 +181,8 @@ describe("Glob and Grep", () => {
     const saved = process.env.PATH;
     process.env.PATH = bin;
     try {
-      expect(await tool("Grep").run({ pattern: "needle" }, ctx(d))).toBe("src/a.ts:3:needle two\nsrc/b.md:1:needle in docs");
-      expect(await tool("Grep").run({ pattern: "needle", ignore_case: true, glob: "*.ts" }, ctx(d))).toBe("src/a.ts:2:Needle one\nsrc/a.ts:3:needle two");
+      expect(await tool("Grep").run({ pattern: "needle" }, ctx(d))).toBe(`src/a.ts:3:needle two\nsrc/b.md:1:needle in docs${NOTE}`);
+      expect(await tool("Grep").run({ pattern: "needle", ignore_case: true, glob: "*.ts" }, ctx(d))).toBe(`src/a.ts:2:Needle one\nsrc/a.ts:3:needle two${NOTE}`);
       expect(await tool("Grep").run({ pattern: "zzz" }, ctx(d))).toBe("No matches.");
       expect(await tool("Grep").run({ pattern: "(" }, ctx(d))).toContain("not a valid regular expression");
     } finally { process.env.PATH = saved; }
@@ -201,30 +203,11 @@ describe("Glob and Grep", () => {
   });
 });
 
-describe("Grep without ripgrep", () => {
-  test("falls back to the system grep", async () => {
-    const d = workdir();
-    const { symlinkSync } = await import("node:fs");
-    const grepPath = Bun.which("grep");
-    if (!grepPath) return; // no grep on this machine: nothing to test
-    // Git's grep on Windows works only next to the libraries in its own folder, which has no ripgrep; elsewhere grep is linked alone.
-    let bin = dirname(grepPath);
-    if (process.platform !== "win32") { bin = workdir(); symlinkSync(grepPath, join(bin, "grep")); }
-    writeFileSync(join(d, "a.ts"), "needle here\n");
-    const saved = process.env.PATH;
-    process.env.PATH = bin;
-    try {
-      expect(Bun.which("rg", { PATH: process.env.PATH ?? "" })).toBeNull();
-      expect(await tool("Grep").run({ pattern: "needle" }, ctx(d))).toMatch(/a\.ts:1:needle here/);
-    } finally { process.env.PATH = saved; }
-  });
-});
-
 describe("TodoWrite", () => {
   test("emits a plan event with validated entries", async () => {
     const c = ctx(workdir());
     const out = await tool("TodoWrite").run({ todos: [{ content: "a", status: "in_progress" }, { content: "b", status: "weird" }, { content: "", status: "pending" }, 5] }, c);
-    expect(out).toMatch(/2 items/);
+    expect(out).toBe("Task list updated:\n[>] a\n[ ] b");
     expect(c.emitted[0]).toMatchObject({ ev: "plan", entries: [{ title: "a", status: "in_progress" }, { title: "b", status: "pending" }] });
   });
 });

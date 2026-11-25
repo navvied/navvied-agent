@@ -1,14 +1,19 @@
 import type { Tool } from "../types.ts";
 import { agent } from "./agent.ts";
+import { ask } from "./ask.ts";
 import { recallTool } from "./recall.ts";
 import { bash, bashInput, bashOutput, killShell } from "./bash.ts";
 import { browser } from "./browser.ts";
+import { applyPatchTool, type PatchMode } from "./apply-patch.ts";
 import { edit } from "./edit.ts";
 import { glob } from "./glob.ts";
 import { grep } from "./grep.ts";
+import { multiEdit } from "./multi-edit.ts";
+import { notebookEdit } from "./notebook.ts";
 import { read } from "./read.ts";
 import { rememberTool } from "./remember.ts";
 import { skill } from "./skill.ts";
+import { skillManage } from "./skill-manage.ts";
 import { todo } from "./todo.ts";
 import { webFetch } from "./web-fetch.ts";
 import { webSearch } from "./web-search.ts";
@@ -25,5 +30,5 @@ export const exitPlanMode: Tool = {
   async run() { return "Plan presented."; },
 };
 
-export const defaultTools = (): Tool[] => [read, write, edit, bash, bashOutput, bashInput, killShell, glob, grep, webFetch, webSearch, browser, skill, agent, rememberTool, recallTool, todo];
-export { recallTool, agent, bash, bashInput, bashOutput, browser, edit, killShell, glob, grep, read, rememberTool, skill, todo, webFetch, webSearch, write };
+export const defaultTools = (o: { applyPatch?: PatchMode | undefined } = {}): Tool[] => [read, write, edit, multiEdit, notebookEdit, ...(o.applyPatch === "off" ? [] : [applyPatchTool(o.applyPatch ?? "auto")]), bash, bashOutput, bashInput, killShell, glob, grep, webFetch, webSearch, browser, skill, agent, rememberTool, recallTool, skillManage, todo, ask];
+export { recallTool, skillManage, agent, ask, bash, bashInput, bashOutput, browser, edit, multiEdit, notebookEdit, killShell, glob, grep, read, rememberTool, skill, todo, webFetch, webSearch, write };

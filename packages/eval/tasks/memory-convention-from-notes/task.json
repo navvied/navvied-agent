@@ -1,0 +1,13 @@
+{
+  "id": "memory-convention-from-notes",
+  "title": "Follow a convention the agent kept as a note in an earlier conversation",
+  "kind": "terminal",
+  "level": 1,
+  "lang": "none",
+  "requires": ["bun"],
+  "prompt": "Write the deploy label for build number 37 into ANSWER.txt, alone on one line. Follow the usual convention for labels.",
+  "check": "test \"$(tr -d '[:space:]' < ANSWER.txt)\" = \"zx-build-37\" && bun \"$BENCH_FIXTURES/skills-check.ts\" notes",
+  "protect": ["README.md", ".navvied/memory.md"],
+  "maxSteps": 20,
+  "timeoutSeconds": 600
+}

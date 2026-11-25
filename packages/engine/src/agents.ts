@@ -10,6 +10,8 @@ export interface AgentDef {
   description: string;
   /** The tools it may use; without this it may use the ones that only read. */
   tools?: string[];
+  /** `worktree`: when it may change files it works in a copy of the project (a git worktree), so its changes stay apart from this one. */
+  isolation?: "worktree";
   /** How it works: its instructions. */
   prompt: string;
 }
@@ -30,8 +32,14 @@ export function parseAgent(text: string, fileName: string): AgentDef | undefined
   const prompt = match[2]!.trim().slice(0, 12_000);
   if (!NAME.test(name) || !description || !prompt) return undefined;
   const tools = fields.tools ? fields.tools.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim()).filter(Boolean) : undefined;
-  return { name, description, ...(tools?.length ? { tools } : {}), prompt };
+  return { name, description, ...(tools?.length ? { tools } : {}), ...(fields.isolation?.toLowerCase() === "worktree" ? { isolation: "worktree" as const } : {}), prompt };
 }
+
+/**
+ * The folders helpers are read from, the weakest first (a later one wins over an earlier one with the same name): the person's own
+ * `.claude/agents` and navvied's, then, from the git root down to the folder, each project folder's `.claude/agents` and `.navvied/agents`.
+ */
+export const agentDirs = (home: string, config: string, projects: readonly string[]): string[] => [join(home, ".claude", "agents"), join(config, "agents"), ...projects.flatMap((d) => [join(d, ".claude", "agents"), join(d, ".navvied", "agents")])];
 
 /** The helpers in these folders. A later folder wins over an earlier one with the same name (the project over the person's own). */
 export function loadAgents(dirs: readonly string[]): AgentDef[] {

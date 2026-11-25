@@ -72,6 +72,8 @@ export interface PromptCommand {
 export interface CancelCommand { cmd: "cancel" }
 /** `input` goes with the option that is `editable`: the person changed the command before allowing it. */
 export interface ApproveCommand { cmd: "approve"; id: string; optionId: string; input?: string }
+/** The person's answer to a `question`: for each question, the choices picked and the person's own words, in the order of the questions. An empty list means that question was skipped. */
+export interface AnswerCommand { cmd: "answer"; id: string; answers: string[][] }
 export interface CompactCommand { cmd: "compact" }
 export interface LoadCommand { cmd: "load"; id: string }
 /** Asks for the saved sessions of this engine, newest first (answered with a `sessions` event). */
@@ -177,6 +179,12 @@ export interface LocalOllamaCommand { cmd: "local.ollama" }
 export interface LocalOllamaPullCommand { cmd: "local.ollama.pull" | "local.ollama.cancel"; model: string }
 export interface ProviderRemoveCommand { cmd: "provider.remove"; id: string }
 export interface PluginToggleCommand { cmd: "plugin.toggle"; id: string; enabled: boolean }
+/** Notes the agent wanted to keep after reading text from the web wait for the person (`caps.memory`). Without `action` it lists them (answered with `memory.pending`); `accept` keeps one (marked as from the web), `reject` drops it. */
+export interface MemoryPendingCommand { cmd: "memory.pending"; action?: "accept" | "reject"; id?: string }
+/** What waits for the person among skills (`caps.skillReview`): changes the agent made with approval set to `ask`, and project skills not yet accepted. Without `id` it lists (answered with `skill.review`); with `id` and `accept` it answers one (a trust item has the id `trust:<name>`). */
+export interface SkillReviewCommand { cmd: "skill.review"; id?: string; accept?: boolean }
+/** Undo a change the agent made to a skill: the one named by `id`, or the latest. Answered with `skill.review`. */
+export interface SkillRollbackCommand { cmd: "skill.rollback"; id?: string }
 /** Ask for the files conversations wrote (of one conversation, with `id`; answered with `artifacts`). */
 export interface ArtifactsCommand { cmd: "artifacts"; id?: string }
 /** Read one file to show it: text or a picture. A file is named by the `id` the hub gave; a path is never taken. Answered with `artifact`. */
@@ -190,7 +198,7 @@ export interface PinCommand { cmd: "pin"; id: string; pinned: boolean }
 export interface RestoreCommand { cmd: "restore"; id: string; preview?: boolean }
 
 /** Every command may say which kind of conversation it is for. */
-export type Command = (ProvidersCommand | LocalRunCommand | LocalStopCommand | LocalFileCommand | LocalModelsCommand | AccountsCommand | AccountSigninCommand | AccountSigninCodeCommand | AccountSigninIdCommand | AccountLoginCommand | AccountInstallCommand | LocalRecommendedCommand | LocalOllamaCommand | LocalOllamaPullCommand | LocalRuntimeCommand | LocalSearchCommand | MachineCommand | EndpointsCommand | EndpointSaveCommand | EndpointRemoveCommand | EndpointModelsCommand | ProviderModelsCommand | ProviderUseCommand | ProviderSaveCommand | ProviderRemoveCommand | PromptCommand | CancelCommand | ApproveCommand | CompactCommand | ModelCommand | EffortCommand | LoadCommand | SessionsCommand | SearchCommand | CheckpointsCommand | RestoreCommand | JobStopCommand | NewCommand | RenameCommand | RemoveCommand | PinCommand | ImportCommand | TransferCommand | ForkCommand | ArchiveCommand | MarkCommand | ReceiveCommand | SchedulesCommand | ScheduleAddCommand | ScheduleUpdateCommand | ScheduleRemoveCommand | ScheduleRunCommand | PluginsCommand | PluginToggleCommand | DraftCommand | DraftsCommand | ToolsCommand | ToolToggleCommand | TerminalUseCommand | ArtifactsCommand | ArtifactReadCommand) & { kind?: SessionKind };
+export type Command = (ProvidersCommand | LocalRunCommand | LocalStopCommand | LocalFileCommand | LocalModelsCommand | AccountsCommand | AccountSigninCommand | AccountSigninCodeCommand | AccountSigninIdCommand | AccountLoginCommand | AccountInstallCommand | LocalRecommendedCommand | LocalOllamaCommand | LocalOllamaPullCommand | LocalRuntimeCommand | LocalSearchCommand | MachineCommand | EndpointsCommand | EndpointSaveCommand | EndpointRemoveCommand | EndpointModelsCommand | ProviderModelsCommand | ProviderUseCommand | ProviderSaveCommand | ProviderRemoveCommand | PromptCommand | CancelCommand | ApproveCommand | AnswerCommand | CompactCommand | ModelCommand | EffortCommand | LoadCommand | SessionsCommand | SearchCommand | CheckpointsCommand | RestoreCommand | JobStopCommand | NewCommand | RenameCommand | RemoveCommand | PinCommand | ImportCommand | TransferCommand | ForkCommand | ArchiveCommand | MarkCommand | ReceiveCommand | SchedulesCommand | ScheduleAddCommand | ScheduleUpdateCommand | ScheduleRemoveCommand | ScheduleRunCommand | PluginsCommand | PluginToggleCommand | DraftCommand | DraftsCommand | ToolsCommand | ToolToggleCommand | TerminalUseCommand | ArtifactsCommand | ArtifactReadCommand | MemoryPendingCommand | SkillReviewCommand | SkillRollbackCommand) & { kind?: SessionKind };
 /** What this computer is, as far as it could be read: a card or a number that could not be read is not there, never a guess. */
 export interface MachineInfo {
   os: "linux" | "wsl" | "macos" | "windows" | "unknown";
@@ -283,7 +291,10 @@ export type ApprovalChange =
   | { tool: "Edit"; file: string; old: string; new: string; truncated?: true }
   | { tool: "Write"; file: string; content: string; truncated?: true }
   | { tool: "Bash"; command: string; truncated?: true };
-export interface PlanEntry { title: string; status: "pending" | "in_progress" | "completed" | (string & {}) }
+/** `activeForm` is the title in the present tense ("Running the tests"), shown while the entry is in progress. */
+export interface PlanEntry { title: string; status: "pending" | "in_progress" | "completed" | (string & {}); activeForm?: string }
+/** One question the agent asks the person. `choices` are at most four short answers, the recommended one first; the person may always answer in their own words. */
+export interface QuestionItem { question: string; choices?: string[]; /** More than one choice may be picked. */ multi?: true }
 
 /** What this engine can do — front-ends show controls only for what is real. */
 export interface Capabilities {
@@ -308,6 +319,10 @@ export interface Capabilities {
   schedule?: true;
   /** The hub lists skills, tool servers and hooks and can switch them (`plugins`, `plugin.toggle`). */
   plugins?: true;
+  /** The hub keeps notes the agent wanted to save from web text for the person to accept (`memory.pending`). */
+  memory?: true;
+  /** The hub keeps skill changes and project skills for the person to accept, and can undo a change (`skill.review`, `skill.rollback`). */
+  skillReview?: true;
   /** The hub lists the agent's tools and can switch them (`tools` command, `tool.toggle`). */
   toolList?: true;
   /** The hub keeps unsent text for every window (`draft`, `drafts`). */
@@ -334,6 +349,8 @@ type EngineEventBody =
   | { ev: "schedules"; items: ScheduleInfo[] }
   /** The things that extend the agent here (sent when asked and when one is switched). */
   | { ev: "plugins"; items: PluginInfo[] }
+  | { ev: "memory.pending"; items: { id: string; scope: "project" | "user"; action: "add" | "replace" | "forget"; text: string; target?: string; origin: "user" | "self" | "web"; at: number }[] }
+  | { ev: "skill.review"; items: { id: string; kind: "change" | "trust"; name: string; summary: string; findings?: string[] }[]; history: { id: string; name: string; action: "create" | "patch" | "delete"; actor: "agent" | "person"; at: number; state: "applied" | "waiting" | "rejected" | "undone" }[] }
   /** The providers of this computer that have something saved (sent when asked and whenever one is saved or removed). Never carries a key: `key` says only that one is saved, and `fields` holds the values of the fields that are not secret. */
   | { ev: "providers"; items: ProviderSaved[] }
   /** The models a provider lists, as it names them (the answer to `provider.models`). */
@@ -394,7 +411,7 @@ type EngineEventBody =
   | { ev: "sessions"; items: SessionInfo[] }
   /** The answer to `search`: the conversations that mention the words, best first, each with the passage (the words in [brackets]). */
   | { ev: "found"; query: string; items: SearchHit[] }
-  | { ev: "caps"; kind?: SessionKind; manage?: true; rowActions?: true; schedule?: true; plugins?: true; toolList?: true; drafts?: true; artifacts?: true; scheduleNote?: string; folders?: Capabilities["folders"]; steer: boolean; modes: PermMode[]; defaultMode?: PermMode; compact: boolean; checkpoints?: boolean; models?: ModelInfo[]; efforts?: Effort[]; effort?: Effort; vision?: boolean }
+  | { ev: "caps"; kind?: SessionKind; questions?: true; manage?: true; rowActions?: true; schedule?: true; plugins?: true; skillReview?: true; memory?: true; toolList?: true; drafts?: true; artifacts?: true; scheduleNote?: string; folders?: Capabilities["folders"]; steer: boolean; modes: PermMode[]; defaultMode?: PermMode; compact: boolean; checkpoints?: boolean; models?: ModelInfo[]; efforts?: Effort[]; effort?: Effort; vision?: boolean }
   | { ev: "checkpoints"; items: CheckpointInfo[] }
   /** The outcome of `restore`. A restore saves the current state first as `undoId`, so it can be undone. */
   | { ev: "restore"; id: string; preview: boolean; changes: RestoreEntry[]; undoId?: string }
@@ -418,6 +435,8 @@ type EngineEventBody =
   | { ev: "usage"; ctx: number; win: number; out: number; turn?: TurnTokens }
   /** `tool` is the id of the step (the `tool` event) this question is about, so a page can put the buttons on that step. */
   | { ev: "approval"; id: string; title: string; options: ApprovalOption[]; change?: ApprovalChange; tool?: string; /** Why this is asked even in a mode that mostly does not ask (it cannot be undone), in plain words. */ risk?: string }
+  /** The agent asks the person one to four questions and waits (only when `caps.questions` is set). Answered with the `answer` command; `tool` is the step that asked. */
+  | { ev: "question"; id: string; questions: QuestionItem[]; tool?: string }
   /** Plan mode finished: the plan was streamed as `text`; the user may approve it. */
   | { ev: "plan_proposal"; id: string }
   | { ev: "phase"; name: "" | "starting" | "compacting" }

@@ -1,6 +1,7 @@
 import type { PermMode } from "@navvied/protocol";
 import { onlyLooks } from "./risk.ts";
-import { splitCommand } from "./rules.ts";
+import { programName, shellView } from "./shell-scan.ts";
+import { FILE_WRITERS } from "./tools/changed.ts";
 import { exitPlanMode } from "./tools/index.ts";
 import type { Tool } from "./types.ts";
 
@@ -14,7 +15,7 @@ export function toolsFor(mode: PermMode, all: readonly Tool[], situation: { smal
 }
 
 /** Tools that change files: what the "edits" mode lets through. */
-const EDITS = new Set(["Write", "Edit", "NotebookEdit"]);
+const EDITS = FILE_WRITERS;
 /** Plain file commands the "edits" mode lets through, inside the project. */
 const FILE_COMMANDS = /^(mkdir|touch|mv|cp|rmdir|ln)$/;
 
@@ -26,7 +27,7 @@ export function needsApproval(mode: PermMode, tool: Pick<Tool, "name" | "readOnl
   if (tool.readOnly || mode === "auto" || mode === "bypass" || mode === "plan") return false;
   if (tool.name === "Bash" && typeof args.command === "string") {
     if (onlyLooks(args.command)) return false;
-    if (mode === "edits" && splitCommand(args.command).every((p) => FILE_COMMANDS.test(p.trim().split(/\s+/)[0] ?? ""))) return false;
+    if (mode === "edits") { const view = shellView(args.command); if (view.cmds.length && !view.found.length && view.cmds.every((c) => !c.sudo && FILE_COMMANDS.test(programName(c.words[0] ?? "")))) return false; }
     return true;
   }
   if (mode === "edits" && EDITS.has(tool.name)) return false;

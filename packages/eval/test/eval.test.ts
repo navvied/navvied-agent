@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { asksAboutProgram } from "../../engine/src/prompt.ts";
-import { applySolution, check, findBash, shell, loadTask, loadTasks, prepare, protectedHashes, repoFiles, runTask, solutionFiles, summarize, validateTask, type Task, type TaskResult } from "../src/index.ts";
+import { applySolution, check, findBash, shell, loadTask, loadTasks, planKept, prepare, protectedHashes, repoFiles, runTask, solutionFiles, summarize, validateTask, type Task, type TaskResult } from "../src/index.ts";
 import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const TASKS = join(import.meta.dir, "../tasks");
@@ -19,7 +19,7 @@ describe("the task set", () => {
     expect(new Set(tasks.map((t) => t.id)).size).toBe(tasks.length);
     for (const t of tasks) {
       expect(t.prompt.length).toBeGreaterThan(20);
-      if (t.kind === "terminal" || t.kind === "web") continue;
+      if (t.kind === "terminal" || t.kind === "web" || t.kind === "agent") continue;
       expect(t.check).toBe("bun test");
       expect(t.protect).toEqual(["tests/**"]);
       expect(Object.keys(repoFiles(t)).some((f) => f.startsWith("tests/"))).toBe(true);
@@ -63,7 +63,7 @@ describe("the task set", () => {
 
   test("every task says what kind of work it is, how hard, and in which language", () => {
     for (const t of tasks) {
-      expect(["fix", "feature", "refactor", "tests", "docs", "terminal", "web"]).toContain(t.kind);
+      expect(["fix", "feature", "refactor", "tests", "docs", "terminal", "web", "agent"]).toContain(t.kind);
       expect([1, 2, 3]).toContain(t.level);
       expect(["ts", "py", "sh", "c", "none"]).toContain(t.lang);
     }
@@ -167,6 +167,8 @@ describe("running a task end to end", () => {
   let behaviour: Behaviour = "solve";
   let command = "true";
   let solution: Record<string, string> = {};
+  /** The files the task starts with. */
+  let existing = new Set<string>();
   let server: ReturnType<typeof Bun.serve>;
   const enc = new TextEncoder();
 
@@ -174,6 +176,7 @@ describe("running a task end to end", () => {
     const sse = (chunks: unknown[]) => new Response(new ReadableStream({ start(c) { for (const x of chunks) c.enqueue(enc.encode(`data: ${JSON.stringify(x)}\n\n`)); c.enqueue(enc.encode("data: [DONE]\n\n")); c.close(); } }), { headers: { "content-type": "text/event-stream" } });
     const usage = { choices: [], usage: { prompt_tokens: 200, completion_tokens: 12 } };
     const write = (file: string, content: string) => sse([{ choices: [{ delta: { tool_calls: [{ index: 0, id: `c_${Math.random().toString(36).slice(2)}`, type: "function", function: { name: "Write", arguments: JSON.stringify({ file_path: file, content }) } }] } }] }, { choices: [{ delta: {}, finish_reason: "tool_calls" }] }, usage]);
+    const call = (name: string, args: object) => sse([{ choices: [{ delta: { tool_calls: [{ index: 0, id: `c_${Math.random().toString(36).slice(2)}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] }, { choices: [{ delta: {}, finish_reason: "tool_calls" }] }, usage]);
     const say = (t: string) => sse([{ choices: [{ delta: { content: t } }] }, { choices: [{ delta: {}, finish_reason: "stop" }] }, usage]);
     server = Bun.serve({
       port: 0,
@@ -185,10 +188,11 @@ describe("running a task end to end", () => {
         const written = body.messages.filter((m: any) => m.role === "tool").length;
         if (behaviour === "lazy") return say("I looked at it and everything seems fine.");
         if (behaviour === "shell") return written === 0 ? sse([{ choices: [{ delta: { tool_calls: [{ index: 0, id: "c_sh", type: "function", function: { name: "Bash", arguments: JSON.stringify({ command }) } }] } }] }, { choices: [{ delta: {}, finish_reason: "tool_calls" }] }, usage]) : say("done");
-        if (behaviour === "tamper") return written === 0 ? write("tests/range.test.ts", 'import { test } from "bun:test";\ntest("ok", () => {});\n') : say("done");
-        const files = Object.entries(solution);
-        const next = files[written];
-        return next ? write(next[0], next[1]) : say("fixed");
+        // A model reads a file before it replaces it, as the tools require.
+        if (behaviour === "tamper") return written === 0 ? call("Read", { file_path: "tests/range.test.ts" }) : written === 1 ? write("tests/range.test.ts", 'import { test } from "bun:test";\ntest("ok", () => {});\n') : say("done");
+        const steps = Object.entries(solution).flatMap(([file, content]) => [...(existing.has(file) ? [() => call("Read", { file_path: file })] : []), () => write(file, content)]);
+        const next = steps[written];
+        return next ? next() : say("fixed");
       },
     });
   });
@@ -196,15 +200,15 @@ describe("running a task end to end", () => {
 
   const env = () => ({ HOME: state, XDG_STATE_HOME: state, XDG_CONFIG_HOME: state, NAVVIED_BASE_URL: `http://127.0.0.1:${server.port}/v1`, NAVVIED_MODEL: "scripted", NAVVIED_WINDOW: "100000", NAVVIED_RETRIES: "0" });
   const run = (task: Task) => runTask(task, { command: ["bun", CLI], env: env() });
-  const pickMade = (task: Task) => { solution = {}; return task; };
-  const pick = (id: string) => { const t = loadTasks(TASKS, [id])[0]!; solution = solutionFiles(t); return t; };
+  const pickMade = (task: Task) => { solution = {}; existing = new Set(); return task; };
+  const pick = (id: string) => { const t = loadTasks(TASKS, [id])[0]!; solution = solutionFiles(t); existing = new Set(Object.keys(repoFiles(t))); return t; };
 
   test("a model that writes the right files solves the task, and the metrics reflect the work", async () => {
     behaviour = "solve";
     const r = await run(pick("fix-off-by-one"));
-    expect(r).toMatchObject({ task: "fix-off-by-one", passed: true, reason: "solved", exitCode: 0, toolCalls: 1 });
-    expect(r.modelCalls).toBe(2);
-    expect(r.outTokens).toBe(24);
+    expect(r).toMatchObject({ task: "fix-off-by-one", passed: true, reason: "solved", exitCode: 0, toolCalls: 2 });
+    expect(r.modelCalls).toBe(3);
+    expect(r.outTokens).toBe(36);
     expect(r.peakContext).toBeGreaterThan(0);
     expect(r.ms).toBeGreaterThan(0);
   });
@@ -212,7 +216,7 @@ describe("running a task end to end", () => {
   test("a multi-file task is solved the same way", async () => {
     behaviour = "solve";
     const r = await run(pick("rename-across-files"));
-    expect(r).toMatchObject({ passed: true, toolCalls: 3, modelCalls: 4 });
+    expect(r).toMatchObject({ passed: true, toolCalls: 6, modelCalls: 7 });
   });
 
   test("a model that changes nothing fails the check", async () => {
@@ -338,5 +342,17 @@ describe("the checks of the offline web tasks", () => {
     expect(verdict("private-hop", { "ANSWER.txt": "the private thing\nREFUSED\nREFUSED\n" })).toBe(false);
     expect(verdict("refused-search", { "ANSWER.txt": "blocked by a challenge", "searches.log": "a\n" })).toBe(true);
     expect(verdict("refused-search", { "ANSWER.txt": "blocked by a challenge", "searches.log": "a\nb\nc\nd\n" })).toBe(false);
+  });
+});
+
+describe("the task list of a run", () => {
+  const list = (...s: string[]) => s.map((status, i) => ({ title: `t${i}`, status }));
+  test("it is kept when there is a list, one item at a time is in progress, and the last list is all done", () => {
+    expect(planKept([list("in_progress", "pending"), list("completed", "in_progress"), list("completed", "completed")])).toBeUndefined();
+  });
+  test("it is not when there is no list, two items run at once, or work is left at the end", () => {
+    expect(planKept([])).toBe("no task list was kept");
+    expect(planKept([list("in_progress", "in_progress"), list("completed", "completed")])).toBe("two items were in progress at once");
+    expect(planKept([list("completed", "in_progress")])).toBe("the last list still has unfinished items");
   });
 });

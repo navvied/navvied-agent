@@ -1,0 +1,18 @@
+{
+  "id": "read-picture-label",
+  "title": "Read the label of a picture",
+  "kind": "terminal",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "base64"
+  ],
+  "prompt": "chart.png is a picture with a label on it. Write the text of the label into answer.txt.",
+  "check": "grep -q 'revenue 42' answer.txt",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 600,
+  "setup": "echo 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAHXRFWHRDb21tZW50AGJhciBsYWJlbDogcmV2ZW51ZSA0MkIjTQUAAAAMSURBVHicY/jPwAAAAwEBAMn+ku8AAAAASUVORK5CYII=' | base64 -d > chart.png"
+}

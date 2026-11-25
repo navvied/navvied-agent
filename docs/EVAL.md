@@ -16,11 +16,12 @@ a local model, or an external agent program, and the results sit side by side.
 
 A directory under `packages/eval/tasks/<id>/`:
 
-* `task.json` — `id`, `title`, `kind` (`fix`, `feature`, `refactor`, `tests`, `docs`, `terminal`), `level` (1 easy, 2 medium,
+* `task.json` — `id`, `title`, `kind` (`fix`, `feature`, `refactor`, `tests`, `docs`, `terminal`, `web`, `agent`: work done with the agent's own tools, such as asking, a task list and helpers), `level` (1 easy, 2 medium,
   3 hard), `lang` (`ts`, `py`, `sh`, `c`, `none`), `prompt` (exactly what the agent is told), `check` (a shell command; exit 0
   means solved), `protect` (globs the agent must not change, normally the tests), `maxSteps`, `timeoutSeconds`. Optional:
   `requires` (programs the task needs: a computer without one skips the task, it is never counted as failed), `setup` and
   `teardown` (shell commands run in the workspace before the agent and after the check), `slow` (takes minutes; run with `--slow`).
+  `answers` (what the person answers when the agent asks, in order; given to `navvied run` as `--answers`), `plan` (the run must keep a task list: at least one list, one item in progress at a time, the last all completed, else `task list not kept`) and `oracle` (what the scripted model does besides the solution: `ask` the questions it asks, `helpers` it gives research to with what each `says`, the `plan` it keeps). A solution file may hold `{{answer1}}` or `{{helper1}}`: `validate` fills them with the task's own values, the scripted model with what it was really told.
   `setup`, the agent and `check` all see `BENCH_SECRET`, a value made for each run, so an answer that holds it was made in that run.
 * `repo/` — the starting files. They are copied into a fresh git repository for every run.
 * `solution/` — a reference solution, overlaid on `repo/` to prove the task can be solved. For a task whose solution is actions

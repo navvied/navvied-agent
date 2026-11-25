@@ -1,40 +1,33 @@
 import type { AgentDef } from "../agents.ts";
 import type { Tool } from "../types.ts";
-import { clip, str } from "./util.ts";
+import { clip, outputBudget, str } from "./util.ts";
 
 export const AGENT_TOOL_NAME = "Agent";
 
-/** A helper that researches on its own and reports back, so a long search does not fill the conversation. */
-export const agent: Tool = {
-  name: AGENT_TOOL_NAME,
-  readOnly: true,
-  offeredWhen: ({ small, userText }) => !small && /\b(agent|helper|delegate|parallel|research|investigate|explore|survey|compare)\b/i.test(userText),
-  description: "Give a research task to a helper that reads and searches alone and answers with what it found. It changes nothing and does not see this conversation: describe the task fully.",
-  parameters: { type: "object", properties: { description: { type: "string" }, prompt: { type: "string" } }, required: ["prompt"] },
-  title: (a) => `Ask a helper: ${str(a.description) || str(a.prompt).slice(0, 80)}`,
-  async run(a, ctx) {
-    const prompt = str(a.prompt).trim();
-    if (!prompt) return "Error: the task is empty.";
-    if (!ctx.helper) return "Error: helpers are not available here.";
-    return clip(await ctx.helper({ description: str(a.description), prompt }, ctx.signal));
-  },
-};
+const BASE = "Give a research task to a helper that reads alone and reports what it found, with file paths. It does not see this conversation: describe the task fully. background: true returns at once; the answer arrives later.";
 
-/** The same tool when the person defined helpers of their own: the agent may name one, and sees what each is for. */
-export function agentTool(defs: readonly AgentDef[]): Tool {
-  if (!defs.length) return agent;
-  const list = defs.map((d) => `${d.name}: ${d.description}`).join("; ");
+/** The tool, with the helpers the person defined (when there are any) named in it. */
+export function agentTool(defs: readonly AgentDef[] = []): Tool {
+  const names = defs.map((d) => d.name);
+  const properties: Record<string, unknown> = { description: { type: "string" }, prompt: { type: "string" }, background: { type: "boolean" } };
+  if (defs.length) properties.agent = { type: "string", enum: names };
   return {
-    ...agent,
-    description: `${agent.description} Helpers defined by the user (name one in "agent" when its description fits the task): ${list}.`,
-    parameters: { type: "object", properties: { description: { type: "string", description: "a few words saying what it is for" }, prompt: { type: "string", description: "the full task" }, agent: { type: "string", enum: defs.map((d) => d.name), description: "the helper to use; leave out for a general research helper" } }, required: ["prompt"] },
+    name: AGENT_TOOL_NAME,
+    readOnly: true,
+    /** A model with room is offered it always (the text is short); a small one only when the person names it. */
+    offeredWhen: ({ small, userText }) => !small || /\bagent\b/i.test(userText),
+    description: defs.length ? `${BASE} Helpers defined by the user (name one in "agent" when its description fits the task): ${defs.map((d) => `${d.name}: ${d.description}`).join("; ")}.` : BASE,
+    parameters: { type: "object", properties, required: ["prompt"] },
+    title: (a) => `Ask a helper: ${str(a.description) || str(a.prompt).slice(0, 80)}`,
     async run(a, ctx) {
       const prompt = str(a.prompt).trim();
-      if (!prompt) return "Error: the task is empty.";
+      if (!prompt) return 'Error: the task is empty: {"prompt": "Find where the retry logic lives and list the files"}';
       if (!ctx.helper) return "Error: helpers are not available here.";
       const chosen = str(a.agent).trim();
-      if (chosen && !defs.some((d) => d.name === chosen)) return `Error: there is no helper "${chosen}". Use one of: ${defs.map((d) => d.name).join(", ")}.`;
-      return clip(await ctx.helper({ description: str(a.description), prompt, ...(chosen ? { agent: chosen } : {}) }, ctx.signal));
+      if (chosen && !names.includes(chosen)) return `Error: there is no helper "${chosen}". Use one of: ${names.join(", ") || "none defined"}.`;
+      return clip(await ctx.helper({ description: str(a.description), prompt, ...(chosen ? { agent: chosen } : {}), ...(a.background === true ? { background: true } : {}) }, ctx.signal), outputBudget(ctx.window));
     },
   };
 }
+
+export const agent: Tool = agentTool();

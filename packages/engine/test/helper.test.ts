@@ -53,15 +53,13 @@ describe("a helper", () => {
   test("it is offered to a capable model but not to a small one, and an empty task is refused", async () => {
     const big = rig(() => ({ text: "x" }));
     await big.turn(prompt("hi"));
-    expect(big.provider.requests[0]!.tools.map((t) => t.name)).not.toContain("Agent");
-    await big.turn(prompt("investigate where the slowness comes from"));
-    expect(big.provider.requests[1]!.tools.map((t) => t.name)).toContain("Agent");
+    expect(big.provider.requests[0]!.tools.map((t) => t.name)).toContain("Agent");
     const small = rig(() => ({ text: "x" }), { window: 8_000 });
     await small.turn(prompt("hi"));
     expect(small.provider.requests[0]!.tools.map((t) => t.name)).not.toContain("Agent");
     const refused = rig((req) => (isMain(req) && req.messages.at(-1)?.role !== "tool" ? { calls: [{ name: "Agent", args: { prompt: "  " } }] } : { text: "ok" }));
     await refused.turn(prompt("go and research it"));
-    expect(refused.of("tool").find((e) => e.name === "Agent" && e.status === "error")!.output).toBe("Error: the task is empty.");
+    expect(refused.of("tool").find((e) => e.name === "Agent" && e.status === "error")!.output).toMatch(/^Error: the task is empty/);
     for (const x of [big, small, refused]) x.cleanup();
   });
 

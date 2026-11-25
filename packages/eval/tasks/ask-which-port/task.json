@@ -1,0 +1,29 @@
+{
+  "id": "ask-which-port",
+  "title": "Ask the person which port, then use the answer",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": [],
+  "prompt": "The service needs a config.json with its port, as {\"port\": 1234}. The port is the person's decision and is written nowhere in this project: ask them, then write config.json with the number they answer.",
+  "check": "grep -q '\"port\": *7431' config.json",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 120,
+  "answers": [
+    "7431"
+  ],
+  "oracle": {
+    "ask": [
+      {
+        "question": "Which port should the service listen on?",
+        "choices": [
+          "80",
+          "8080"
+        ]
+      }
+    ]
+  }
+}

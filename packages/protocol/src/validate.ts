@@ -123,6 +123,16 @@ function validateOne(raw: unknown): Result<Command> {
       if (!isId(raw.id) || !isId(raw.optionId)) return fail("approve needs id and optionId");
       if (raw.input !== undefined && (typeof raw.input !== "string" || raw.input.length > 20_000)) return fail("approve.input must be text of at most 20000 characters");
       return ok({ cmd: "approve", id: raw.id, optionId: raw.optionId, ...(typeof raw.input === "string" ? { input: raw.input } : {}) });
+    case "answer": {
+      if (!isId(raw.id)) return fail("answer needs an id");
+      if (!Array.isArray(raw.answers) || raw.answers.length > 4) return fail("answer.answers must be a list of at most 4 lists of text");
+      const answers: string[][] = [];
+      for (const a of raw.answers) {
+        if (!Array.isArray(a) || a.length > 8 || a.some((x) => typeof x !== "string" || x.length > 20_000)) return fail("each answer must be a list of at most 8 texts of at most 20000 characters");
+        answers.push(a as string[]);
+      }
+      return ok({ cmd: "answer", id: raw.id, answers });
+    }
     case "load":
       if (!isId(raw.id)) return fail("load needs an id");
       return ok({ cmd: "load", id: raw.id });
@@ -262,6 +272,17 @@ function validateOne(raw: unknown): Result<Command> {
       if (!isId(raw.id)) return fail("plugin.toggle needs an id");
       if (typeof raw.enabled !== "boolean") return fail("plugin.toggle.enabled must be true or false");
       return ok({ cmd: "plugin.toggle", id: raw.id, enabled: raw.enabled });
+    case "memory.pending":
+      if (raw.action !== undefined && raw.action !== "accept" && raw.action !== "reject") return fail("memory.pending.action must be accept or reject");
+      if (raw.action !== undefined && !isId(raw.id)) return fail("memory.pending needs an id to accept or reject");
+      return ok({ cmd: "memory.pending", ...(raw.action ? { action: raw.action } : {}), ...(typeof raw.id === "string" ? { id: raw.id } : {}) });
+    case "skill.review":
+      if (raw.id !== undefined && !isId(raw.id)) return fail("skill.review.id must be an id");
+      if (raw.id !== undefined && typeof raw.accept !== "boolean") return fail("skill.review.accept must be true or false");
+      return ok({ cmd: "skill.review", ...(typeof raw.id === "string" ? { id: raw.id, accept: raw.accept as boolean } : {}) });
+    case "skill.rollback":
+      if (raw.id !== undefined && !isId(raw.id)) return fail("skill.rollback.id must be an id");
+      return ok({ cmd: "skill.rollback", ...(typeof raw.id === "string" ? { id: raw.id } : {}) });
     case "schedule.add": case "schedule.update": {
       const add = raw.cmd === "schedule.add";
       const out: Record<string, unknown> = { cmd: raw.cmd };

@@ -141,7 +141,7 @@ export class Presenter {
       case "text": return this.#text(e.text);
       case "thought": this.#thought(e.text); return;
       case "tool": return this.#tool(e);
-      case "approval": this.#settle(); return;
+      case "approval": case "question": this.#settle(); return;
       // A picker takes these over from the piped renderer's numbered lines; without one (a dumb terminal), that plain listing is still what is shown.
       case "checkpoints": case "restore": this.#settle(); if (!this.io.choose) this.fallback.handle(e); return;
       case "phase": this.#label = e.name === "compacting" ? "Compacting context" : ""; this.#renderLive(); return;
@@ -379,7 +379,7 @@ export class Presenter {
   #count(name: string): void {
     if (name === "Bash" || name === "WebFetch" || name === "WebSearch" || name === "Browser") { this.#counts.commands++; this.#group.commands++; }
     else if (name === "Read" || name === "Glob" || name === "Grep") { this.#counts.reads++; this.#group.reads++; }
-    else if (name === "Edit" || name === "Write") { this.#counts.edits++; this.#group.edits++; }
+    else if (name === "Edit" || name === "Write" || name === "MultiEdit" || name === "NotebookEdit" || name === "apply_patch") { this.#counts.edits++; this.#group.edits++; }
   }
 
   #tool(e: Extract<EngineEvent, { ev: "tool" }>): void {

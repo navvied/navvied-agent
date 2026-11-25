@@ -28,6 +28,9 @@ describe("a working folder that is spelt through a link (a temporary folder on m
   });
 });
 
+/** What Grep said, without the line that tells the search was made here instead of by ripgrep. */
+const search = async (args: Record<string, unknown>, c: ReturnType<typeof ctx>): Promise<string> => (await tool("Grep").run(args, c)).replace(/\n\[searched without ripgrep:[^\]]*\]$/, "");
+
 describe("the search program's output", () => {
   const log = (n: number): string => Array.from({ length: n }, (_, i) => `2026-11-19T10:00:00Z INFO req-${i.toString(16).padStart(12, "0")} /api/items 500 ${i}ms`).join("\n");
 
@@ -36,19 +39,19 @@ describe("the search program's output", () => {
     const deep = join(dir, ...Array.from({ length: 4 }, (_, i) => `a-folder-with-a-rather-long-name-to-fill-the-path-${i}-${"x".repeat(10)}`));
     mkdirSync(deep, { recursive: true });
     writeFileSync(join(deep, "app.log"), log(3000));
-    const out = await tool("Grep").run({ pattern: " 500 ", path: deep }, ctx(dir));
+    const out = await search({ pattern: " 500 ", path: deep }, ctx(dir));
     const lines = out.split("\n");
     expect(lines).toHaveLength(101);
     expect(lines[0]).toStartWith("app.log:1:");
-    expect(lines.at(-1)).toBe("[2900 more matches were not shown: narrow the pattern, add a glob, or search one file]");
+    expect(lines.at(-1)).toBe("[2900 more matches were not shown: narrow the pattern, add a glob, search one file, or continue with offset 100]");
     // From the project, the path is relative to what was searched, as before.
-    expect((await tool("Grep").run({ pattern: "req-000000000bb7", path: dir }, ctx(dir))).split("\n")[0]).toMatch(/^a-folder-.*\/app\.log:\d+:/);
+    expect((await search({ pattern: "req-000000000bb7", path: dir }, ctx(dir))).split("\n")[0]).toMatch(/^a-folder-.*\/app\.log:\d+:/);
   });
 
   test("a single file is named by its own name", async () => {
     const dir = temp();
     writeFileSync(join(dir, "one.txt"), "alpha\nbeta needle\n");
-    expect(await tool("Grep").run({ pattern: "needle", path: join(dir, "one.txt") }, ctx(dir))).toBe("one.txt:2:beta needle");
+    expect(await search({ pattern: "needle", path: join(dir, "one.txt") }, ctx(dir))).toBe("one.txt:2:beta needle");
   });
 
   test.skipIf(!unix)("a line the program prints about something else is not taken for a match, and does not change how the rest is shown; a pattern the program refuses is an error", async () => {
@@ -56,16 +59,17 @@ describe("the search program's output", () => {
     writeFileSync(join(dir, "app.log"), log(300));
     // A search program that complains on its error output first, as some do about a file it may not read.
     const real = Bun.which("grep")!;
-    writeFileSync(join(bin, "rg"), `#!/bin/sh\necho "rg: some/other/file: Permission denied (os error 13)" >&2\nexec ${real} -rnHE --exclude-dir=.git "$(printf %s "$6")" "$7" 2>&1\n`);
+    // It takes the pattern after -e and the place searched from the end of what it is told, whatever else it is told.
+    writeFileSync(join(bin, "rg"), `#!/bin/sh\necho "rg: some/other/file: Permission denied (os error 13)" >&2\nfor last; do :; done\nwhile [ $# -gt 0 ]; do [ "$1" = "-e" ] && pattern=$2; shift; done\nexec ${real} -rnHE --exclude-dir=.git -e "$pattern" "$last" 2>&1\n`);
     chmodSync(join(bin, "rg"), 0o755);
     const before = process.env.PATH;
     process.env.PATH = `${bin}:${before}`;
     try {
-      const out = await tool("Grep").run({ pattern: " 500 ", path: dir }, ctx(dir));
+      const out = await search({ pattern: " 500 ", path: dir }, ctx(dir));
       const lines = out.split("\n");
       expect(lines).toHaveLength(101);
       expect(lines.every((l, i) => i === 100 || /^app\.log:\d+:/.test(l))).toBe(true);
-      expect(lines.at(-1)).toBe("[200 more matches were not shown: narrow the pattern, add a glob, or search one file]");
+      expect(lines.at(-1)).toBe("[200 more matches were not shown: narrow the pattern, add a glob, search one file, or continue with offset 100]");
     } finally { process.env.PATH = before; }
     const refused = await tool("Grep").run({ pattern: "(unclosed", path: dir }, ctx(dir));
     expect(refused).toStartWith("Error: ");

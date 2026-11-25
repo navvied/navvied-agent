@@ -1,0 +1,23 @@
+{
+  "id": "web-latin1-page",
+  "title": "A page in Latin-1 that names its encoding only inside itself",
+  "kind": "web",
+  "level": 3,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun"
+  ],
+  "prompt": "Read the page /menu on the docs server (its address is in docs-url.txt). Write the name of the dessert of the day and its order code into ANSWER.txt, exactly as the page spells them, on one line.",
+  "check": "bun \"$BENCH_FIXTURES/web-check.ts\" latin1-page",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 600,
+  "setup": "bun \"$BENCH_FIXTURES/start-web.ts\" && echo \"http://127.0.0.1:$(cat .bench-port)\" > docs-url.txt",
+  "teardown": "bun \"$BENCH_FIXTURES/stop-web.ts\"",
+  "env": {
+    "NAVVIED_ALLOW_PRIVATE_NETWORK": "1"
+  }
+}

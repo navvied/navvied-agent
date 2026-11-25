@@ -25,7 +25,7 @@ export function describeStep(name: string, input: unknown, cwd: string): Step {
   switch (name) {
     case "Read": return { running: `Reading ${file}`, done: `Read ${file}` };
     case "Write": return { running: `Writing ${file}`, done: `Wrote ${file}` };
-    case "Edit": return { running: `Changing ${file}`, done: `Changed ${file}` };
+    case "Edit": case "MultiEdit": case "NotebookEdit": return { running: `Changing ${file}`, done: `Changed ${file}` };
     case "Bash": {
       // A description the agent wrote ("Run the tests") is already a phrase of its own; only a bare command needs a verb.
       const said = oneLine(str(a.description), 70);
@@ -64,7 +64,7 @@ export function describeFailure(name: string, input: unknown, cwd: string): stri
   switch (name) {
     case "Read": return `Could not read ${file}`;
     case "Write": return `Could not write ${file}`;
-    case "Edit": return `Could not change ${file}`;
+    case "Edit": case "MultiEdit": case "NotebookEdit": return `Could not change ${file}`;
     case "Bash": return str(a.description) ? `${oneLine(str(a.description), 70)} failed` : `The command failed: ${oneLine(str(a.command), 70)}`;
     case "Glob": case "Grep": return "The search did not work";
     case "WebFetch": case "WebSearch": return "Could not reach the web";

@@ -1,0 +1,8 @@
+[
+  {
+    "tool": "apply_patch",
+    "args": {
+      "patch": "*** Begin Patch\n*** Update File: src/utils.ts\n*** Move to: src/helpers.ts\n@@\n-export const double = (x: number): number => x + x + 1;\n+export const double = (x: number): number => x * 2;\n export const triple = (x: number): number => x * 3;\n*** Add File: src/index.ts\n+export * from \"./helpers.ts\";\n*** Delete File: src/legacy.ts\n*** End Patch"
+    }
+  }
+]

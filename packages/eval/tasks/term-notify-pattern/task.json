@@ -1,0 +1,19 @@
+{
+  "id": "term-notify-pattern",
+  "title": "Start a service, be told when it prints its port, then stop it",
+  "kind": "terminal",
+  "level": 2,
+  "lang": "sh",
+  "requires": [
+    "python3",
+    "bash"
+  ],
+  "prompt": "Start service.py so that it keeps running in the background. It prints a line that says which port it listens on. As soon as that line has appeared, write the port number into port.txt, alone on one line, and then stop the service.",
+  "check": "python3 -c \"import hashlib,os,sys\nwant = str(20000 + int(hashlib.sha1((os.environ['BENCH_SECRET'] + 'port').encode()).hexdigest()[:6], 16) % 1000)\nassert open('port.txt').read().strip() == want\ntry:\n    os.kill(int(open('service.pid').read()), 0)\n    sys.exit(1)\nexcept OSError:\n    pass\"",
+  "protect": [
+    "service.py",
+    "README.md"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 600
+}

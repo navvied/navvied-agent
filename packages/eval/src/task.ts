@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
-export const KINDS = ["fix", "feature", "refactor", "tests", "docs", "terminal", "web"] as const;
+export const KINDS = ["fix", "feature", "refactor", "tests", "docs", "terminal", "web", "agent"] as const;
 export const LANGS = ["ts", "py", "sh", "c", "none"] as const;
 
 export interface Task {
@@ -21,14 +21,25 @@ export interface Task {
   /** Takes minutes: run only when asked for. */
   slow: boolean;
   prompt: string;
+  /** What the person answers when the agent asks a question, in the order the questions come (given to the agent as `--answers`). */
+  answers?: string[];
+  /** The task is done by keeping a task list: every list the agent sent has one item in progress at most, and the last has all of them completed. */
+  plan?: boolean;
+  /** What the scripted model does besides the solution's actions: the questions it asks, the helpers it hands research to (`says` is what the helper answers), the task list it keeps. A real model decides these itself. */
+  oracle?: { ask?: { question: string; choices?: string[] }[]; helpers?: { prompt: string; says: string }[]; plan?: string[] };
   /** Shell command run in the finished workspace; exit code 0 means the task is solved. */
   check: string;
   /** Files (globs) the agent must not change, such as the tests. */
   protect: string[];
   maxSteps: number;
   timeoutSeconds: number;
+  /** The calls the scripted `oracle` model makes, in place of laying down the solution's files: for a task that is about how a tool behaves. */
+  script?: ScriptedCall[];
   dir: string;
 }
+
+/** One call of the scripted model. In a text argument `${result:RE}` is the first group of RE found in the last tool result, and `${picture}` is the text of the last picture the model was shown. */
+export interface ScriptedCall { tool: string; args: Record<string, unknown> }
 
 const isString = (v: unknown): v is string => typeof v === "string" && v.length > 0;
 
@@ -40,13 +51,19 @@ export function loadTask(dir: string): Task {
   const lang = (LANGS as readonly unknown[]).includes(raw.lang) ? (raw.lang as Task["lang"]) : undefined;
   if (!kind || !lang || (raw.level !== 1 && raw.level !== 2 && raw.level !== 3)) throw new Error(`${dir}/task.json: kind (${KINDS.join(", ")}), level (1, 2 or 3) and lang (${LANGS.join(", ")}) are required`);
   const protect = Array.isArray(raw.protect) ? raw.protect.filter(isString) : [];
+  const script = existsSync(join(dir, "oracle.json")) ? (JSON.parse(readFileSync(join(dir, "oracle.json"), "utf8")) as ScriptedCall[]) : undefined;
+  if (script && !(Array.isArray(script) && script.every((c) => isString(c.tool) && typeof c.args === "object" && c.args !== null))) throw new Error(`${dir}/oracle.json: a list of {"tool", "args"} is required`);
   return {
     id: raw.id, title: raw.title, kind, level: raw.level, lang, prompt: raw.prompt, check: raw.check, protect, dir,
     requires: Array.isArray(raw.requires) ? raw.requires.filter(isString) : [],
     ...(isString(raw.setup) ? { setup: raw.setup } : {}),
     ...(isString(raw.teardown) ? { teardown: raw.teardown } : {}),
     ...(raw.env && typeof raw.env === "object" && !Array.isArray(raw.env) ? { env: Object.fromEntries(Object.entries(raw.env as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string")) } : {}),
+    ...(script ? { script } : {}),
     slow: raw.slow === true,
+    ...(Array.isArray(raw.answers) ? { answers: raw.answers.filter(isString) } : {}),
+    ...(raw.plan === true ? { plan: true } : {}),
+    ...(raw.oracle && typeof raw.oracle === "object" ? { oracle: raw.oracle as NonNullable<Task["oracle"]> } : {}),
     maxSteps: typeof raw.maxSteps === "number" ? raw.maxSteps : 30,
     timeoutSeconds: typeof raw.timeoutSeconds === "number" ? raw.timeoutSeconds : 300,
   };
@@ -74,4 +91,12 @@ export function filesOf(dir: string): Record<string, string> {
 }
 
 export const repoFiles = (task: Task): Record<string, string> => filesOf(join(task.dir, "repo"));
-export const solutionFiles = (task: Task): Record<string, string> => filesOf(join(task.dir, "solution"));
+/**
+ * The solution's files. A file may hold `{{answer1}}`, `{{answer2}}` (what the person answered) and `{{helper1}}`, `{{helper2}}` (what a
+ * helper reported): the validator fills them with the task's own values, the scripted model with what it was really told.
+ */
+export function solutionFiles(task: Task, values: { answers?: readonly string[]; helpers?: readonly string[] } = {}): Record<string, string> {
+  const answers = values.answers ?? task.answers ?? [], helpers = values.helpers ?? task.oracle?.helpers?.map((h) => h.says) ?? [];
+  const fill = (text: string): string => text.replace(/\{\{(answer|helper)(\d)\}\}/g, (_, kind: string, n: string) => (kind === "answer" ? answers : helpers)[Number(n) - 1] ?? "(none)");
+  return Object.fromEntries(Object.entries(filesOf(join(task.dir, "solution"))).map(([name, text]) => [name, fill(text)]));
+}

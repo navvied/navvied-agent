@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { loadSkills, projectDirs, type HookConfig, type SkillInfo } from "@navvied/engine";
 import type { ConfigFile } from "./config.ts";
+import { SKILL_FOLDERS } from "./presets.ts";
 
 /** One thing that extends the agent, as a list shows it. Adding or removing one is done on the computer (files, configuration), never from a page. */
 export interface PluginInfo {
@@ -37,8 +38,37 @@ export const hookId = (event: string, index: number): string => `hook:${event}:$
 export const skillId = (name: string): string => `skill:${name}`;
 export const mcpId = (name: string): string => `mcp:${name}`;
 
-/** The skills in effect, less the ones switched off. */
-export const activeSkills = (state: PluginState, dirs: Parameters<typeof loadSkills>[0]): SkillInfo[] => { const off = state.disabled(); return loadSkills(dirs).filter((s) => !off.has(skillId(s.name))); };
+/** Every folder a project's skills may be in, from the outermost folder in, so an inner skill replaces an outer one of the same name. */
+export const projectSkillDirs = (cwd: string): string[] => projectDirs(cwd).flatMap((d) => SKILL_FOLDERS.map((f) => join(d, ...f.split("/"))));
+
+/**
+ * Which skills that come with a project the person has accepted. A skill is accepted as it is: the fingerprint of its text is
+ * what is kept, so a changed text asks again. With `confirm` off every project skill counts as accepted (and nothing is asked).
+ */
+export class SkillTrust {
+  constructor(private readonly file: string, readonly confirm: boolean) {}
+  #read(): { allowed: string[]; denied: string[] } {
+    try { const raw = JSON.parse(readFileSync(this.file, "utf8")) as { allowed?: unknown; denied?: unknown }; const list = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []); return { allowed: list(raw.allowed), denied: list(raw.denied) }; } catch { return { allowed: [], denied: [] }; }
+  }
+  readonly key = (s: Pick<SkillInfo, "name" | "hash">): string => `${s.name}:${s.hash}`;
+  accepted = (s: SkillInfo): boolean => !this.confirm || this.#read().allowed.includes(this.key(s));
+  /** Skills waiting for an answer: not accepted and not refused. */
+  waiting(skills: readonly SkillInfo[]): SkillInfo[] { const { denied } = this.#read(); return skills.filter((s) => s.source === "project" && !this.accepted(s) && !denied.includes(this.key(s))); }
+  answer(s: Pick<SkillInfo, "name" | "hash">, allow: boolean): void {
+    const now = this.#read(), k = this.key(s);
+    const next = { allowed: now.allowed.filter((x) => x !== k), denied: now.denied.filter((x) => x !== k) };
+    (allow ? next.allowed : next.denied).push(k);
+    try {
+      mkdirSync(dirname(this.file), { recursive: true });
+      const tmp = `${this.file}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ version: 1, allowed: next.allowed.slice(-500), denied: next.denied.slice(-500) }));
+      renameSync(tmp, this.file);
+    } catch { /* a full disk must not stop the work */ }
+  }
+}
+
+/** The skills in effect, less the ones switched off (and, when the person asked to be asked, the project skills not yet accepted). */
+export const activeSkills = (state: PluginState, dirs: Parameters<typeof loadSkills>[0], trust?: SkillTrust): SkillInfo[] => { const off = state.disabled(); return loadSkills({ ...dirs, ...(trust ? { trusted: trust.accepted } : {}) }).filter((s) => !off.has(skillId(s.name))); };
 
 /** Hooks less the ones switched off, keeping the others in their order. */
 export function activeHooks(state: PluginState, hooks: HookConfig | undefined): HookConfig | undefined {
@@ -56,7 +86,7 @@ export function activeHooks(state: PluginState, hooks: HookConfig | undefined): 
 export function listPlugins(state: PluginState, file: ConfigFile | null, userSkills: string, cwd: string): PluginInfo[] {
   const off = state.disabled();
   const out: PluginInfo[] = [];
-  for (const s of loadSkills({ user: userSkills, project: projectDirs(cwd).map((d) => join(d, ".navvied", "skills")) })) {
+  for (const s of loadSkills({ user: userSkills, project: projectSkillDirs(cwd) })) {
     out.push({ id: skillId(s.name), kind: "skill", name: s.name, description: s.description, enabled: !off.has(skillId(s.name)), source: s.source });
   }
   for (const [name, e] of Object.entries(file?.mcp ?? {})) {

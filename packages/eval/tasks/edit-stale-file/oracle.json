@@ -1,0 +1,36 @@
+[
+  {
+    "tool": "Read",
+    "args": {
+      "file_path": "src/config.ts"
+    }
+  },
+  {
+    "tool": "Bash",
+    "args": {
+      "command": "sed -i 's/timeoutMs = 1000/timeoutMs = 2000/' src/config.ts",
+      "description": "the other process changes the file"
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "src/config.ts",
+      "content": "export const retries = 5;\nexport const timeoutMs = 1000;\nexport const label = \"service\";\n"
+    }
+  },
+  {
+    "tool": "Read",
+    "args": {
+      "file_path": "src/config.ts"
+    }
+  },
+  {
+    "tool": "Edit",
+    "args": {
+      "file_path": "src/config.ts",
+      "old_string": "retries = 3",
+      "new_string": "retries = 5"
+    }
+  }
+]

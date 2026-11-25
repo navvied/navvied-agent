@@ -1,0 +1,17 @@
+{
+  "id": "patch-multi-file",
+  "title": "Change, move, add and delete files in one patch",
+  "kind": "refactor",
+  "level": 2,
+  "lang": "ts",
+  "requires": [
+    "bun"
+  ],
+  "prompt": "Fix double in src/utils.ts (it returns the wrong number), move that file to src/helpers.ts, add src/index.ts that re-exports everything from ./helpers, and delete src/legacy.ts. The tests import from src/index. Do not change the tests.",
+  "check": "bun test",
+  "protect": [
+    "tests/**"
+  ],
+  "maxSteps": 30,
+  "timeoutSeconds": 300
+}

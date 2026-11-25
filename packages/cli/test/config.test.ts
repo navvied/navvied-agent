@@ -9,6 +9,14 @@ const dir = mkdtempSync(join(tmpdir(), "navvied-cfg-"));
 afterAll(hook("config removes what it made", async () => { await removeTree(dir); }), HOOK_MS);
 const write = (name: string, body: unknown) => { const p = join(dir, name); writeFileSync(p, typeof body === "string" ? body : JSON.stringify(body)); return p; };
 
+describe("the switch for apply_patch", () => {
+  test("auto, on and off are read; anything else is refused with the file's name", () => {
+    for (const v of ["auto", "on", "off"] as const) { const r = loadConfig(write("patch.json", { models: {}, applyPatch: v }), {}); expect(r.ok && r.value?.applyPatch).toBe(v); }
+    const bad = loadConfig(write("patch-bad.json", { models: {}, applyPatch: true }), {});
+    expect(!bad.ok && bad.error).toContain('"applyPatch" must be "auto", "on" or "off"');
+  });
+});
+
 describe("where a hosted session reaches the web", () => {
   test("is read from the file, without a trailing slash", () => {
     const r = loadConfig(write("proxy.json", { models: {}, webProxy: { url: "http://127.0.0.1:4000/v1/web/", token: "t-1" } }), {});
@@ -21,6 +29,31 @@ describe("where a hosted session reaches the web", () => {
       const r = loadConfig(write("bad.json", { models: {}, webProxy: bad }), {});
       expect(r.ok).toBe(false);
       expect(!r.ok && r.error).toContain('"webProxy" needs a web address in "url" and a "token"');
+    }
+  });
+});
+
+describe("the variables a command may keep", () => {
+  test("terminal.env is a list of names, kept as written", () => {
+    const r = loadConfig(write("env.json", { models: {}, terminal: { env: ["GITHUB_TOKEN", "NPM_TOKEN"] } }), {});
+    expect(r.ok && r.value?.terminal?.env).toEqual(["GITHUB_TOKEN", "NPM_TOKEN"]);
+  });
+  test("anything that is not a list of variable names is refused with the file's name", () => {
+    for (const bad of ["GITHUB_TOKEN", [1], ["a b"], ["X=1"]]) {
+      const r = loadConfig(write("badenv.json", { models: {}, terminal: { env: bad } }), {});
+      expect(r.ok).toBe(false);
+      expect(!r.ok && r.error).toContain('"terminal.env" must be a list of variable names');
+    }
+  });
+});
+
+describe("what happens to skills the agent makes, and to skills that come with a project", () => {
+  test("approval and trust are read, and nothing else is accepted", () => {
+    const r = loadConfig(write("skills.json", { models: {}, skills: { approval: "ask", trust: "confirm" } }), {});
+    expect(r.ok && r.value?.skills).toEqual({ approval: "ask", trust: "confirm" });
+    for (const bad of [{ approval: "maybe" }, { trust: "always" }, "ask", null]) {
+      const e = loadConfig(write("skills-bad.json", { models: {}, skills: bad }), {});
+      expect(!e.ok && e.error).toContain('"skills" may have');
     }
   });
 });

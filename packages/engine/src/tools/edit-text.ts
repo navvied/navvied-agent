@@ -1,0 +1,86 @@
+/** One change to a text: the piece to replace, what goes there instead, and whether every place it occurs is meant. */
+export interface Change { from: string; to: string; all: boolean }
+export type Applied = { text: string; line: number; count: number; note?: string } | { error: string };
+
+/** Characters a model types plainly where a file has the typographic one (and the other way round); each maps to one character, so positions stay. */
+const PLAIN: Record<string, string> = { "“": '"', "”": '"', "„": '"', "‘": "'", "’": "'", "‚": "'", "–": "-", "—": "-", "−": "-", " ": " ", "‑": "-" };
+const plain = (s: string): string => s.replace(/[“”„‘’‚–—− ‑]/g, (c) => PLAIN[c]!);
+
+/** The line numbers of a copied `cat -n` gutter ("   12\t") when every line has one. */
+const GUTTER = /^ *\d+\t/;
+const withoutGutter = (s: string): string => { const lines = s.split("\n"); return lines.every((l) => GUTTER.test(l)) ? lines.map((l) => l.replace(GUTTER, "")).join("\n") : s; };
+
+const places = (text: string, piece: string): number[] => {
+  const at: number[] = [];
+  for (let i = text.indexOf(piece); i >= 0; i = text.indexOf(piece, i + piece.length)) at.push(i);
+  return at;
+};
+const lineOf = (text: string, index: number): number => text.slice(0, index).split("\n").length;
+
+interface Span { start: number; end: number; to: string }
+
+/** Where `from` is in `text`, trying exact text, then the same lines whatever their indentation, then the same text with plain quotes and dashes. */
+function find(text: string, c: Change): { spans: Span[]; note?: string } {
+  const exact = places(text, c.from);
+  if (exact.length) return { spans: exact.map((start) => ({ start, end: start + c.from.length, to: c.to })) };
+  const gutterless = withoutGutter(c.from);
+  if (gutterless !== c.from) { const r = find(text, { ...c, from: gutterless, to: withoutGutter(c.to) }); if (r.spans.length) return { ...r, note: "the line numbers at the start of the lines were left out" }; }
+  const lines = text.split("\n"), want = c.from.replace(/\n$/, "").split("\n").map((l) => l.trim());
+  if (want.some(Boolean)) {
+    const offsets: number[] = [];
+    let at = 0;
+    for (const l of lines) { offsets.push(at); at += l.length + 1; }
+    const spans: Span[] = [];
+    for (let i = 0; i + want.length <= lines.length; i++) {
+      if (!want.every((w, k) => lines[i + k]!.trim() === w)) continue;
+      const end = offsets[i + want.length - 1]! + lines[i + want.length - 1]!.length + (c.from.endsWith("\n") ? 1 : 0);
+      spans.push({ start: offsets[i]!, end, to: reindent(c, lines.slice(i, i + want.length)) });
+      i += want.length - 1;
+    }
+    if (spans.length) return { spans, note: "matched the lines ignoring differences in indentation and spaces at the ends of lines" };
+  }
+  const folded = places(plain(text), plain(c.from));
+  if (folded.length) return { spans: folded.map((start) => ({ start, end: start + c.from.length, to: c.to })), note: "matched with plain quotes and dashes where the file has typographic ones" };
+  return { spans: [] };
+}
+
+/** The new text, indented like the file: each indentation the model used for a line it copied is the file's indentation for that line, and a deeper one keeps its extra. */
+function reindent(c: Change, fileLines: string[]): string {
+  const lead = (s: string): string => /^[ \t]*/.exec(s)![0];
+  const was = new Map<string, string>();
+  c.from.replace(/\n$/, "").split("\n").forEach((l, k) => { if (l.trim() && !was.has(lead(l))) was.set(lead(l), lead(fileLines[k]!)); });
+  return c.to.split("\n").map((l) => {
+    if (!l.trim()) return l;
+    const mine = lead(l), exact = was.get(mine);
+    if (exact !== undefined) return exact + l.slice(mine.length);
+    const base = [...was.keys()].filter((k) => mine.startsWith(k)).sort((x, y) => y.length - x.length)[0];
+    return base === undefined ? l : was.get(base)! + l.slice(base.length);
+  }).join("\n");
+}
+
+/**
+ * One change to a text with `\n` line ends. The piece is looked for as written first, and only when it is not there in the more
+ * forgiving ways above (a note says which fired); when `exactOnly`, because the file changed since the model read it, no guess is made.
+ */
+export function applyChange(text: string, c: Change, exactOnly = false): Applied {
+  if (!c.from) return { error: "old_string is empty." };
+  if (c.from === c.to) return { error: "old_string and new_string are identical." };
+  const { spans, note } = exactOnly ? { spans: places(text, c.from).map((start) => ({ start, end: start + c.from.length, to: c.to })), note: undefined } : find(text, c);
+  if (!spans.length) return { error: "old_string was not found. Read the file again and copy the text exactly, including whitespace." };
+  if (spans.length > 1 && !c.all) return { error: `old_string matches ${spans.length} places (lines ${spans.slice(0, 6).map((s) => lineOf(text, s.start)).join(", ")}${spans.length > 6 ? ", …" : ""}). Add surrounding context to make it unique, or set replace_all.` };
+  const used = c.all ? spans : spans.slice(0, 1);
+  let out = "", at = 0;
+  for (const s of used) { out += text.slice(at, s.start) + s.to; at = s.end; }
+  out += text.slice(at);
+  return { text: out, line: lineOf(text, used[0]!.start), count: used.length, ...(note ? { note } : {}) };
+}
+
+/** A few lines around a change, numbered as Read numbers them, so the model sees the result without reading the file again. */
+export function around(text: string, line: number, changed: number, most = 14): string {
+  const lines = text.split("\n");
+  const from = Math.max(1, line - 2), to = Math.min(lines.length, Math.min(line + changed + 1, from + most - 1));
+  return lines.slice(from - 1, to).map((l, i) => `${String(from + i).padStart(6)}\t${l.length > 200 ? `${l.slice(0, 200)}…` : l}`).join("\n");
+}
+
+/** Whether a model with room for more tools is offered the ones for many changes at once: not in the first request of a turn, so that the first request of every piece of work stays light. */
+export const wantsManyChanges = (s: { small: boolean; steps?: number | undefined }): boolean => !s.small && (s.steps ?? 0) > 0;
