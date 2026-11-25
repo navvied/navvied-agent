@@ -136,9 +136,12 @@ describe("each task can be done by a model that makes the calls one at a time", 
   });
 });
 
+/** The connected programs of the fixture that this process started (or one of its children did): another test run on the same computer has its own, and they are not leftovers of this one. */
 const connectedProgramsRunning = (): number[] => {
   if (process.platform !== "linux") return [];
-  return readdirSync("/proc").filter((n) => /^\d+$/.test(n)).filter((n) => { try { return readFileSync(`/proc/${n}/cmdline`, "utf8").includes("mcp-records.ts"); } catch { return false; } }).map(Number);
+  const parentOf = (pid: number): number => { try { const stat = readFileSync(`/proc/${pid}/stat`, "utf8"); return Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]); } catch { return 0; } };
+  const mine = (pid: number): boolean => { for (let at = pid, hops = 0; at > 1 && hops < 40; at = parentOf(at), hops++) if (at === process.pid) return true; return false; };
+  return readdirSync("/proc").filter((n) => /^\d+$/.test(n)).map(Number).filter((n) => { try { return readFileSync(`/proc/${n}/cmdline`, "utf8").includes("mcp-records.ts") && mine(n); } catch { return false; } });
 };
 
 describe("the comparison runs them, in both arms, through the real program", () => {

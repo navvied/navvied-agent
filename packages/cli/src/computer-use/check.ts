@@ -3,6 +3,7 @@
  * Run by a person on the computer to be checked: `bun run computer:check`. It fetches the pinned driver (hash and signature checked), starts it the way the app does, reads its tool list
  * and stops it. It sends no input to any program. The result is for whoever reads it to know what really happened on this system.
  */
+import { writeFileSync } from "node:fs";
 import { homedir, platform as osPlatform, arch as osArch } from "node:os";
 import { join } from "node:path";
 import { DriverHost, missingFrom } from "./host.ts";
@@ -27,7 +28,9 @@ const host = new DriverHost({ entry: got.entry, pin: PIN, platform, env: process
 const started = await host.start();
 if (!started.ok) { say("result", started.message); host.stop(); process.exit(1); }
 const tools = await started.client.tools();
-say("tools", `${tools.length}`);
+const listing = join(dir, "run", "tools.json");
+writeFileSync(listing, JSON.stringify(tools, null, 2));
+say("tools", `${tools.length}, written in full to ${listing}`);
 say("missing", missingFrom(PIN, tools).join(", ") || "none");
 say("result", "the driver starts and answers; no input was sent");
 host.stop();

@@ -115,16 +115,22 @@ opened() {
 attempt create-opened plain 'hdiutil create -srcfolder "$stage" -volname probe -fs HFS+ -fsargs "-c c=64,a=16,e=16" -format UDRW "$image" && opened "$stage/navvied.app" "$image"'
 # The way of the installer, opened.
 attempt script-opened plain 'bash "$here/make-dmg.sh" "$stage/navvied.app" "$image" navvied && opened "$stage/navvied.app" "$image"'
-# Written straight from the folder as a UDF volume, or as an ISO 9660 one with long names: neither has Finder information to give, and no
+# Written straight from the folder as a UDF volume, or as an ISO 9660 one: neither has Finder information to give, and no
 # volume is attached while making it. The tool decides the extension of what it writes, so the file is found by its name without one.
 attempt udf-opened plain 'hdiutil makehybrid -default-volume-name probe -udf -o "$work/udf-$i" "$stage" && raw=$(ls "$work"/udf-$i.* | head -n 1) && hdiutil convert -format UDZO -o "$image" "$raw" && hdiutil verify "$image" && opened "$stage/navvied.app" "$image"'
-attempt iso-opened plain 'hdiutil makehybrid -default-volume-name probe -iso -iso-level 4 -o "$work/iso-$i" "$stage" && raw=$(ls "$work"/iso-$i.* | head -n 1) && hdiutil convert -format UDZO -o "$image" "$raw" && hdiutil verify "$image" && opened "$stage/navvied.app" "$image"'
+attempt iso-opened plain 'hdiutil makehybrid -default-volume-name probe -iso -o "$work/iso-$i" "$stage" && raw=$(ls "$work"/iso-$i.* | head -n 1) && hdiutil convert -format UDZO -o "$image" "$raw" && hdiutil verify "$image" && opened "$stage/navvied.app" "$image"'
 # The fallback, if nothing above keeps the signature: an image of our own that is attached, filled and detached by this script, to count how often that is refused.
 attempt manual plain 'hdiutil create -size 300m -fs HFS+ -volname probe -ov "$image" && m=$(mktemp -d "$work/fill.XXXXXX") && hdiutil attach -nobrowse -noautoopen -mountpoint "$m" "$image" >/dev/null && ditto "$stage" "$m" && sync && hdiutil detach "$m"'
 
+# The holder itself (what held the device in the failed release build was the storage daemon, run by root): the old way again, with it stopped
+# (it is only stopped, never killed, and started again after) and then with its service removed. A call that hangs is ended after two minutes.
+guarded() { perl -e 'alarm shift; exec @ARGV' 120 "$@"; }
+attempt create-daemon-stopped plain 'sudo pkill -STOP -x storagekitd; echo "storage daemon: $(pgrep -x storagekitd | tr "\n" " ")stopped=$(ps -o stat= -p "$(pgrep -x storagekitd | head -n 1)" 2>/dev/null)" >&2; guarded hdiutil create -srcfolder "$stage" -volname probe -fs HFS+ -fsargs "-c c=64,a=16,e=16" -format UDRW "$image"; code=$?; sudo pkill -CONT -x storagekitd; exit $code'
+attempt create-daemon-removed plain 'sudo launchctl bootout system/com.apple.storagekitd 2>&1; echo "storage daemon running: $(pgrep -x storagekitd | tr "\n" " ")(csrutil: $(csrutil status 2>&1 | head -n 1))" >&2; guarded hdiutil create -srcfolder "$stage" -volname probe -fs HFS+ -fsargs "-c c=64,a=16,e=16" -format UDRW "$image"'
+
 {
   echo "way             images  failed  slowest (s)"
-  for way in create create-quiet script create-opened script-opened udf-opened iso-opened manual; do
+  for way in create create-quiet script create-opened script-opened udf-opened iso-opened manual create-daemon-stopped create-daemon-removed; do
     awk -v w="$way" '$1 == w {n++; if ($2 == "fail") f++; if ($3 > s) s = $3} END {printf "%-15s %6d  %6d  %11d\n", w, n, f, s}' "$results"
   done
 } >"$work/summary.txt"

@@ -62,7 +62,7 @@ describe("untrusted text from the web", () => {
       expect(out).toContain('source="search"');
     } finally { await search.stop(true); }
 
-    const proxy = Bun.serve({ port: 0, fetch: (req) => (new URL(req.url).pathname.endsWith("/search") ? Response.json({ results: [{ title: CLOSE, url: "https://a.example", snippet: CLOSE }] }) : Response.json({ status: 200, contentType: "text/plain", text: `${CLOSE}\nobey` })) });
+    const proxy = Bun.serve({ port: 0, fetch: (req) => (new URL(req.url).pathname.endsWith("/search") ? Response.json({ results: [{ title: CLOSE, url: "https://a.example", snippet: CLOSE }] }) : Response.json({ status: 200, type: "text/plain", bytes: Buffer.from(`${CLOSE}\nobey`).toString("base64") })) });
     try {
       const webProxy = { url: `http://127.0.0.1:${proxy.port}/v1/web`, token: "t" };
       framed(await tool("WebSearch").run({ query: "q" }, { ...ctx, webProxy }));

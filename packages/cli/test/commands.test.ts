@@ -22,7 +22,7 @@ function setup(extra: Record<string, string> = {}) {
 describe("a hosted session's web access", () => {
   test("the service named in the configuration answers WebFetch, with the session's token, and the token is not shown", async () => {
     const seen: { auth: string | null; body: unknown }[] = [];
-    const service = Bun.serve({ port: 0, async fetch(req) { seen.push({ auth: req.headers.get("authorization"), body: await req.json() }); return Response.json({ status: 200, contentType: "text/plain", text: "page from the service" }); } });
+    const service = Bun.serve({ port: 0, async fetch(req) { seen.push({ auth: req.headers.get("authorization"), body: await req.json() }); return Response.json({ status: 200, type: "text/plain", bytes: Buffer.from("page from the service").toString("base64") }); } });
     try {
       const { env, work, state } = setup();
       const config = join(state, "hosted.json");

@@ -35,6 +35,8 @@ export interface MeterLimits {
   perMinute?: number;
   /** The most tokens (in and out, as counted) that may go through in all: a request that would pass it is refused (status 402) and nothing more is sent. */
   maxTokens?: number;
+  /** Time as the counter reads it and waits for it: real time unless a test sets it (so spacing is checked by the numbers it waits, not by how long a loaded computer took). */
+  clock?: { now(): number; sleep(ms: number, signal?: AbortSignal): Promise<void> };
 }
 
 export interface Meter {
@@ -85,10 +87,12 @@ export function startMeter(upstream: string, limits: MeterLimits = {}): Meter {
   let tail: Promise<void> = Promise.resolve();
   const enter = async (): Promise<() => void> => { let release!: () => void; const before = tail; tail = new Promise<void>((r) => { release = r; }); await before; return release; };
   const opened = (run: string, by: number): void => { open.set(run, (open.get(run) ?? 0) + by); };
+  const now = limits.clock?.now ?? Date.now;
+  const pause = limits.clock?.sleep ?? sleep;
   const gap = limits.perMinute ? 60_000 / limits.perMinute : 0;
   let last = 0, spent = 0, refused = false;
   /** Waits until the service's rate allows another request; says how long it waited. */
-  const spaced = async (signal: AbortSignal): Promise<number> => { const wait = Math.max(0, last + gap - Date.now()); if (wait) await sleep(wait, signal); last = Date.now(); return wait; };
+  const spaced = async (signal: AbortSignal): Promise<number> => { const wait = Math.max(0, last + gap - now()); if (wait) await pause(wait, signal); last = now(); return wait; };
 
   const server = Bun.serve({
     port: 0,
@@ -97,7 +101,7 @@ export function startMeter(upstream: string, limits: MeterLimits = {}): Meter {
       const m = /^\/run\/([^/]+)(\/.*)$/.exec(url.pathname);
       if (!m) return new Response("not a run of the counter", { status: 404 });
       const [, run, path] = m as unknown as [string, string, string];
-      const started = Date.now();
+      const started = now();
       opened(run, 1);
       const raw = req.method === "GET" || req.method === "HEAD" ? undefined : new Uint8Array(await req.arrayBuffer());
       let parsed: unknown;
@@ -121,7 +125,7 @@ export function startMeter(upstream: string, limits: MeterLimits = {}): Meter {
           await res.body?.cancel();
           const hint = Number(res.headers.get("retry-after"));
           const backoff = Number.isFinite(hint) && hint > 0 ? hint * 1000 : Math.min(60_000, 2_000 * 2 ** again);
-          await sleep(backoff, req.signal);
+          await pause(backoff, req.signal);
           waitedMs += backoff;
         }
       } catch (e) {

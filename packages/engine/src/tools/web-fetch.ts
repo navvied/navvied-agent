@@ -46,10 +46,10 @@ async function readCapped(res: Response, cap: number): Promise<Uint8Array> {
   return Buffer.concat(parts).subarray(0, cap);
 }
 
-interface Got { url: URL; status: number; type: string; /** The content-type header as the site wrote it, with its charset. */ header?: string; bytes: Uint8Array; text?: string; moved?: URL }
+export interface Got { url: URL; status: number; type: string; /** The content-type header as the site wrote it, with its charset. */ header?: string; bytes: Uint8Array; text?: string; moved?: URL }
 
-/** One address, followed over redirects that stay on the host; every hop is checked again. */
-async function get(first: URL, ctx: ToolContext): Promise<Got | string> {
+/** One address, followed over redirects that stay on the host; every hop is checked again. The same walk serves a computer and the server that fetches for a session with no network. */
+export async function getPage(first: URL, ctx: Pick<ToolContext, "signal" | "allowPrivateNetwork">): Promise<Got | string> {
   let url = first;
   for (let hop = 0; hop <= HOPS; hop++) {
     const vetted = await vet(url, ctx.allowPrivateNetwork);
@@ -81,14 +81,14 @@ const isText = (type: string): boolean => !type || type.startsWith("text/") || /
 const challenge = (text: string): boolean => /just a moment|cf-chl|captcha|are you a human|access denied|enable javascript and cookies/i.test(text.slice(0, 4000));
 
 /** What the page says as text, or the sentence that says why not. */
-function convert(got: Got, rawText: string | undefined): { title: string; body: string } | string {
+function convert(got: Got): { title: string; body: string } | string {
   const isPdf = got.type === "application/pdf" || (got.bytes.length > 5 && Buffer.from(got.bytes.subarray(0, 5)).toString("latin1") === "%PDF-");
   if (isPdf) {
     try { return { title: "", body: pdfPages(Buffer.from(got.bytes)).map((p, i) => `--- Page ${i + 1} ---\n${p}`).join("\n\n") }; }
     catch (e) { return `Error: ${e instanceof Error ? e.message : "this PDF could not be read"}.`; }
   }
   if (!isText(got.type)) return `Error: not text (${got.type}); nothing to read.`;
-  const text = rawText ?? decodeBody(got.bytes, got.header);
+  const text = decodeBody(got.bytes, got.header);
   if (!isHtml(got.type, text)) return { title: "", body: text.trim() };
   const page = htmlToText(text, got.url.href);
   const links = page.links.length ? `\n\n${linkLines(page.links)}` : "";
@@ -138,23 +138,21 @@ export const webFetch: Tool = {
     if (cached) { ctx.report?.({ cached: true }); return slice(cached, offset, budget) + also; }
 
     let got: Got | string;
-    let rawText: string | undefined;
     if (ctx.webProxy) {
       const no = await refusal(url, ctx.allowPrivateNetwork).catch(() => undefined);
-      if (no && /private|only http/.test(no)) return `Error: ${no}`;
-      const answer = await viaProxy<{ status: number; contentType?: string; text?: string; redirect?: string }>(ctx.webProxy, "fetch", { url: url.href }, AbortSignal.any([ctx.signal, AbortSignal.timeout(TIMEOUT_MS)]));
+      if (no && /private|only http|key or a token/.test(no)) return `Error: ${no}`;
+      const answer = await viaProxy<{ status: number; type?: string; header?: string; bytes?: string; moved?: string }>(ctx.webProxy, "fetch", { url: url.href }, AbortSignal.any([ctx.signal, AbortSignal.timeout(TIMEOUT_MS)]));
       if (!answer.ok) return `Error: ${answer.message}`;
-      const { status, contentType = "", text = "", redirect } = answer.value;
-      rawText = text;
-      let moved: URL | undefined;
-      if (status >= 300 && status < 400 && redirect) { try { moved = new URL(redirect, url); } catch { /* not an address */ } }
-      got = { url, status, type: contentType.split(";")[0]!.trim().toLowerCase(), bytes: Buffer.from(text), ...(moved ? { moved } : {}) };
-    } else got = await get(url, ctx);
+      const { status, type = "", header, bytes = "", moved } = answer.value;
+      let to: URL | undefined;
+      if (moved) { try { to = new URL(moved, url); } catch { return "Error: the site sent the page somewhere that is not an address."; } }
+      got = { url, status, type, ...(header ? { header } : {}), bytes: Buffer.from(bytes, "base64"), ...(to ? { moved: to } : {}) };
+    } else got = await getPage(url, ctx);
     if (typeof got === "string") return got;
     if (got.moved) return `Redirected (${got.status}) to ${got.moved.href}, another site. If that is the page you want: ${call("WebFetch", { url: got.moved.href })}`;
-    const bad = failed(got.status, got.url, rawText ?? Buffer.from(got.bytes.subarray(0, 4000)).toString("utf8"));
+    const bad = failed(got.status, got.url, Buffer.from(got.bytes.subarray(0, 4000)).toString("utf8"));
     if (bad) return bad;
-    const made = convert(got, rawText);
+    const made = convert(got);
     if (typeof made === "string") return made;
     if (!made.body.trim()) return "Error: the page has no text.";
     const page = pages.set(url.href, { title: made.title, text: made.body });

@@ -4,6 +4,7 @@ pub mod events;
 pub mod http;
 pub mod intent;
 pub mod logs;
+pub mod permissions;
 pub mod ready;
 pub mod redact;
 pub mod settings;
