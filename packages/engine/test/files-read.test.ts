@@ -111,8 +111,9 @@ describe("Read of text", () => {
     expect(await read.run({ file_path: "e.txt" }, c)).toBe("The file exists but is empty.");
     expect(await read.run({ file_path: "f.txt", offset: 9 }, c)).toMatch(/offset 9 is past the end/);
   });
+  // Windows has no /dev/zero; a device there is a name such as NUL, which the same check (a regular file or not) turns away.
   test("a device file is not read", async () => {
-    expect(await read.run({ file_path: "/dev/zero" }, conversation(workdir()))).toMatch(/not a regular file/);
+    expect(await read.run({ file_path: process.platform === "win32" ? "\\\\.\\NUL" : "/dev/zero" }, conversation(workdir()))).toMatch(process.platform === "win32" ? /not a regular file|does not exist/ : /not a regular file/);
   });
   test("a file over 5 MB is read in pages, from the line asked for, and says where to go on", async () => {
     const d = workdir();

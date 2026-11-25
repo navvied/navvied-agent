@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { HOOK_MS, hook } from "../../protocol/test/support/cleanup.ts";
 import { cleanFiles, conversation, tool, workdir } from "./files-support.ts";
 
@@ -11,9 +11,11 @@ const git = Bun.which("git"), rg = Bun.which("rg");
 /** Runs `body` with the search programs this computer has replaced by exactly the ones named. */
 async function only<T>(programs: string[], body: () => Promise<T>): Promise<T> {
   const bin = workdir();
-  for (const p of programs) { const at = Bun.which(p); if (at) symlinkSync(at, join(bin, p)); }
+  const wanted = programs.map((p) => Bun.which(p)).filter((p): p is string => !!p);
+  // A program on Windows needs the files next to it, so it is not linked into a folder of its own: the folders it lives in stand for it.
+  if (process.platform !== "win32") for (const at of wanted) symlinkSync(at, join(bin, basename(at)));
   const before = process.env.PATH;
-  process.env.PATH = bin;
+  process.env.PATH = process.platform === "win32" ? [...new Set(wanted.map((at) => dirname(at)))].join(";") : bin;
   try { return await body(); } finally { process.env.PATH = before; }
 }
 
@@ -137,7 +139,8 @@ describe("Grep", () => {
     writeFileSync(join(d, "f.txt"), "x\n");
     expect(await only([], () => grep.run({ pattern: "x" }, conversation(d)))).toContain("[searched without ripgrep: patterns follow JavaScript's rules");
   });
-  test("the options are passed to ripgrep as it takes them", async () => {
+  // The stand-in for ripgrep is a shell script, which Windows cannot run; what is checked is the list of options, the same on every system.
+  test.skipIf(process.platform === "win32")("the options are passed to ripgrep as it takes them", async () => {
     const d = workdir(), bin = workdir();
     writeFileSync(join(bin, "rg"), `#!/bin/sh\nprintf '%s\\n' "$@" > ${join(d, "argv")}\necho "f.txt:1:x"\n`);
     require("node:fs").chmodSync(join(bin, "rg"), 0o755);

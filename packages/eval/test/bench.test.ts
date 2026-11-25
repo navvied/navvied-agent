@@ -7,6 +7,9 @@ import { main } from "../src/main.ts";
 import { loadTasks, parseAdapter, runTask, startMeter, startMock, type Behaviour, type Meter, type Mock, type Task } from "../src/index.ts";
 import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
+/** The system text names the folder the task runs in, which lies under this computer's temporary folder: a long one (macOS) is not a heavier prompt. */
+const PATH_ROOM = tmpdir().length;
+
 const TASKS = join(import.meta.dir, "../tasks");
 const CLI = join(import.meta.dir, "../../cli/src/main.ts");
 const home = mkdtempSync(join(tmpdir(), "navvied-bench-home-"));
@@ -39,7 +42,7 @@ describe("every task can be solved by an agent run, not only by the validator", 
       const skills = task.id.startsWith("skill-");
       // The task about a notebook also offers the tool for notebooks (about 400 characters with its place in the list). A web task also offers the two web tools (about 440 characters, and a seventh and eighth tool); the one that says a browser can read what a plain fetch cannot also offers the browser, whose text is the longest.
       const web = task.kind === "web";
-      expect(r.prompt!.systemChars + r.prompt!.toolChars, task.id).toBeLessThanOrEqual(task.id === "web-script-page" ? 5400 : skills ? 4900 : 4600);
+      expect(r.prompt!.systemChars + r.prompt!.toolChars, task.id).toBeLessThanOrEqual((task.id === "web-script-page" ? 5400 : skills ? 4900 : 4600) + PATH_ROOM);
       expect(r.prompt!.tools, task.id).toBeLessThanOrEqual(web ? 10 : 9);
     }
   }, 240_000);
@@ -69,7 +72,7 @@ describe("how heavy the first request is", () => {
   test("the system prompt and the tool definitions together are at most 4,000 characters, and at most eight tools are offered (the six of the work, the helper tool and the question tool; a long request adds the task list)", async () => {
     const r = await run(pick("fix-off-by-one"), "oracle");
     expect(r.prompt!.tools).toBeLessThanOrEqual(8);
-    expect(r.prompt!.systemChars + r.prompt!.toolChars).toBeLessThanOrEqual(4000);
+    expect(r.prompt!.systemChars + r.prompt!.toolChars).toBeLessThanOrEqual(4000 + PATH_ROOM);
   }, 60_000);
 });
 

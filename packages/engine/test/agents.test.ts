@@ -72,7 +72,7 @@ describe("in the engine", () => {
 
 describe("where helpers are read from", () => {
   test("the folders of Claude Code's format are read as well, and navvied's own win over them in the same place", () => {
-    expect(agentDirs("/h", "/c", ["/p", "/p/sub"])).toEqual(["/h/.claude/agents", "/c/agents", "/p/.claude/agents", "/p/.navvied/agents", "/p/sub/.claude/agents", "/p/sub/.navvied/agents"]);
+    expect(agentDirs("/h", "/c", ["/p", "/p/sub"])).toEqual(["/h/.claude/agents", "/c/agents", "/p/.claude/agents", "/p/.navvied/agents", "/p/sub/.claude/agents", "/p/sub/.navvied/agents"].map((p) => join(p)));
     const root = join(dir, "where");
     const claude = join(root, ".claude", "agents"), own = join(root, ".navvied", "agents");
     mkdirSync(claude, { recursive: true }); mkdirSync(own, { recursive: true });

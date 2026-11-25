@@ -131,12 +131,9 @@ describe("apply_patch", () => {
     expect(out).toMatch(/^Error: Failed to find context 'def missing\(\):' in a\.txt\. Nothing was changed/);
   });
   test("a write that fails half way puts the earlier files back", async () => {
-    const d = make({ "a.txt": "one\n" });
-    mkdirSync(join(d, "locked"));
-    chmodSync(join(d, "locked"), 0o500);
-    const out = await patch.run({ patch: "*** Begin Patch\n*** Update File: a.txt\n@@\n-one\n+1\n*** Add File: locked/b.txt\n+x\n*** End Patch" }, conversation(d));
-    chmodSync(join(d, "locked"), 0o700);
-    if (process.getuid?.() === 0) return; // root may write anywhere: nothing fails
+    // A name that is a file where a folder is needed: the second file cannot be made on any system, whoever is running the test.
+    const d = make({ "a.txt": "one\n", blocker: "not a folder\n" });
+    const out = await patch.run({ patch: "*** Begin Patch\n*** Update File: a.txt\n@@\n-one\n+1\n*** Add File: blocker/b.txt\n+x\n*** End Patch" }, conversation(d));
     expect(out).toMatch(/could not be written.*put back/);
     expect(readFileSync(join(d, "a.txt"), "utf8")).toBe("one\n");
     expect(readdirSync(d).filter((n) => n.endsWith(".tmp"))).toEqual([]);

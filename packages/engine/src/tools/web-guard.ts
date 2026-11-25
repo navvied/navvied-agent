@@ -11,19 +11,26 @@ import { whyUnreached } from "./web-errors.ts";
  */
 async function pinned(url: URL, init: RequestInit, addresses: readonly string[]): Promise<Response> {
   let last: unknown;
-  for (const address of addresses.slice(0, 4)) {
+  const tried = addresses.slice(0, 4);
+  for (const [i, address] of tried.entries()) {
     const at = new URL(url);
     at.hostname = address.includes(":") ? `[${address}]` : address;
     const headers = new Headers(init.headers);
     headers.set("host", url.host);
-    try { return await fetch(at, { ...init, headers, ...(url.protocol === "https:" ? { tls: { serverName: url.hostname } } : {}) } as RequestInit); }
-    catch (e) { last = e; if (whyUnreached(e) !== "network") throw e; }
+    // An address that never answers (a dead one in a list, an IPv6 route that goes nowhere) must not use up the time of the ones behind it: all but the last are given a short time to begin answering.
+    const own = new AbortController();
+    const timer = i < tried.length - 1 ? setTimeout(() => own.abort(), web.attemptMs) : undefined;
+    const signal = init.signal ? AbortSignal.any([init.signal, own.signal]) : own.signal;
+    try { const res = await fetch(at, { ...init, headers, signal, ...(url.protocol === "https:" ? { tls: { serverName: url.hostname } } : {}) } as RequestInit); clearTimeout(timer); return res; }
+    catch (e) { clearTimeout(timer); last = e; if (own.signal.aborted && !init.signal?.aborted) continue; if (whyUnreached(e) !== "network") throw e; }
   }
   throw last;
 }
 
 /** What the web tools reach the network with, so a test can stand in for it. `pin` are the addresses the guard found public: they, and no other, are connected to. */
 export const web = {
+  /** How long an address that is not the last may take to begin answering before the next one is tried. */
+  attemptMs: 5_000,
   fetch: (input: URL, init: RequestInit, pin: readonly string[] = []): Promise<Response> => (pin.length ? pinned(input, init, pin) : fetch(input, init)),
   addresses: async (host: string): Promise<string[]> => (await lookup(host, { all: true })).map((a) => a.address),
 };

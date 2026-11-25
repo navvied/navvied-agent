@@ -8,7 +8,7 @@
   {
     "tool": "Bash",
     "args": {
-      "command": "sed -i 's/timeoutMs = 1000/timeoutMs = 2000/' src/config.ts",
+      "command": "bun -e \"const fs = require('fs'); const f = 'src/config.ts'; fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('timeoutMs = 1000', 'timeoutMs = 2000'))\"",
       "description": "the other process changes the file"
     }
   },

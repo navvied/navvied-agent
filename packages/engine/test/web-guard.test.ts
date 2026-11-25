@@ -64,12 +64,28 @@ describe("the visit goes to the address that was checked", () => {
       expect(seen).toEqual([{ host: `rebinding.invalid:${server.port}`, agent: "navvied-test" }]);
     } finally { await server.stop(true); }
   });
+  test("an address that never answers does not use up the time of the next one", async () => {
+    // The same port on two loopback addresses: the first accepts and says nothing, the second answers. Where the second address cannot be bound (macOS has only 127.0.0.1) there is nothing to check.
+    const quiet = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {}, open() {} } });
+    let server: ReturnType<typeof Bun.serve> | undefined;
+    try { server = Bun.serve({ port: quiet.port, hostname: "127.0.0.2", fetch: () => new Response("answered") }); } catch { quiet.stop(true); return; }
+    const before = web.attemptMs;
+    web.attemptMs = 300;
+    try {
+      const t0 = Date.now();
+      const res = await web.fetch(new URL(`http://rebinding.invalid:${quiet.port}/`), {}, ["127.0.0.1", "127.0.0.2"]);
+      expect(await res.text()).toBe("answered");
+      expect(Date.now() - t0).toBeLessThan(5_000);
+    } finally { web.attemptMs = before; quiet.stop(true); await server.stop(true); }
+  });
   test("an address that does not connect moves on to the next one; any other failure is the answer", async () => {
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("second") });
+    const before = web.attemptMs;
+    web.attemptMs = 400;
     try {
       const res = await web.fetch(new URL(`http://rebinding.invalid:${server.port}/`), {}, ["127.0.0.2", "127.0.0.1"]).catch(() => undefined);
-      // Where 127.0.0.2 is not served, the connection is refused and the next address answers; where it is, the same server answers too.
+      // Where 127.0.0.2 is not served the connection is refused (Linux) or goes nowhere (macOS): either way the next address answers; where it is served, the same server answers too.
       expect(res === undefined ? "" : await res.text()).toBe("second");
-    } finally { await server.stop(true); }
+    } finally { web.attemptMs = before; await server.stop(true); }
   });
 });

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { judge } from "../src/judge.ts";
 import { Rules, hardBlock, parseRules } from "../src/rules.ts";
 import { approvalScope } from "../src/approval-scope.ts";
@@ -144,8 +144,9 @@ describe("the permissions of the tools that change files", () => {
     expect(judge(input("NotebookEdit", { file_path: "src/n.ipynb" }, "ask", rules)).kind).toBe("go");
   });
   test("the hard limits hold for every file of a patch and for the other tools", () => {
-    expect(hardBlock("apply_patch", patchFor("src/a.ts", "/etc/passwd"), cwd)).toMatch(/system folder/);
-    expect(hardBlock("MultiEdit", { file_path: "/etc/hosts" }, cwd)).toMatch(/system folder/);
+    const [one, two] = process.platform === "win32" ? ["C:\\Windows\\win.ini", "C:\\Windows\\System32\\hosts"] : ["/etc/passwd", "/etc/hosts"];
+    expect(hardBlock("apply_patch", patchFor("src/a.ts", one!), cwd)).toMatch(/system folder/);
+    expect(hardBlock("MultiEdit", { file_path: two! }, cwd)).toMatch(/system folder/);
     expect(hardBlock("NotebookEdit", { file_path: ".navvied/permissions.json" }, cwd)).toMatch(/allowed to do/);
     expect(hardBlock("apply_patch", patchFor("src/a.ts"), cwd)).toBeUndefined();
   });
@@ -207,10 +208,11 @@ describe("a look at a place outside the project", () => {
     expect(look("Read", { file_path: "/tmp/navvied-output-other/x" }).kind).toBe("ask");
   });
   test("what the person said to never ask again covers that folder only, and a rule that allows lets it through", () => {
+    const other = resolve("/home/other");
     const asked = look("Read", { file_path: "/home/other/notes.md" });
-    expect(asked.kind === "ask" && asked.scope).toEqual({ key: "read-outside:/home/other", phrase: "reads in /home/other" });
-    expect(look("Read", { file_path: "/home/other/b.md" }, "ask", { allowed: new Set(["read-outside:/home/other"]) }).kind).toBe("go");
-    expect(look("Read", { file_path: "/home/third/b.md" }, "ask", { allowed: new Set(["read-outside:/home/other"]) }).kind).toBe("ask");
+    expect(asked.kind === "ask" && asked.scope).toEqual({ key: `read-outside:${other}`, phrase: `reads in ${other}` });
+    expect(look("Read", { file_path: "/home/other/b.md" }, "ask", { allowed: new Set([`read-outside:${other}`]) }).kind).toBe("go");
+    expect(look("Read", { file_path: "/home/third/b.md" }, "ask", { allowed: new Set([`read-outside:${other}`]) }).kind).toBe("ask");
     expect(look("Read", { file_path: "/home/other/b.md" }, "ask", { rules: new Rules(parseRules({ allow: ["Read(/home/other/**)"] }), cwd) }).kind).toBe("go");
     expect(look("Read", { file_path: "/home/other/b.md" }, "auto", { rules: new Rules(parseRules({ deny: ["Read(/home/**)"] }), cwd) }).kind).toBe("stop");
   });

@@ -130,7 +130,8 @@ describe("what Edit gives back and keeps", () => {
     chmodSync(f, 0o750);
     await edit.run({ file_path: f, old_string: "a\nb", new_string: "x\ny" }, c);
     expect([...readFileSync(f)]).toEqual([0xef, 0xbb, 0xbf, ...Buffer.from("x\r\ny\r\n")]);
-    expect(statSync(f).mode & 0o777).toBe(0o750);
+    // Windows has no execute bit to keep: its files are 0o666 or 0o444.
+    if (process.platform !== "win32") expect(statSync(f).mode & 0o777).toBe(0o750);
   });
   test("a UTF-16 file stays UTF-16", async () => {
     const { f, c } = await known(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("héllo\n", "utf16le")]));

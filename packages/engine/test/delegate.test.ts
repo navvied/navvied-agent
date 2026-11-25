@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HOOK_MS, cleanupAll, prompt, rig, until, wait } from "./helpers.ts";
+import { isolate } from "../src/worktree.ts";
 import type { ModelRequest } from "../src/types.ts";
 
 afterAll(cleanupAll, HOOK_MS);
@@ -141,6 +142,22 @@ describe("a helper in a copy of the project", () => {
     return dir;
   };
   const isolated = { ...writer, tools: ["Write"], isolation: "worktree" as const };
+
+  test("a project reached through a link (macOS temporary folders, Windows short names) still gets its copy in the same place", async () => {
+    const dir = repo();
+    mkdirSync(join(dir, "sub"));
+    writeFileSync(join(dir, "sub", "s.txt"), "x\n");
+    execFileSync("git", ["add", "."], { cwd: dir }); execFileSync("git", ["commit", "-qm", "sub"], { cwd: dir });
+    const link = join(mkdtempSync(join(tmpdir(), "navvied-link-")), "project");
+    symlinkSync(dir, link, "dir");
+    const copy = await isolate(join(link, "sub"));
+    if ("error" in copy) throw new Error(copy.error);
+    expect(copy.dir.endsWith("sub")).toBe(true);
+    // The copy is a worktree (its top folder has a .git file); the project itself has a .git folder.
+    expect(statSync(join(copy.dir, "..", ".git")).isFile()).toBe(true);
+    expect(existsSync(join(copy.dir, "s.txt"))).toBe(true);
+    await copy.finish();
+  });
 
   test("its changes land in the copy, which is kept and named; the project is untouched", async () => {
     const dir = repo();

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -23,7 +23,9 @@ export async function isolate(cwd: string): Promise<Isolated | { error: string }
   const base = mkdtempSync(join(tmpdir(), "navvied-helper-"));
   const made = await git(top.out, ["worktree", "add", "--detach", base, "HEAD"]);
   if (!made.ok) { rmSync(base, { recursive: true, force: true }); return { error: `could not make a copy of the project: ${made.out.split("\n").at(-1) ?? ""}` }; }
-  const dir = join(base, relative(top.out, cwd));
+  // Git names the top folder by its real path (forward slashes on Windows, no symlinks on macOS), the folder the person is in may not: compare what both really are.
+  const real = (p: string): string => { try { return realpathSync.native(p); } catch { return p; } };
+  const dir = join(base, relative(real(top.out), real(cwd)));
   return {
     dir,
     async finish() {

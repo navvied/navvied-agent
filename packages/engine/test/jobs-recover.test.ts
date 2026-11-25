@@ -87,7 +87,8 @@ describe.skipIf(!posix)("a command that still runs after the program restarted i
 
   test("the record of the same process, by its real start time, is the job", () => {
     const start = processStart(process.pid);
-    expect(start).toMatch(/^\d+$/);
+    // Linux counts clock ticks since boot; macOS writes the date out, to the second.
+    expect(start).toMatch(process.platform === "darwin" ? /\S/ : /^\d+$/);
     expect(processStart(process.pid)).toBe(start);
   });
 
