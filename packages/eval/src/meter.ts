@@ -25,6 +25,16 @@ export interface Hit {
   status: number;
   /** From the request to the end of the answer. */
   ms: number;
+  /** Time the counter itself waited before the model got the request: to keep to the service's rate, and to back off after "too many requests". It is not the model's time. */
+  waitedMs: number;
+}
+
+/** What a service allows an account, kept to by the counter so that no agent has to. */
+export interface MeterLimits {
+  /** Requests to the model per minute: they are spaced evenly, and an answer of "too many requests" is waited out and the request sent again. */
+  perMinute?: number;
+  /** The most tokens (in and out, as counted) that may go through in all: a request that would pass it is refused (status 402) and nothing more is sent. */
+  maxTokens?: number;
 }
 
 export interface Meter {
@@ -33,6 +43,9 @@ export interface Meter {
   url(run: string): string;
   /** What went through for this run, in the order it arrived, once the answers still being read are in; the run is forgotten. */
   take(run: string): Promise<Hit[]>;
+  /** Tokens counted so far over all runs, and whether a request was refused for passing the limit. */
+  spent(): number;
+  exhausted(): boolean;
   stop(): void;
 }
 
@@ -59,7 +72,11 @@ function tokensOf(data: unknown, into: { in?: number; out?: number }): void {
   }
 }
 
-export function startMeter(upstream: string): Meter {
+const sleep = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((done) => { const t = setTimeout(done, ms); signal?.addEventListener("abort", () => { clearTimeout(t); done(); }, { once: true }); });
+/** How many times a request is sent again after "too many requests", when the rate is kept to. */
+const AGAIN = 8;
+
+export function startMeter(upstream: string, limits: MeterLimits = {}): Meter {
   const target = new URL(upstream);
   const basePath = target.pathname.replace(/\/+$/, "");
   const hits = new Map<string, Hit[]>();
@@ -68,6 +85,10 @@ export function startMeter(upstream: string): Meter {
   let tail: Promise<void> = Promise.resolve();
   const enter = async (): Promise<() => void> => { let release!: () => void; const before = tail; tail = new Promise<void>((r) => { release = r; }); await before; return release; };
   const opened = (run: string, by: number): void => { open.set(run, (open.get(run) ?? 0) + by); };
+  const gap = limits.perMinute ? 60_000 / limits.perMinute : 0;
+  let last = 0, spent = 0, refused = false;
+  /** Waits until the service's rate allows another request; says how long it waited. */
+  const spaced = async (signal: AbortSignal): Promise<number> => { const wait = Math.max(0, last + gap - Date.now()); if (wait) await sleep(wait, signal); last = Date.now(); return wait; };
 
   const server = Bun.serve({
     port: 0,
@@ -85,14 +106,29 @@ export function startMeter(upstream: string): Meter {
       const release = counted ? await enter() : () => undefined;
       const headers = new Headers(req.headers);
       for (const h of ["host", "content-length", "accept-encoding"]) headers.delete(h);
+      if (counted && limits.maxTokens !== undefined && spent + Math.ceil((raw?.length ?? 0) / 4) > limits.maxTokens) {
+        refused = true;
+        release(); opened(run, -1);
+        return new Response("the token limit of this measurement is reached", { status: 402 });
+      }
       let res: Response;
+      let waitedMs = 0;
       try {
-        res = await fetch(`${target.origin}${path}${url.search}`, { method: req.method, headers, ...(raw ? { body: raw } : {}), signal: req.signal });
+        for (let again = 0; ; again++) {
+          if (counted && gap) waitedMs += await spaced(req.signal);
+          res = await fetch(`${target.origin}${path}${url.search}`, { method: req.method, headers, ...(raw ? { body: raw } : {}), signal: req.signal });
+          if (res.status !== 429 || !gap || again >= AGAIN || req.signal.aborted) break;
+          await res.body?.cancel();
+          const hint = Number(res.headers.get("retry-after"));
+          const backoff = Number.isFinite(hint) && hint > 0 ? hint * 1000 : Math.min(60_000, 2_000 * 2 ** again);
+          await sleep(backoff, req.signal);
+          waitedMs += backoff;
+        }
       } catch (e) {
         release();
         // The agent was stopped (its time was up, or it was told to stop) while the model had not answered: the model did not fail.
         const gaveUp = req.signal.aborted;
-        record(run, { at: started, path, stream: false, requestBytes: raw?.length ?? 0, ...weigh(path, parsed), inTokens: Math.ceil((raw?.length ?? 0) / 4), outTokens: 0, estimated: true, status: gaveUp ? 499 : 502, ms: Date.now() - started });
+        record(run, { at: started, path, stream: false, requestBytes: raw?.length ?? 0, ...weigh(path, parsed), inTokens: Math.ceil((raw?.length ?? 0) / 4), outTokens: 0, estimated: true, status: gaveUp ? 499 : 502, ms: Date.now() - started, waitedMs });
         return new Response(`the counter could not reach the model: ${e instanceof Error ? e.message : String(e)}`, { status: gaveUp ? 499 : 502 });
       }
       const out = new Headers(res.headers);
@@ -122,14 +158,14 @@ export function startMeter(upstream: string): Meter {
           if (!stream) { try { tokensOf(JSON.parse(answer), got); } catch { /* an error page, not an answer */ } }
         } catch { /* the client went away: what was seen is counted */ }
         const bytes = raw?.length ?? 0;
-        record(run, { at: started, path, stream, requestBytes: bytes, ...weigh(path, parsed), inTokens: got.in ?? Math.ceil(bytes / 4), outTokens: got.out ?? 0, estimated: got.in === undefined || got.out === undefined, status: res.status, ms: Date.now() - started });
+        record(run, { at: started, path, stream, requestBytes: bytes, ...weigh(path, parsed), inTokens: got.in ?? Math.ceil(bytes / 4), outTokens: got.out ?? 0, estimated: got.in === undefined || got.out === undefined, status: res.status, ms: Date.now() - started, waitedMs });
         release();
       })();
       return new Response(toClient, { status: res.status, headers: out });
     },
   });
 
-  const record = (run: string, hit: Hit): void => { const list = hits.get(run) ?? []; list.push(hit); hits.set(run, list); opened(run, -1); };
+  const record = (run: string, hit: Hit): void => { spent += hit.inTokens + hit.outTokens; const list = hits.get(run) ?? []; list.push(hit); hits.set(run, list); opened(run, -1); };
 
   return {
     port: server.port ?? 0,
@@ -141,6 +177,8 @@ export function startMeter(upstream: string): Meter {
       open.delete(run);
       return list;
     },
+    spent: () => spent,
+    exhausted: () => refused,
     stop: () => server.stop(true),
   };
 }

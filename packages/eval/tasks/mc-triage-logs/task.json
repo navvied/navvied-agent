@@ -1,0 +1,18 @@
+{
+  "id": "mc-triage-logs",
+  "title": "Triage eight service logs",
+  "kind": "terminal",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "python3"
+  ],
+  "prompt": "logs/ holds 8 log files, one for each service (the file name is the service). Each line is: time, level, request id, message. Write triage.json: an object with one key for each service, holding {\"errors\": how many lines have the level ERROR, \"first_failing_request\": the request id of the first such line in the file}. The word ERROR inside a message does not count.",
+  "check": "python3 \"$BENCH_FIXTURES/mc.py\" check triage-logs",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 80,
+  "timeoutSeconds": 600,
+  "setup": "python3 \"$BENCH_FIXTURES/mc.py\" setup triage-logs"
+}

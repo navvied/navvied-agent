@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { homedir } from "node:os";
 import { win32, posix } from "node:path";
 import { hardBlock, onlyLooks, riskOf } from "../src/index.ts";
 import type { Paths } from "../src/rules.ts";
@@ -200,6 +201,13 @@ describe("a command is judged as the shell will run it", () => {
   test.each(ASKED)("asked: %s", (command, key) => { expect(risk(command)).toBe(key); });
   test.each(FINE)("not asked: %s", (command) => { expect(risk(command)).toBeUndefined(); });
   test("the table is big enough", () => { expect(ASKED.length + FINE.length).toBeGreaterThanOrEqual(160); });
+});
+
+describe("the hard floor reads a target as a place, not as writing", () => {
+  const home = process.env.HOME || homedir();
+  const NEVER_PLACES = ["rm -rf ~", "rm -rf ~/", "rm -rf ~/*", "rm -rf ~/.", "rm -rf $HOME", "rm -rf $HOME/", "rm -rf \"$HOME\"", "rm -rf ${HOME}/", "rm -rf $HOME/.", "rm -rf //", "rm -rf ///", "rm -rf /.", "rm -rf /./", "rm -rf /home", "rm -rf /home/", `rm -rf ${home}`, `rm -rf ${home}/`, `rm -rf ${home}/.`, `rm -rf ${home}/*`, `rm -rf ${home}/docs/..`, "rm -rf ~/projects/..", "rm -rf /home/someone", "rm -rf /home/someone/", "rm -rf /Users/someone/", "rm -rf /usr//", "rm -rf /etc/.", "sudo rm -rf ~/", "rm -fr $HOME/"];
+  test.each(NEVER_PLACES)("never: %s", (command) => { expect(blocked(command)).toBe(true); });
+  test.each(["rm -rf ~/project/build", "rm -rf ./node_modules", "rm -rf build/", "rm -rf ./", "rm -rf $HOME/project/build/", `rm -rf ${home}/project/x`, "rm -rf /tmp/x", "rm -rf /home/someone/project", "rm -rf ../build", "rm -rf ~/.cache/x"])("allowed here, asked elsewhere: %s", (command) => { expect(blocked(command)).toBe(false); });
 });
 
 describe("the hard floor sees through the same tricks", () => {

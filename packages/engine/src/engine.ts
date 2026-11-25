@@ -32,6 +32,7 @@ import { isConfined, profileTools } from "./profiles.ts";
 import { hardBlock, type Rules } from "./rules.ts";
 import { asksAboutProgram, systemPrompt } from "./prompt.ts";
 import { PLAN_TOOL_NAME, defaultTools } from "./tools/index.ts";
+import { EXECUTE_CODE_TOOL } from "./tools/execute-code.ts";
 import { changedPaths, FILE_WRITERS, mapText, textOf } from "./tools/changed.ts";
 import { FileState } from "./tools/file-state.ts";
 import { SPILL_DIR, outputBudget, withinBudget } from "./tools/util.ts";
@@ -44,7 +45,7 @@ import { AGENT_TOOL_NAME, agentTool } from "./tools/agent.ts";
 import { ASK_TOOL_NAME } from "./tools/ask.ts";
 import { STALE_AFTER_STEPS, TODO_TOOL_NAME, parseTodos, staleNote, unfinished } from "./tools/todo.ts";
 import type { AgentDef } from "./agents.ts";
-import type { Message, ModelReply, Part, Provider, Recall, SessionStore, Tool, ToolCall, WebProxy } from "./types.ts";
+import type { Message, ModelReply, Part, Provider, Recall, SessionStore, Tool, ToolCall, ToolContext, WebProxy } from "./types.ts";
 
 /** What a helper needs the person to decide: the fields of an `approval` event, before the engine gives it an id. */
 type ApprovalAsk = { title: string; options: ApprovalOption[]; tool: string; change?: Extract<EngineEvent, { ev: "approval" }>["change"]; risk?: string };
@@ -130,6 +131,8 @@ export interface EngineOptions {
   wake?: boolean;
   /** The least time between two such turns, in ms (default 2000). */
   wakeGapMs?: number;
+  /** Whether a tool may be used now: asked at every step, so a tool the person switches off is no longer offered, and a call to it is refused by name. */
+  toolOn?: (name: string) => boolean;
   /** How the agent makes and changes skills (the SkillManage tool), and how a change is handled: it waits for the person (`ask`) or is made and can be undone (`auto`). */
   skillBook?: SkillBook;
   skillApproval?: () => "ask" | "auto";
@@ -207,7 +210,11 @@ export class Engine implements AgentEngine {
   sessionId: string;
   readonly #o: Required<Pick<EngineOptions, "provider" | "cwd" | "window" | "emit" | "maxSteps" | "allowPrivateNetwork">> & EngineOptions;
   readonly #tools: Tool[];
+  /** The tools that are on: what is offered, named or handed to a helper. */
+  get #on(): Tool[] { const on = this.#o.toolOn; return on ? this.#tools.filter((t) => on(t.name)) : this.#tools.filter((t) => !t.experimental); }
   readonly #disposers: (() => void)[] = [];
+  /** What tools keep for the conversation (see `ToolContext.keep`). */
+  readonly #kept = new Map<string, { close(): void }>();
   #loading: Promise<void>[] = [];
   readonly #approvals = new ApprovalBroker();
   readonly #questions = new QuestionBroker();
@@ -352,6 +359,8 @@ export class Engine implements AgentEngine {
     this.#jobs.close();
     forget(this.#shell);
     for (const dispose of this.#disposers.splice(0)) attempt(dispose);
+    for (const kept of this.#kept.values()) attempt(() => kept.close());
+    this.#kept.clear();
     if (this.#heartbeat) clearInterval(this.#heartbeat);
   }
 
@@ -670,16 +679,16 @@ export class Engine implements AgentEngine {
 
       const small = this.#window <= SMALL_WINDOW;
       const skills = modelSkills(attempt(() => this.#o.skills?.()) ?? []);
-      const offeredNow = toolsFor(this.#mode, this.#tools, { small, userText: this.#userText(), jobs: this.#jobs.running, steps: step, chat: this.#kind === "chat", typable: this.#jobs.typable, skills: skills.length, recall: this.#o.recall !== undefined });
+      const offeredNow = toolsFor(this.#mode, this.#on, { small, userText: this.#userText(), jobs: this.#jobs.running, steps: step, chat: this.#kind === "chat", typable: this.#jobs.typable, skills: skills.length, recall: this.#o.recall !== undefined });
       // A tool the model has used stays offered. Of the others, the ones that are not offered are named in the prompt, and a call to one of
       // them is run, not refused: the words that bring a tool in (the web, a helper) are a guess about the request, and a guess can be wrong.
       const allowedNow = (t: Tool): boolean => this.#mode !== "plan" || t.readOnly;
-      const tools = [...offeredNow, ...this.#tools.filter((t) => this.#called.has(t.name) && allowedNow(t) && !offeredNow.some((o) => o.name === t.name))];
+      const tools = [...offeredNow, ...this.#on.filter((t) => this.#called.has(t.name) && allowedNow(t) && !offeredNow.some((o) => o.name === t.name))];
       const news = this.#jobs.news();
       const finished = news.flatMap(jobLines);
       // Named only where they can work: earlier conversations, and skills the agent may change, exist only in some places.
       const usable = (t: Tool): boolean => (t.name === "Recall" ? this.#o.recall !== undefined : t.name === "SkillManage" ? this.#o.skillBook !== undefined && this.#kind !== "chat" : true);
-      const also = this.#tools.filter((t) => EXTRA.has(t.name) && usable(t) && allowedNow(t) && !tools.some((o) => o.name === t.name)).map((t) => t.name);
+      const also = this.#on.filter((t) => EXTRA.has(t.name) && usable(t) && allowedNow(t) && !tools.some((o) => o.name === t.name)).map((t) => t.name);
       const instructions = attempt(() => this.#o.instructions?.());
       const written = new TextToolCalls(Object.fromEntries(tools.map((t) => [t.name, t.parameters as { properties?: Record<string, { type?: string }> }])), `text${this.#messages.length}_`);
       let thinkingSince: number | undefined;
@@ -882,7 +891,7 @@ export class Engine implements AgentEngine {
     const limits = this.#o.helperLimits ?? {};
     const copy = writes && def?.isolation === "worktree" ? await isolate(this.#o.cwd) : undefined;
     if (copy && "error" in copy) return `Error: ${copy.error}`;
-    const allowed = def?.tools ? this.#tools.filter((t) => def.tools!.includes(t.name) && !NOT_FOR_HELPERS.has(t.name) && (writes || t.readOnly)) : this.#tools.filter((t) => t.readOnly && !NOT_FOR_HELPERS.has(t.name));
+    const allowed = def?.tools ? this.#on.filter((t) => def.tools!.includes(t.name) && !NOT_FOR_HELPERS.has(t.name) && (writes || t.readOnly)) : this.#on.filter((t) => t.readOnly && !NOT_FOR_HELPERS.has(t.name));
     const own = new AbortController();
     let late = false;
     const timer = setTimeout(() => { late = true; own.abort(); }, (limits.seconds ?? HELPER_SECONDS) * 1000);
@@ -921,15 +930,40 @@ export class Engine implements AgentEngine {
     const wanted = ALIASES[name.toLowerCase()] ?? name;
     const exact = offered.find((t) => t.name === wanted) ?? offered.find((t) => squash(t.name) === squash(wanted));
     if (exact) return exact;
-    const known = this.#tools.find((t) => t.name === wanted) ?? this.#tools.find((t) => squash(t.name) === squash(wanted));
+    const known = this.#on.find((t) => t.name === wanted) ?? this.#on.find((t) => squash(t.name) === squash(wanted));
     return known && (this.#mode !== "plan" || known.readOnly) ? known : undefined;
   }
 
-  async #runTool(call: ToolCall, offered: Tool[]): Promise<string> {
+  /**
+   * What a script running as `parent` may call: the tools the model itself was offered (the program's own and connected ones), each as its
+   * own step shown under the script's and through every check a call of the model meets. Not the script tool itself, and not a tool that
+   * is known but was not offered: a script gets no reach the model lacks.
+   */
+  #within(parent: ToolCall, offered: Tool[]): NonNullable<ToolContext["call"]> {
+    let n = 0;
+    const reachable = offered.filter((t) => t.name !== EXECUTE_CODE_TOOL);
+    return async (name, args) => {
+      if (!reachable.some((t) => t.name === name)) return { ok: false, text: `Error: a script cannot call ${name || "that"}. It can call: ${reachable.map((t) => t.name).join(", ")}.` };
+      let failed = false;
+      const text = await this.#runTool({ id: `${parent.id}.${++n}`, name, arguments: JSON.stringify(args) }, offered, { parent: parent.id, ended: (f) => { failed = f; } });
+      return { ok: !failed, text };
+    };
+  }
+
+  /**
+   * Runs one tool call through every check there is. `nested` is a call made by a tool that is itself a program (a script): it is shown
+   * under that tool's step, tells its caller how it ended, and is not cut to the window, since the script decides what reaches the model.
+   */
+  async #runTool(call: ToolCall, offered: Tool[], nested?: { parent: string; ended: (failed: boolean) => void }): Promise<string> {
     let t0 = Date.now();
-    const fail = (message: string, outcome?: ToolOutcome): string => { this.#emit({ ev: "tool", id: call.id, name: call.name, status: "error", output: message, startedAt: t0, ms: Date.now() - t0, ...(outcome ? { outcome } : {}) }); return message; };
+    const emit = (e: EngineEvent): void => {
+      if (nested && e.ev === "tool") { if (e.status !== "running") nested.ended(e.status === "error"); this.#emit({ ...e, parent: nested.parent }); } else this.#emit(e);
+    };
+    const fail = (message: string, outcome?: ToolOutcome): string => { emit({ ev: "tool", id: call.id, name: call.name, status: "error", output: message, startedAt: t0, ms: Date.now() - t0, ...(outcome ? { outcome } : {}) }); return message; };
     const tool = this.#toolFor(call.name, offered);
     if (tool) this.#called.add(tool.name);
+    const off = tool ? undefined : this.#tools.find((t) => !this.#on.includes(t) && (t.name === call.name || squash(t.name) === squash(call.name)));
+    if (off) return fail(`Error: the tool ${off.name} is turned off by the person. Do not look for a way around it: say what you could not do.`);
     if (!tool) return fail(`Error: there is no tool "${call.name}". Use one of: ${offered.map((t) => t.name).join(", ")}${this.#mode === "plan" ? " (plan mode only allows reading)" : ""}.${offered.some((t) => t.name === "Bash") ? ' To run a command: Bash {"command": "ls -la"}' : ""}`);
 
     let args = parseLenient(call.arguments);
@@ -939,7 +973,7 @@ export class Engine implements AgentEngine {
     if (missing.length) return fail(`Error: ${tool.name} needs ${missing.join(", ")}: ${exampleArguments(tool.parameters)}. Send the call again with it.`);
     const bad = FILE_WRITERS.has(tool.name) ? this.#vault.restore(textOf(args)).unknown : [];
     if (bad.length) return fail(`Error: ${bad[0]} is not a value you can write: it stands for a secret you were not shown, or one this conversation does not know any more. To keep a value as it is, write the [hidden:N] mark that Read gave for it; otherwise ask the person for the value.`);
-    this.#emit({ ev: "tool", id: call.id, name: tool.name, status: "running", input: this.#shown(args) });
+    emit({ ev: "tool", id: call.id, name: tool.name, status: "running", input: this.#shown(args) });
 
     // What a mode means for this call is decided in one place for every engine.
     const judged = judge({ mode: this.#mode, tool, args, cwd: this.#o.cwd, rules: this.#o.rules, allowed: this.#allowed, knownUrl: (u) => this.#knownUrl(u), readable: this.#readable() });
@@ -962,7 +996,7 @@ export class Engine implements AgentEngine {
           if (again) return fail(`Blocked: ${again}. navvied never does this.`, "blocked");
           const rule = this.#o.rules?.check(tool.name, args);
           if (rule?.kind === "deny") return fail(`Blocked by the permission rule ${rule.rule}.`, "blocked");
-          this.#emit({ ev: "tool", id: call.id, name: tool.name, status: "running", input: this.#shown(args) });
+          emit({ ev: "tool", id: call.id, name: tool.name, status: "running", input: this.#shown(args) });
         } else if (given.optionId !== ALLOW && given.optionId !== EDIT) {
           // A no may carry what the person wants instead: the model is told in their words (a secret they typed stays hidden), not only that it was refused.
           const said = given.input?.trim();
@@ -982,25 +1016,25 @@ export class Engine implements AgentEngine {
 
     // What a command prints is passed on a little at a time; how it ended is reported by the tool.
     let pending = "", sent = 0, timer: ReturnType<typeof setTimeout> | undefined;
-    const flush = (): void => { timer = undefined; if (pending) { this.#emit({ ev: "tool", id: call.id, name: tool.name, status: "running", live: pending }); pending = ""; } };
+    const flush = (): void => { timer = undefined; if (pending) { emit({ ev: "tool", id: call.id, name: tool.name, status: "running", live: pending }); pending = ""; } };
     // What a running command prints is made safe as it arrives, before it reaches an event.
     const safe = new Redactor();
     const live = (raw: string): void => { const chunk = safe.push(raw); if (!chunk || sent > LIVE_MOST) return; sent += chunk.length; pending += chunk; timer ??= setTimeout(flush, LIVE_EVERY_MS); };
     let meta: { code?: number | null; truncated?: boolean; timedOut?: boolean; background?: boolean; cached?: boolean } = {};
     let output: string;
     try {
-      output = await tool.run(this.#restored(tool.name, args), { cwd: this.#o.cwd, ...(isConfined(this.#kind) ? { root: this.#o.cwd } : {}), signal: this.#abort.signal, emit: (e) => { if (e.ev === "plan") { this.#todos = e.entries; this.#sinceTodo = 0; } this.#emit(e.ev === "plan" ? { ...e, ...(this.#turnQid ? { qid: this.#turnQid } : {}), tool: call.id } : e); }, ask: (q, s) => this.#askPerson(q, s, call.id), live, report: (m) => { meta = { ...meta, ...m }; }, allowPrivateNetwork: this.#o.allowPrivateNetwork, window: this.#window, shell: this.#shell, jobs: this.#jobs, env: childEnv(process.env, this.#o.env), ...(this.#o.backend ? { backend: this.#o.backend } : {}), ...(this.#o.recall ? { recall: this.#o.recall } : {}), ...(this.#o.search ? { search: this.#o.search } : {}), ...(this.#o.webProxy ? { webProxy: this.#o.webProxy } : {}), ...(this.#o.skills ? { skills: this.#o.skills } : {}), ...(this.#o.memory ? { memory: this.#o.memory } : {}), helper: (task, signal) => this.#delegate(call.id, task, signal), files: this.#files, show: (p) => { this.#pictures.push(p); }, ...(this.#vision !== undefined ? { vision: this.#vision } : {}), mode: this.#mode, ...(this.#webSeen ? { untrusted: true } : {}), ...(this.#o.skillBook ? { skillBook: this.#o.skillBook } : {}), ...(this.#o.skillApproval ? { skillApproval: this.#o.skillApproval } : {}) });
+      output = await tool.run(this.#restored(tool.name, args), { cwd: this.#o.cwd, ...(isConfined(this.#kind) ? { root: this.#o.cwd } : {}), signal: this.#abort.signal, emit: (e) => { if (e.ev === "plan") { this.#todos = e.entries; this.#sinceTodo = 0; } this.#emit(e.ev === "plan" ? { ...e, ...(this.#turnQid ? { qid: this.#turnQid } : {}), tool: call.id } : e); }, ask: (q, s) => this.#askPerson(q, s, call.id), live, report: (m) => { meta = { ...meta, ...m }; }, allowPrivateNetwork: this.#o.allowPrivateNetwork, window: this.#window, shell: this.#shell, jobs: this.#jobs, env: childEnv(process.env, this.#o.env), ...(this.#o.backend ? { backend: this.#o.backend } : {}), ...(this.#o.recall ? { recall: this.#o.recall } : {}), ...(this.#o.search ? { search: this.#o.search } : {}), ...(this.#o.webProxy ? { webProxy: this.#o.webProxy } : {}), ...(this.#o.skills ? { skills: this.#o.skills } : {}), ...(this.#o.memory ? { memory: this.#o.memory } : {}), helper: (task, signal) => this.#delegate(call.id, task, signal), files: this.#files, show: (p) => { this.#pictures.push(p); }, ...(this.#vision !== undefined ? { vision: this.#vision } : {}), mode: this.#mode, ...(this.#webSeen ? { untrusted: true } : {}), ...(this.#o.skillBook ? { skillBook: this.#o.skillBook } : {}), ...(this.#o.skillApproval ? { skillApproval: this.#o.skillApproval } : {}), call: this.#within(call, offered), keep: (key, make) => { let v = this.#kept.get(key); if (!v) { v = make(); this.#kept.set(key, v); } return v as ReturnType<typeof make>; } });
     } catch (e) { output = `Error: ${e instanceof Error ? e.message : String(e)}`; }
     clearTimeout(timer);
     flush();
     // Whatever a tool gave, no more than the window can spare reaches the model.
     if (tool.name === "Read" || tool.name === "Grep" || FILE_WRITERS.has(tool.name)) output = this.#unseen(output);
-    output = withinBudget(tool.name, output, this.#window);
+    if (!nested) output = withinBudget(tool.name, output, this.#window);
     if (WEB_TOOLS.has(tool.name)) this.#webSeen = true;
     const stopped = this.#abort.signal.aborted || output.endsWith("[interrupted]");
     const outcome: ToolOutcome | undefined = meta.timedOut ? "timeout" : stopped ? "stopped" : meta.background ? "background" : undefined;
     const failed = output.startsWith("Error:") || outcome === "timeout" || outcome === "stopped";
-    this.#emit({ ev: "tool", id: call.id, name: tool.name, status: failed ? "error" : "done", output, startedAt: t0, ms: Date.now() - t0, ...(meta.code !== undefined ? { code: meta.code } : {}), ...(meta.truncated ? { truncated: true as const } : {}), ...(meta.cached ? { cached: true as const } : {}), ...(outcome ? { outcome } : {}) });
+    emit({ ev: "tool", id: call.id, name: tool.name, status: failed ? "error" : "done", output, startedAt: t0, ms: Date.now() - t0, ...(meta.code !== undefined ? { code: meta.code } : {}), ...(meta.truncated ? { truncated: true as const } : {}), ...(meta.cached ? { cached: true as const } : {}), ...(outcome ? { outcome } : {}) });
     if (this.#o.hooks) for (const note of (await this.#o.hooks.post({ tool: tool.name, input: args, output }, this.#abort.signal).catch(() => ({ notes: [] as string[] }))).notes) this.#emit({ ev: "notice", msg: note });
     return output;
   }

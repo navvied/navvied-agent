@@ -1,0 +1,24 @@
+{
+  "id": "mc2-first-account",
+  "title": "The tickets of the first account in the list",
+  "kind": "agent",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun",
+    "python3"
+  ],
+  "prompt": "Take the first account on the first page of the accounts list. Write the ids of its support tickets to tickets.txt, one per line.",
+  "check": "bun \"$BENCH_FIXTURES/mc2-check.ts\" first-account",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 120,
+  "timeoutSeconds": 900,
+  "mcp": {
+    "records": {
+      "fixture": "mcp-records.ts"
+    }
+  }
+}

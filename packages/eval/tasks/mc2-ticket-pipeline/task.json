@@ -1,0 +1,24 @@
+{
+  "id": "mc2-ticket-pipeline",
+  "title": "From open chargeback tickets to a report of unpaid invoices",
+  "kind": "agent",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun",
+    "python3"
+  ],
+  "prompt": "Find the support tickets that mention a chargeback and are still open. For each, look up its account's region and the total of that account's invoices whose status is open or overdue. Write report.csv with the header ticket,account,region,unpaid_cents and one row per ticket, sorted by ticket id.",
+  "check": "bun \"$BENCH_FIXTURES/mc2-check.ts\" ticket-pipeline",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 120,
+  "timeoutSeconds": 900,
+  "mcp": {
+    "records": {
+      "fixture": "mcp-records.ts"
+    }
+  }
+}

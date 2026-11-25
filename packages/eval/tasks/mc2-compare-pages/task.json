@@ -1,0 +1,29 @@
+{
+  "id": "mc2-compare-pages",
+  "title": "Find the one status page that differs",
+  "kind": "agent",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun",
+    "python3"
+  ],
+  "prompt": "The address of a server is in docs-url.txt. Its pages /status/1 to /status/12 each describe one node and list its settings. Eleven of them have the same cache_ttl_seconds and one differs. Write ANSWER.txt with one line: the page number, a space, and that page's cache_ttl_seconds.",
+  "check": "bun \"$BENCH_FIXTURES/mc2-check.ts\" compare-pages",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 120,
+  "timeoutSeconds": 900,
+  "mcp": {
+    "records": {
+      "fixture": "mcp-records.ts"
+    }
+  },
+  "setup": "bun \"$BENCH_FIXTURES/start-web.ts\" && echo \"http://127.0.0.1:$(cat .bench-port)\" > docs-url.txt",
+  "teardown": "bun \"$BENCH_FIXTURES/stop-web.ts\"",
+  "env": {
+    "NAVVIED_ALLOW_PRIVATE_NETWORK": "1"
+  }
+}

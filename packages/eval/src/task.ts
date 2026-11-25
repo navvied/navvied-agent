@@ -18,6 +18,8 @@ export interface Task {
   teardown?: string;
   /** Added to the environment of the agent. `{port}` is the port the setup left in `.bench-port`, for the tasks that start a fixture web. */
   env?: Record<string, string>;
+  /** MCP servers the agent is given for this task: each is a program of the fixtures folder (`fixture`), started by the agent itself from its own configuration, which the harness writes for the run. */
+  mcp?: Record<string, { fixture: string }>;
   /** Takes minutes: run only when asked for. */
   slow: boolean;
   prompt: string;
@@ -42,6 +44,7 @@ export interface Task {
 export interface ScriptedCall { tool: string; args: Record<string, unknown> }
 
 const isString = (v: unknown): v is string => typeof v === "string" && v.length > 0;
+const isMcp = (v: unknown): v is NonNullable<Task["mcp"]> => !!v && typeof v === "object" && !Array.isArray(v) && Object.values(v).every((e) => !!e && typeof e === "object" && isString((e as { fixture?: unknown }).fixture));
 
 export function loadTask(dir: string): Task {
   const raw = JSON.parse(readFileSync(join(dir, "task.json"), "utf8")) as Record<string, unknown>;
@@ -59,6 +62,7 @@ export function loadTask(dir: string): Task {
     ...(isString(raw.setup) ? { setup: raw.setup } : {}),
     ...(isString(raw.teardown) ? { teardown: raw.teardown } : {}),
     ...(raw.env && typeof raw.env === "object" && !Array.isArray(raw.env) ? { env: Object.fromEntries(Object.entries(raw.env as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string")) } : {}),
+    ...(isMcp(raw.mcp) ? { mcp: raw.mcp } : {}),
     ...(script ? { script } : {}),
     slow: raw.slow === true,
     ...(Array.isArray(raw.answers) ? { answers: raw.answers.filter(isString) } : {}),
@@ -91,6 +95,10 @@ export function filesOf(dir: string): Record<string, string> {
 }
 
 export const repoFiles = (task: Task): Record<string, string> => filesOf(join(task.dir, "repo"));
+/** The reference solution written as a script for the code tool (`code.py`, with the stubs of `navvied_tools`): it is not laid over the workspace, the scripted model sends it. */
+export const SOLUTION_SCRIPT = "code.py";
+const solutionFilesOf = (task: Task): Record<string, string> => { const files = filesOf(join(task.dir, "solution")); delete files[SOLUTION_SCRIPT]; return files; };
+export const solutionScript = (task: Task): string | undefined => { try { return readFileSync(join(task.dir, "solution", SOLUTION_SCRIPT), "utf8"); } catch { return undefined; } };
 /**
  * The solution's files. A file may hold `{{answer1}}`, `{{answer2}}` (what the person answered) and `{{helper1}}`, `{{helper2}}` (what a
  * helper reported): the validator fills them with the task's own values, the scripted model with what it was really told.
@@ -98,5 +106,5 @@ export const repoFiles = (task: Task): Record<string, string> => filesOf(join(ta
 export function solutionFiles(task: Task, values: { answers?: readonly string[]; helpers?: readonly string[] } = {}): Record<string, string> {
   const answers = values.answers ?? task.answers ?? [], helpers = values.helpers ?? task.oracle?.helpers?.map((h) => h.says) ?? [];
   const fill = (text: string): string => text.replace(/\{\{(answer|helper)(\d)\}\}/g, (_, kind: string, n: string) => (kind === "answer" ? answers : helpers)[Number(n) - 1] ?? "(none)");
-  return Object.fromEntries(Object.entries(filesOf(join(task.dir, "solution"))).map(([name, text]) => [name, fill(text)]));
+  return Object.fromEntries(Object.entries(solutionFilesOf(task)).map(([name, text]) => [name, fill(text)]));
 }

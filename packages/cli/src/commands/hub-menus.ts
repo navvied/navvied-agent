@@ -11,6 +11,7 @@ import { paint } from "../render.ts";
 import { HubLink } from "../providers/link.ts";
 import { Kit } from "../providers/kit.ts";
 import { providersScreen } from "../providers/index.ts";
+import { toolsScreen } from "../tools-screen.ts";
 
 type Say = (text: string) => void;
 type Row = { label: string; hint?: string };
@@ -149,31 +150,10 @@ export function hubMenus(c: MenuContext) {
       });
     },
 
-    /** `/tools`: what the agent can do on this computer, each set on or off for the next new conversation, and where commands run. */
-    tools(): void {
-      ask("tools", { cmd: "tools" }, async (e) => {
-        const using = e.backends.find((b) => b.using) ?? e.backends[0];
-        const rows = [
-          ...e.sets.map((x) => ({ label: `${x.enabled ? "on " : "off"}  ${x.title}`, hint: `${x.tools.length} tool${x.tools.length === 1 ? "" : "s"}, used ${x.calls} time${x.calls === 1 ? "" : "s"}: ${x.about}` })),
-          { label: `    Where commands run: ${using?.label ?? "This computer"}`, hint: "Choose this computer, a container, or another computer" },
-        ];
-        const picked = await choose("Switch which?", "What the agent can do here (Enter switches one, from the next new conversation)", rows);
-        if (picked === undefined) { c.marker(); return; }
-        const set = e.sets[picked];
-        if (set) {
-          send({ cmd: "tool.toggle", name: set.id, enabled: !set.enabled });
-          c.say(`${paint(io.color, "cyan", "✓")} ${set.title} is now ${set.enabled ? "off" : "on"} (from the next new conversation).${set.enabled && set.id !== "web" ? " Without it the agent can do much less." : ""}`);
-          c.marker();
-          return;
-        }
-        const where = await choose("Where should commands run?", "Only commands move; files are still read and written here", e.backends.map((b) => ({ label: `${b.using ? "● " : "  "}${b.label}${b.ready ? "" : "  (needs setup)"}`, hint: b.hint ?? b.about })));
-        const b = where === undefined ? undefined : e.backends[where];
-        if (!b) { c.marker(); return; }
-        if (!b.ready) { c.say(b.hint ?? "That place is not available."); c.marker(); return; }
-        send({ cmd: "terminal.use", backend: b.id });
-        c.say(`${paint(io.color, "cyan", "✓")} Commands will run on ${b.label.toLowerCase()} (from the next new conversation).`);
-        c.marker();
-      });
+    /** `/tools`: every tool with its own switch, under its heading, and where commands run. */
+    async tools(): Promise<void> {
+      await toolsScreen(new Kit(io, link, c.say, c.switching));
+      c.marker();
     },
 
     /** `/artifacts`: the files this computer's conversations wrote, and showing one. */

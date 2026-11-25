@@ -89,7 +89,7 @@ describe("the tools of the agent", () => {
     expect(last().backends.find((b) => b.using)!.id).toBe("local");
     send({ cmd: "tool.toggle", name: "Browser", enabled: false });
     await until(() => last().items.find((t) => t.name === "Browser")!.enabled === false);
-    expect(new PluginState(pluginStatePath(env)).disabled().has("tool:Browser")).toBe(true);
+    expect(new PluginState(pluginStatePath(env)).disabled().has("tool:browser")).toBe(true);
     send({ cmd: "tool.toggle", name: "terminal", enabled: false });
     await until(() => last().sets.find((x) => x.id === "terminal")!.enabled === false);
     expect(last().items.filter((t) => ["Bash", "BashOutput", "BashInput", "KillShell"].includes(t.name)).every((t) => !t.enabled)).toBe(true);

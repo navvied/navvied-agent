@@ -7,6 +7,8 @@
 const HIDDEN = "[hidden]";
 const NAME = /(KEY|TOKEN|SECRET|PASSW(OR)?D|CREDENTIAL|PRIVATE|AUTH)/i;
 /** Short values (a flag, a number) are not keys, and a path is not either (SSH_AUTH_SOCK). */
+/** Whether a variable's name says it holds a secret. */
+export const isSecretName = (name: string): boolean => NAME.test(name);
 const worth = (value: string): boolean => value.length >= 8 && !value.startsWith("/") && !/\s/.test(value);
 
 const registered = new Set<string>();

@@ -1,0 +1,18 @@
+{
+  "id": "mc-config-diff",
+  "title": "Compare two folders of forty config files",
+  "kind": "terminal",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "python3"
+  ],
+  "prompt": "The folders old/ and new/ each hold 40 config files with the same names: lines of key = value (spaces around = do not matter, key order does not matter, # starts a comment). Write diff.csv with the header file,key,old,new and a row for each key whose value differs between old/ and new/ (a key in only one folder has an empty old or new), sorted by file name, then key, in plain text order.",
+  "check": "python3 \"$BENCH_FIXTURES/mc.py\" check config-diff",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 80,
+  "timeoutSeconds": 600,
+  "setup": "python3 \"$BENCH_FIXTURES/mc.py\" setup config-diff"
+}

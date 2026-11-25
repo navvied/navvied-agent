@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { argsOf, freePort, readNote, reapOrphan, startServer } from "../src/llama-server.ts";
+import { argsOf, readNote, reapOrphan, startServer } from "../src/llama-server.ts";
 import { remove, tempDir, until } from "./helpers.ts";
 
 const dirs: string[] = [];
@@ -20,16 +20,8 @@ function fakeBinary(d: string): string {
 const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 describe("the arguments", () => {
-  test("the model, the context, the layers on the card, this computer only, a port asked of the system, the template engine, a name, one slot", () => {
+  test("the model, the context, the layers on the card, this computer only, port 0 so the server picks its own, the template engine, a name, one slot", () => {
     expect(argsOf({ model: "/m/x.gguf", window: 16384, layers: 0, alias: "x" }, 4242)).toEqual(["-m", "/m/x.gguf", "-c", "16384", "-ngl", "0", "--host", "127.0.0.1", "--port", "4242", "--jinja", "-a", "x", "-np", "1"]);
-  });
-
-  test("a port is one that nothing listens on", async () => {
-    const a = await freePort();
-    expect(a).toBeGreaterThan(1023);
-    const s = Bun.serve({ port: a, hostname: "127.0.0.1", fetch: () => new Response("") });
-    expect(await freePort()).not.toBe(a);
-    s.stop(true);
   });
 });
 
@@ -42,7 +34,7 @@ describe.skipIf(win)("a server that is started", () => {
     expect(s.url).toBe(`http://127.0.0.1:${s.port}`);
     expect(await (await fetch(`${s.url}/health`)).json()).toEqual({ status: "ok" });
     const given = JSON.parse(readFileSync(argsFile, "utf8")) as { args: string[] };
-    expect(given.args).toEqual(argsOf({ model: join(d, "m.gguf"), window: 4096, layers: 0, alias: "tiny" }, s.port));
+    expect(given.args).toEqual(argsOf({ model: join(d, "m.gguf"), window: 4096, layers: 0, alias: "tiny" }, 0));
     expect(readNote(join(d, "server.json"))).toMatchObject({ pid: s.pid, port: s.port, binary: fakeBinary(d) });
     await s.stop();
     expect(alive(s.pid)).toBe(false);

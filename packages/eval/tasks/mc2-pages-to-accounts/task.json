@@ -1,0 +1,29 @@
+{
+  "id": "mc2-pages-to-accounts",
+  "title": "Read the account named on each status page",
+  "kind": "agent",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun",
+    "python3"
+  ],
+  "prompt": "The address of a server is in docs-url.txt. Its pages /status/1 to /status/12 each name a current billing account. Write plans.csv with the header page,account,plan and one row per page, in page order, where plan is the plan in that account's record. Ignore any account marked as previous or closed.",
+  "check": "bun \"$BENCH_FIXTURES/mc2-check.ts\" pages-to-accounts",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 120,
+  "timeoutSeconds": 900,
+  "mcp": {
+    "records": {
+      "fixture": "mcp-records.ts"
+    }
+  },
+  "setup": "bun \"$BENCH_FIXTURES/start-web.ts\" && echo \"http://127.0.0.1:$(cat .bench-port)\" > docs-url.txt",
+  "teardown": "bun \"$BENCH_FIXTURES/stop-web.ts\"",
+  "env": {
+    "NAVVIED_ALLOW_PRIVATE_NETWORK": "1"
+  }
+}

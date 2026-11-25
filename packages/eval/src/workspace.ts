@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";
 import { dirname, join, sep, win32 } from "node:path";
@@ -48,6 +48,20 @@ export const FIXTURES = join(import.meta.dir, "..", "fixtures");
 
 /** The environment of a task's own scripts: this run's secret and the fixtures. */
 export const scriptEnv = (secret: Record<string, string>): Record<string, string> => ({ ...secret, BENCH_FIXTURES: FIXTURES });
+
+/**
+ * The configuration of an agent for a task that declares MCP servers, in a folder of its own outside the workspace: the agent starts each
+ * server itself, from this file, and stops it when the run ends. `NAVVIED_CONFIG` points at it, so the person's own configuration is
+ * never read or written. Nothing is written for a task without servers.
+ */
+export function mcpConfig(task: Task): { env: Record<string, string>; remove(): void } {
+  if (!task.mcp) return { env: {}, remove: () => undefined };
+  const dir = mkdtempSync(join(tmpdir(), "navvied-eval-config-"));
+  const mcp = Object.fromEntries(Object.entries(task.mcp).map(([name, s]) => [name, { command: process.execPath, args: [join(FIXTURES, s.fixture)] }]));
+  const path = join(dir, "config.json");
+  writeFileSync(path, JSON.stringify({ models: {}, guestModels: false, mcp }), { mode: 0o600 });
+  return { env: { NAVVIED_CONFIG: path }, remove: () => rmSync(dir, { recursive: true, force: true }) };
+}
 
 /** What the agent is given besides the usual: the task's own variables, with the fixture port in them. */
 export function taskEnv(dir: string, task: Task): Record<string, string> {

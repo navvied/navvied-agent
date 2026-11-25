@@ -17,7 +17,7 @@ export { compactMessages, estimateTokens, shouldCompact, COMPACT_AT } from "./co
 export { needsApproval, toolsFor } from "./permissions.ts";
 export { onlyLooks, riskOf, type Risk } from "./risk.ts";
 export { isConfined, profileTools } from "./profiles.ts";
-export { defaultTools, PLAN_TOOL_NAME } from "./tools/index.ts";
+export { defaultTools, executeCode, PLAN_TOOL_NAME } from "./tools/index.ts";
 export { isPrivateHost } from "./tools/web-fetch.ts";
 export { parseHtmlResults, parseJsonResults, type SearchHit } from "./tools/web-search.ts";
 export type { Message, ModelReply, ModelRequest, Part, Provider, Recall, SessionStore, StreamHandlers, Tool, ToolCall, ToolContext, ToolSpec, WebProxy } from "./types.ts";

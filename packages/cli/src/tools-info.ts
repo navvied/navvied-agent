@@ -1,7 +1,8 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { defaultTools, type Tool } from "@navvied/engine";
-import type { ToolInfo, ToolSetInfo } from "@navvied/protocol";
+import type { ToolEntry, ToolInfo, ToolSetInfo, ToolState } from "@navvied/protocol";
+import { CATEGORIES, TOOL_ROWS, rowOf, type ToolRow } from "./tool-table.ts";
 import type { PluginState } from "./plugins.ts";
 
 type Access = ToolInfo["access"];
@@ -58,10 +59,10 @@ export class ToolUsage {
 
 /** Every tool of the agent as a list shows it. A tool with no words of its own is still listed, under its own name. */
 export function listTools(state: PluginState, usage: ToolUsage, tools: readonly Tool[] = defaultTools()): ToolInfo[] {
-  const off = state.disabled(), counts = usage.counts();
+  const counts = usage.counts(), toolOn = toolSwitch(state);
   return tools.map((t): ToolInfo => {
     const w = WORDS[t.name];
-    return { name: t.name, title: w?.title ?? t.name, about: w?.about ?? t.description.split(/(?<=\.)\s/)[0]!.slice(0, 160), access: w?.access ?? (t.readOnly ? "read" : "change"), enabled: !off.has(toolId(t.name)), core: w?.core === true, small: w?.small === true, calls: counts[t.name] ?? 0, set: w?.set ?? "helpers" };
+    return { name: t.name, title: w?.title ?? t.name, about: w?.about ?? t.description.split(/(?<=\.)\s/)[0]!.slice(0, 160), access: w?.access ?? (t.readOnly ? "read" : "change"), enabled: toolOn(t.name), core: w?.core === true, small: w?.small === true, calls: counts[t.name] ?? 0, set: w?.set ?? "helpers" };
   });
 }
 
@@ -75,6 +76,50 @@ export function listSets(items: readonly ToolInfo[]): ToolSetInfo[] {
 
 /** The tools to give a new conversation: everything except what the person switched off. */
 export function activeTools(state: PluginState, tools: readonly Tool[] = defaultTools()): Tool[] {
-  const off = state.disabled();
-  return tools.filter((t) => !off.has(toolId(t.name)));
+  const on = toolSwitch(state);
+  return tools.filter((t) => on(t.name));
+}
+
+/** What is true of a tool that only this computer can say: it waits for something the person must connect, or exists but cannot run in this place. */
+export type Availability = (row: ToolRow) => "needs-setup" | "unavailable-here" | undefined;
+
+/** Whether a row is switched on: its own switch, or (from before the rows) the switches of all its tools. An experimental row is on only when the person said so. */
+function rowOn(off: ReadonlySet<string>, on: ReadonlySet<string>, row: ToolRow): boolean {
+  if (off.has(toolId(row.id))) return false;
+  if (row.names.length && row.names.every((n) => off.has(toolId(n)))) return false;
+  return row.experimental ? on.has(toolId(row.id)) : true;
+}
+
+/** Every tool with its own switch, by category, and what state it is in. A row whose tools the engine does not have is listed as unavailable. */
+export function listEntries(state: PluginState, usage: ToolUsage, tools: readonly Tool[] = defaultTools(), availability: Availability = () => undefined, setups: ReadonlySet<string> = new Set()): ToolEntry[] {
+  const off = state.disabled(), counts = usage.counts(), on = state.enabledExplicitly();
+  const have = new Set(tools.map((t) => t.name));
+  const order = (id: string): number => CATEGORIES.findIndex((c) => c.id === id);
+  return [...TOOL_ROWS].sort((a, b) => order(a.category) - order(b.category)).map((row): ToolEntry => {
+    const own = row.names.filter((n) => have.has(n));
+    const switched = rowOn(off, on, row);
+    const asked = availability(row);
+    // What a tool is decides its state: one that does not exist yet is soon, one that is experimental is experimental on every computer (the switch says whether it is used), and only the rest depend on this computer.
+    const status: ToolState = row.names.length === 0 ? "soon" : row.experimental ? "experimental" : own.length === 0 || asked === "unavailable-here" ? "unavailable-here" : !switched ? "off" : asked === "needs-setup" ? "needs-setup" : "on";
+    return { id: row.id, category: row.category, names: [...row.names], title: row.title, about: row.about, on: switched, state: status, ...(setups.has(row.id) ? { setup: true as const } : {}), calls: row.names.reduce((n, name) => n + (counts[name] ?? 0), 0) };
+  });
+}
+
+/** The row a name stands for: a row id, or the name of one of its tools. */
+export const resolveRow = (name: string): ToolRow | undefined => TOOL_ROWS.find((r) => r.id === name) ?? rowOf(name);
+
+/** Switches one row, and takes back what the switches of its single tools said before there were rows. */
+export function switchRow(state: PluginState, row: ToolRow, enabled: boolean): void {
+  for (const n of row.names) state.forget(toolId(n));
+  state.set(toolId(row.id), enabled);
+}
+
+/** The test the engine asks before it offers or runs a tool: a tool with no row of its own (a connected program's) is always allowed. */
+export function toolSwitch(state: PluginState): (name: string) => boolean {
+  return (name) => {
+    const off = state.disabled(), row = rowOf(name);
+    // What was said about this one tool before there were rows still holds for it.
+    if (off.has(toolId(name))) return false;
+    return row ? rowOn(off, state.enabledExplicitly(), row) : true;
+  };
 }

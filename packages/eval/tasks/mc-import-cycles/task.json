@@ -1,0 +1,18 @@
+{
+  "id": "mc-import-cycles",
+  "title": "Find the modules that import each other in a circle",
+  "kind": "terminal",
+  "level": 3,
+  "lang": "none",
+  "requires": [
+    "python3"
+  ],
+  "prompt": "src/ holds 30 modules (.ts files). A line with from \"./name\" or require(\"./name\") makes a module depend on name; a line that starts with // is a comment and counts for nothing. Write cycles.txt: the names of all modules (the file name without .ts) that take part in a cycle of imports, one on each line, in alphabetical order.",
+  "check": "python3 \"$BENCH_FIXTURES/mc.py\" check import-cycles",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 80,
+  "timeoutSeconds": 600,
+  "setup": "python3 \"$BENCH_FIXTURES/mc.py\" setup import-cycles"
+}

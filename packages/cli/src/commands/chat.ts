@@ -13,7 +13,7 @@ import { makeSuggest } from "../complete.ts";
 import { SLASH_COMMANDS } from "../slash.ts";
 import type { Created } from "../create.ts";
 import { askApproval, askPlan } from "../approval-ui.ts";
-import { askQuestions } from "../question-ui.ts";
+import { answeredLines, askQuestions } from "../question-ui.ts";
 import { effortLabel, effortRows, modelRows } from "../model-ui.ts";
 import { Presenter } from "../presenter.ts";
 import { createHub } from "./hub.ts";
@@ -243,6 +243,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
 
   const answerQuestion = async (e: Extract<EngineEvent, { ev: "question" }>): Promise<void> => {
     const answers = await askQuestions(io, e);
+    for (const line of answeredLines(io.color, e, answers)) say(line);
     current?.engine.handle({ cmd: "answer", id: e.id, answers });
   };
 

@@ -22,9 +22,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      # As the installer build does it, so what is measured is what ships.
-      - name: Turn off Spotlight indexing
-        run: sudo mdutil -a -i off
       - name: Make disk images, each way, and count the failures
         env:
           ROUNDS: ${{ inputs.rounds || '12' }}

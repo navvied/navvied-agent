@@ -419,7 +419,7 @@ export function resolveModel(choice: string | undefined, file: ConfigFile | null
   }
   if (env.NAVVIED_BASE_URL && env.NAVVIED_MODEL) {
     const window = Number(env.NAVVIED_WINDOW);
-    return { ok: true, value: toResolved(env.NAVVIED_MODEL, { baseUrl: env.NAVVIED_BASE_URL, model: env.NAVVIED_MODEL, ...(env.NAVVIED_API_KEY ? { apiKey: env.NAVVIED_API_KEY } : {}), ...(window > 0 ? { window } : {}) }, env) };
+    return { ok: true, value: toResolved(env.NAVVIED_MODEL, { baseUrl: env.NAVVIED_BASE_URL, model: env.NAVVIED_MODEL, ...(env.NAVVIED_API_KEY ? { apiKey: env.NAVVIED_API_KEY } : {}), ...(window > 0 ? { window } : {}), ...(env.NAVVIED_API === "chat" || env.NAVVIED_API === "messages" || env.NAVVIED_API === "responses" || env.NAVVIED_API === "ollama" ? { api: env.NAVVIED_API } : {}) }, env) };
   }
   if (choices.length > 1) return { ok: false, error: `several models are configured (${choices.join(", ")}); choose one with --model or set "default" in ${path}` };
   return { ok: false, error: "no model is connected yet. Run navvied init to connect one." };

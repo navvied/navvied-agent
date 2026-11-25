@@ -35,7 +35,10 @@ export const bash: Tool = {
   },
   title: (a) => `Run command: ${str(a.command).slice(0, 300)}`,
   async run(a, ctx) {
-    const command = str(a.command);
+    // A job already runs apart from the turn: an `&` at the end would only make its shell end at once and leave the real program outside the job, where BashOutput and KillShell cannot reach it.
+    const given = str(a.command);
+    const stripped = a.run_in_background === true && /(?<![&\\])&\s*$/.test(given);
+    const command = stripped ? given.replace(/\s*&\s*$/, "") : given;
     if (!command.trim()) return `Error: empty command, nothing was run. Retry: ${example({ command: "ls -la" })}`;
     let where: ReturnType<typeof localBackend.prepare>;
     // On this computer, in bash, a command starts from what earlier ones exported and from the folder they ended in (inside the working
@@ -60,9 +63,9 @@ export const bash: Tool = {
       const notify = str(a.notify).trim();
       const job = ctx.jobs.start(argv(false), where.cwd, str(a.description) || command.slice(0, 80), undefined, false, notify || undefined);
       ctx.report?.({ background: true });
-      const read = `BashOutput job_id "${job.id}" reads it, KillShell stops it.`;
-      const wake = !ctx.jobs.wakes ? `Read what it prints with ${read}` : notify === "off" ? `It will not wake you: ${read}` : `You are woken when it ends${notify ? ` or prints a line with "${notify.slice(0, 60)}"` : ""}: do other work or answer, do not poll. ${read}`;
-      return `Started ${job.id} in the background. ${wake}`;
+      const read = `BashOutput (job_id "${job.id}") reads what it prints, and KillShell stops it.`;
+      const wake = !ctx.jobs.wakes ? `Read what it prints with BashOutput (job_id "${job.id}"), stop it with KillShell.` : notify === "off" ? `It will not wake you. ${read}` : `You are woken when it ends${notify ? ` or prints a line with "${notify.slice(0, 60)}"` : ""}: do other work or answer, do not poll. ${read}`;
+      return `Started ${job.id} in the background.${stripped ? " The trailing & was left out: a job already runs apart from this turn." : ""} ${wake}`;
     }
     // `timeout` is how long the command may be silent; a command that goes on printing is working. Whatever it does, 10 minutes is the most
     // it holds this turn. Past either it is not killed: it goes on as a job, and what it printed so far is not lost.

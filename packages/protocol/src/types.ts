@@ -127,6 +127,8 @@ export interface DraftsCommand { cmd: "drafts" }
 export interface ToolsCommand { cmd: "tools" }
 /** Switch one tool, or a whole set of tools (named by its id), on or off for the conversations that start afterwards. */
 export interface ToolToggleCommand { cmd: "tool.toggle"; name: string; enabled: boolean }
+/** Starts the setup of a tool that says `needs-setup` (and has `setup: true`). */
+export interface ToolSetupCommand { cmd: "tool.setup"; id: string }
 /** Choose where the Bash tool runs its commands, for the conversations that start afterwards. */
 export interface TerminalUseCommand { cmd: "terminal.use"; backend: "local" | "docker" | "ssh" }
 /** Ask for the providers whose keys can be saved on this computer, and which have one (answered with `providers`). */
@@ -198,7 +200,7 @@ export interface PinCommand { cmd: "pin"; id: string; pinned: boolean }
 export interface RestoreCommand { cmd: "restore"; id: string; preview?: boolean }
 
 /** Every command may say which kind of conversation it is for. */
-export type Command = (ProvidersCommand | LocalRunCommand | LocalStopCommand | LocalFileCommand | LocalModelsCommand | AccountsCommand | AccountSigninCommand | AccountSigninCodeCommand | AccountSigninIdCommand | AccountLoginCommand | AccountInstallCommand | LocalRecommendedCommand | LocalOllamaCommand | LocalOllamaPullCommand | LocalRuntimeCommand | LocalSearchCommand | MachineCommand | EndpointsCommand | EndpointSaveCommand | EndpointRemoveCommand | EndpointModelsCommand | ProviderModelsCommand | ProviderUseCommand | ProviderSaveCommand | ProviderRemoveCommand | PromptCommand | CancelCommand | ApproveCommand | AnswerCommand | CompactCommand | ModelCommand | EffortCommand | LoadCommand | SessionsCommand | SearchCommand | CheckpointsCommand | RestoreCommand | JobStopCommand | NewCommand | RenameCommand | RemoveCommand | PinCommand | ImportCommand | TransferCommand | ForkCommand | ArchiveCommand | MarkCommand | ReceiveCommand | SchedulesCommand | ScheduleAddCommand | ScheduleUpdateCommand | ScheduleRemoveCommand | ScheduleRunCommand | PluginsCommand | PluginToggleCommand | DraftCommand | DraftsCommand | ToolsCommand | ToolToggleCommand | TerminalUseCommand | ArtifactsCommand | ArtifactReadCommand | MemoryPendingCommand | SkillReviewCommand | SkillRollbackCommand) & { kind?: SessionKind };
+export type Command = (ProvidersCommand | LocalRunCommand | LocalStopCommand | LocalFileCommand | LocalModelsCommand | AccountsCommand | AccountSigninCommand | AccountSigninCodeCommand | AccountSigninIdCommand | AccountLoginCommand | AccountInstallCommand | LocalRecommendedCommand | LocalOllamaCommand | LocalOllamaPullCommand | LocalRuntimeCommand | LocalSearchCommand | MachineCommand | EndpointsCommand | EndpointSaveCommand | EndpointRemoveCommand | EndpointModelsCommand | ProviderModelsCommand | ProviderUseCommand | ProviderSaveCommand | ProviderRemoveCommand | PromptCommand | CancelCommand | ApproveCommand | AnswerCommand | CompactCommand | ModelCommand | EffortCommand | LoadCommand | SessionsCommand | SearchCommand | CheckpointsCommand | RestoreCommand | JobStopCommand | NewCommand | RenameCommand | RemoveCommand | PinCommand | ImportCommand | TransferCommand | ForkCommand | ArchiveCommand | MarkCommand | ReceiveCommand | SchedulesCommand | ScheduleAddCommand | ScheduleUpdateCommand | ScheduleRemoveCommand | ScheduleRunCommand | PluginsCommand | PluginToggleCommand | DraftCommand | DraftsCommand | ToolsCommand | ToolToggleCommand | ToolSetupCommand | TerminalUseCommand | ArtifactsCommand | ArtifactReadCommand | MemoryPendingCommand | SkillReviewCommand | SkillRollbackCommand) & { kind?: SessionKind };
 /** What this computer is, as far as it could be read: a card or a number that could not be read is not there, never a guess. */
 export interface MachineInfo {
   os: "linux" | "wsl" | "macos" | "windows" | "unknown";
@@ -227,6 +229,12 @@ export interface ArtifactInfo { id: string; conversation: string; name: string; 
 /** Something that extends the agent. `fromNext`: a change reaches the next new conversation. */
 /** One tool of the agent, in plain words. `access` says what it can do to the computer; `core` tools are what coding is made of; `small` says a small model is offered it without asking. */
 export interface ToolInfo { name: string; title: string; about: string; access: "read" | "change" | "run" | "web"; enabled: boolean; core: boolean; small: boolean; /** How many times the agent used it on this computer. */ calls: number; /** The id of the set it belongs to. */ set: string }
+/** Why a tool is or is not usable: `on` and `off` are the person's switch; `needs-setup` is on but waits for something the person must connect; `soon` is a tool that does not exist yet; `unavailable-here` is one that exists but cannot run in this place (the cloud); `experimental` is off until the person switches it on. */
+export type ToolState = "on" | "off" | "needs-setup" | "soon" | "unavailable-here" | "experimental";
+/** One of the categories the tools are shown under. */
+export interface ToolCategory { id: string; title: string }
+/** One tool as the person knows it, with its own switch. `names` are the engine's tools it stands for; `category` is the id of one of the categories. */
+export interface ToolEntry { id: string; category: string; names: string[]; title: string; about: string; on: boolean; state: ToolState; /** Present only for a tool that has a setup to start (`tool.setup`). */ setup?: true; /** How many times the agent used it on this computer. */ calls: number }
 /** Tools that belong together, shown as one card: what they are for, how many there are, and how often they were used. */
 export interface ToolSetInfo { id: string; title: string; about: string; tools: string[]; enabled: boolean; calls: number }
 /** One place the Bash tool can run commands: `ready` says it can be used now, `hint` says what to do when it cannot. */
@@ -387,7 +395,7 @@ type EngineEventBody =
   | { ev: "queued"; qid: string; text: string; images?: number; files?: FileNote[] }
   /** Waiting messages that were thrown away without being taken (the person stopped the agent, or it failed): windows take them off the screen. */
   | { ev: "dropped"; qids: string[] }
-  | { ev: "tools"; items: ToolInfo[]; sets: ToolSetInfo[]; backends: BackendInfo[] }
+  | { ev: "tools"; items: ToolInfo[]; sets: ToolSetInfo[]; /** Every tool with its own switch, in the order of its category. */ entries: ToolEntry[]; /** The categories, in the order to show them. */ categories: ToolCategory[]; backends: BackendInfo[] }
   /** What has been typed and not sent, by conversation id (or `new`): the same in every window and on every device that reaches this computer. Not kept in the replayed history; ask with `drafts`. */
   /** Conversations that are still being worked on while another one is open: `working`, or `approval` when one waits for the person. Not kept in the replayed history; sent to every window when it changes and after `synced`. */
   | { ev: "background"; items: { id: string; kind?: SessionKind; state: "working" | "approval" }[] }

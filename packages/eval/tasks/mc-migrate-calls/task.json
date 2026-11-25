@@ -1,0 +1,18 @@
+{
+  "id": "mc-migrate-calls",
+  "title": "Change a deprecated call in forty-five files, where it matches",
+  "kind": "terminal",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "python3"
+  ],
+  "prompt": "The call openStore(name, \"rw\") or openStore(name, \"ro\"), with the mode as a string, is deprecated. In the 45 files of src/, change each such call to openStore(name, { mode: \"rw\" }) (or \"ro\"). Leave every other call, every comment and every string exactly as it is.",
+  "check": "python3 \"$BENCH_FIXTURES/mc.py\" check migrate-calls",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 80,
+  "timeoutSeconds": 600,
+  "setup": "python3 \"$BENCH_FIXTURES/mc.py\" setup migrate-calls"
+}

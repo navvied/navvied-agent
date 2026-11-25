@@ -1,0 +1,18 @@
+{
+  "id": "mc-aggregate-json",
+  "title": "Add up sixty small JSON files by category",
+  "kind": "terminal",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "python3"
+  ],
+  "prompt": "The folder data/ holds 60 small JSON files in a tree of folders. Each has a category, an amount (a whole number) and a status. Leave out the records whose status is \"void\". Write report.json: an object with one key for each category, holding {\"count\": how many records, \"total\": the sum of their amounts}.",
+  "check": "python3 \"$BENCH_FIXTURES/mc.py\" check aggregate-json",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 80,
+  "timeoutSeconds": 600,
+  "setup": "python3 \"$BENCH_FIXTURES/mc.py\" setup aggregate-json"
+}

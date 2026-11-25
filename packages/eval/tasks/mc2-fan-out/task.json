@@ -1,0 +1,24 @@
+{
+  "id": "mc2-fan-out",
+  "title": "Read forty account records and list the ones over a balance",
+  "kind": "agent",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun",
+    "python3"
+  ],
+  "prompt": "The accounts system has 40 accounts. Find every account whose billing balance_due_cents is above 250000 and write their ids to over.txt, one per line, in any order.",
+  "check": "bun \"$BENCH_FIXTURES/mc2-check.ts\" fan-out",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 120,
+  "timeoutSeconds": 900,
+  "mcp": {
+    "records": {
+      "fixture": "mcp-records.ts"
+    }
+  }
+}

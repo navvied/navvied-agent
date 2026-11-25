@@ -209,3 +209,16 @@ describe("the commands for notes and skills that wait for the person", () => {
     expect(parseCommand('{"cmd":"skill.rollback","id":7}').ok).toBe(false);
   });
 });
+
+describe("tool.toggle names a tool or a row of the tool table", () => {
+  test("a hyphen in a row id is allowed, anything odd is not", () => {
+    expect(parseCommand('{"cmd":"tool.toggle","name":"session-search","enabled":false}').ok).toBe(true);
+    expect(parseCommand('{"cmd":"tool.toggle","name":"../x","enabled":false}').ok).toBe(false);
+    expect(parseCommand('{"cmd":"tool.toggle","name":"-x","enabled":false}').ok).toBe(false);
+  });
+  test("tool.setup names the row to set up", () => {
+    expect(parseCommand('{"cmd":"tool.setup","id":"browser"}')).toEqual({ ok: true, value: { cmd: "tool.setup", id: "browser" } });
+    expect(parseCommand('{"cmd":"tool.setup","id":"Browser"}').ok).toBe(false);
+    expect(parseCommand('{"cmd":"tool.setup"}').ok).toBe(false);
+  });
+});

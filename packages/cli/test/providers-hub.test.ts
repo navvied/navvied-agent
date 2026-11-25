@@ -10,28 +10,8 @@ import { endpointsScreen } from "../src/providers/endpoints.ts";
 import { keysScreen } from "../src/providers/keys.ts";
 import { localScreen } from "../src/providers/local.ts";
 import { providersScreen } from "../src/providers/index.ts";
-import { fakeIO, remove, tempDir } from "./helpers.ts";
-import { scripted } from "./providers-helpers.ts";
 
-const dirs: string[] = [];
-afterAll(() => { dirs.forEach(remove); });
-
-/** A real hub on a temporary computer, with the screens' link to it. `fetchFn` is what every outside address answers. */
-function computer(fetchFn: typeof fetch, cloud = false) {
-  const state = tempDir(), work = tempDir();
-  dirs.push(state, work);
-  const env = { HOME: state, XDG_STATE_HOME: state, XDG_CONFIG_HOME: state, NAVVIED_LOCAL_DIR: `${state}/local`, NAVVIED_GUEST_MODELS: "0" };
-  const file = configPath(env);
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify({ models: { m: { baseUrl: "http://127.0.0.1:1/v1", model: "x", apiKey: "k", window: 1000 } } }), { mode: 0o600 });
-  const hub = createHub({ json: false, yes: false, thinking: false, cwd: work, ...(cloud ? { sandboxed: true } : {}) } as never, fakeIO({ env, fetch: fetchFn }).io, { watch: false, import: false });
-  const link: HubLink = new HubLink((cmd) => hub.command(JSON.stringify(cmd), () => undefined));
-  const events: EngineEvent[] = [];
-  hub.attach({ send: (line) => { const e = JSON.parse(String(line)) as EngineEvent; events.push(e); link.onEvent(e); } }, 0);
-  return { link, file, events, saved: () => JSON.parse(readFileSync(file, "utf8")) as { providers?: Record<string, { key?: string }>; endpoints?: Record<string, unknown>; models: Record<string, unknown> } };
-}
-
-const lists = (ids: string[], status = 200): typeof fetch => (async () => (status === 200 ? Response.json({ data: ids.map((id) => ({ id })) }) : new Response("no", { status }))) as unknown as typeof fetch;
+import { computer, dirs, lists, scripted } from "./providers-helpers.ts";
 
 describe("API keys against a real hub", () => {
   test("a key is saved on the computer, its models are listed, and choosing one makes a model of the configuration", async () => {

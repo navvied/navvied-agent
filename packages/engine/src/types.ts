@@ -71,6 +71,8 @@ export interface Provider {
 export interface WebProxy { url: string; token: string }
 
 export interface ToolContext {
+  /** Something a tool keeps for the rest of the conversation (a program it started): made the first time, closed when the conversation ends. */
+  keep?: <T extends { close(): void }>(key: string, make: () => T) => T;
   /** What this conversation has read or written of files: the tools that change a file check it. */
   files?: FileState;
   /** Whether the model can see pictures (not set: not known). */
@@ -117,6 +119,8 @@ export interface ToolContext {
   live?: (chunk: string) => void;
   /** Facts about how the work ended, for the step's card: the exit code, that the output was cut, that it timed out, or that it went on as a job. */
   report?: (meta: { code?: number | null; truncated?: boolean; timedOut?: boolean; background?: boolean; cached?: boolean }) => void;
+  /** Runs another tool as if the model had called it: the same checks, approvals and secret hiding. For a tool that is a program calling tools. `ok` is false when the call was refused or failed. */
+  call?: (name: string, args: Record<string, unknown>) => Promise<{ ok: boolean; text: string }>;
   /** Runs a research task in a helper of its own and returns what it found. */
   helper?: (task: { description: string; prompt: string; agent?: string; background?: boolean }, signal: AbortSignal) => Promise<string>;
   /** Asks the person the questions and returns what they answered (or why nobody did), as the model reads it. */
@@ -124,6 +128,8 @@ export interface ToolContext {
 }
 
 export interface Tool extends ToolSpec {
+  /** Offered only when something says it is on (`toolOn`): a tool still being measured is never offered by default. */
+  experimental?: true;
   /** Read-only tools never need approval and are the only ones offered in plan mode. */
   readOnly: boolean;
   /** Whether to offer this tool now. A small model is easily led astray by tools it does not need, so some are offered only when the conversation calls for them. */

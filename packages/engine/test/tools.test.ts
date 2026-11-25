@@ -35,7 +35,7 @@ describe("a command that is stopped", () => {
 describe("the tool set", () => {
   test("names, schemas and read-only flags", () => {
     const all = defaultTools();
-    expect(all.map((t) => t.name)).toEqual(["Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch", "Bash", "BashOutput", "BashInput", "KillShell", "Glob", "Grep", "WebFetch", "WebSearch", "Browser", "Skill", "Agent", "Remember", "Recall", "SkillManage", "TodoWrite", "AskUserQuestion"]);
+    expect(all.map((t) => t.name)).toEqual(["Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch", "Bash", "BashOutput", "BashInput", "KillShell", "Glob", "Grep", "WebFetch", "WebSearch", "Browser", "Skill", "Agent", "Remember", "Recall", "SkillManage", "TodoWrite", "AskUserQuestion", "ExecuteCode"]);
     expect(all.filter((t) => t.readOnly).map((t) => t.name)).toEqual(["Read", "BashOutput", "Glob", "Grep", "WebFetch", "WebSearch", "Skill", "Agent", "Recall", "TodoWrite", "AskUserQuestion"]);
     for (const t of all) {
       expect(t.description.length).toBeGreaterThan(10);

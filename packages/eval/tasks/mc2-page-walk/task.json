@@ -1,0 +1,24 @@
+{
+  "id": "mc2-page-walk",
+  "title": "Walk the accounts list until one is on hold",
+  "kind": "agent",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun",
+    "python3"
+  ],
+  "prompt": "Go through the accounts in the order the accounts list gives them and find the first one whose flags.audit_hold is true. Write hold.json: {\"account\": its id, \"unpaid_cents\": the total of its invoices whose status is open or overdue}. Stop looking once you have found it.",
+  "check": "bun \"$BENCH_FIXTURES/mc2-check.ts\" page-walk",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 120,
+  "timeoutSeconds": 900,
+  "mcp": {
+    "records": {
+      "fixture": "mcp-records.ts"
+    }
+  }
+}

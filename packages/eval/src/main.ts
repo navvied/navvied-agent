@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { agentsDir, listAdapters, loadAdapter, type Adapter } from "./adapter.ts";
 import { footprint } from "./footprint.ts";
 import { startMeter, type Meter } from "./meter.ts";
@@ -10,17 +10,14 @@ import { summarize } from "./report.ts";
 import { runTask, type TaskResult } from "./run.ts";
 import { loadTasks, type Task } from "./task.ts";
 import { validateTask } from "./validate.ts";
-
-const HERE = dirname(import.meta.path);
-const TASKS = join(HERE, "../tasks");
-const CLI = join(HERE, "../../cli/src/main.ts");
+import { CLI, TASKS, agentWorld, codeTool, option } from "./world.ts";
 
 const USAGE = `navvied-eval — measure a coding agent on real tasks
 
   navvied-eval list
   navvied-eval validate [--tasks a,b] [--slow]      every task must fail untouched and pass with its reference solution
   navvied-eval run --model <name> [--model <name> …] [--tasks a,b] [--repeat n] [--out results.jsonl] [--cli "<command>"]
-  navvied-eval run --mock oracle|lazy|tamper|leave|crash|hang [--tasks a,b] …   a scripted model: tries the tasks and the harness
+  navvied-eval run --mock oracle|code|lazy|tamper|leave|crash|hang [--tasks a,b] …   a scripted model: tries the tasks and the harness
   navvied-eval run --upstream <base address> --upstream-model <id> [--upstream-key-file <file>] [--upstream-window <tokens>] [--trace <folder>] …   a real model, seen through the counter
                                                                 the key is read from the file into the environment, never shown or put on a command line
   navvied-eval run --agent <label|file> …                      another agent, described by a file of yours (docs/EVAL.md): it needs --upstream or --mock to be counted
@@ -28,12 +25,6 @@ const USAGE = `navvied-eval — measure a coding agent on real tasks
   navvied-eval footprint [--cli "<command>"] [--install <path>] [--runs n]   size on disk and start time of a program
   navvied-eval report <results.jsonl>
 `;
-
-function option(args: string[], name: string): string[] {
-  const out: string[] = [];
-  args.forEach((a, i) => { if (a === `--${name}` && args[i + 1]) out.push(args[i + 1]!); else if (a.startsWith(`--${name}=`)) out.push(a.slice(name.length + 3)); });
-  return out;
-}
 
 async function validate(tasks: Task[]): Promise<number> {
   let bad = 0;
@@ -54,7 +45,7 @@ export async function main(argv: string[]): Promise<number> {
     case "validate": return validate(chosen());
     case "run": {
       const mockName = option(rest, "mock")[0], upstream = option(rest, "upstream")[0];
-      const BEHAVIOURS = ["oracle", "lazy", "tamper", "leave", "leak", "stall", "crash", "hang"];
+      const BEHAVIOURS = ["oracle", "code", "lazy", "tamper", "leave", "leak", "stall", "crash", "hang"];
       if (mockName && !BEHAVIOURS.includes(mockName)) { process.stderr.write(`error: --mock is one of ${BEHAVIOURS.join(", ")}\n`); return 2; }
       const agentName = option(rest, "agent")[0];
       let agent: Adapter | undefined;
@@ -84,7 +75,8 @@ export async function main(argv: string[]): Promise<number> {
       const keyFile = option(rest, "upstream-key-file")[0];
       const key = keyFile ? readFileSync(resolve(keyFile), "utf8").trim() : option(rest, "upstream-key")[0];
       const window = String(Number(option(rest, "upstream-window")[0] ?? 100000) || 100000);
-      const world = home ? { HOME: home, XDG_STATE_HOME: home, XDG_CONFIG_HOME: home, NAVVIED_MODEL: modelId!, NAVVIED_WINDOW: window, ...(key ? { NAVVIED_API_KEY: key } : {}) } : {};
+      const world = home ? agentWorld(home, modelId!, Number(window), key) : {};
+      if (home) codeTool(world, mockName === "code");
       const results: TaskResult[] = [];
       let broken = 0;
       try {

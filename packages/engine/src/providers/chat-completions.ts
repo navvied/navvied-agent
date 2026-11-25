@@ -19,8 +19,18 @@ export interface ChatCompletionsConfig {
   headers?: Record<string, string>;
 }
 
+/** A 429 that is not "wait a moment" but "what you may use is used up": waiting does not change it. */
+const SPENT = /budget_exhausted|daily_limit|used all it may|used up/i;
+
 export class ProviderError extends Error {
-  constructor(message: string, readonly status?: number, /** How long the service asked to wait before another try, in milliseconds. */ readonly retryAfterMs?: number) { super(message); this.name = "ProviderError"; }
+  /** The limit this session or account may use is spent: trying again says the same until it is renewed. */
+  readonly spent: boolean;
+  constructor(message: string, readonly status?: number, /** How long the service asked to wait before another try, in milliseconds. */ readonly retryAfterMs?: number) {
+    const spent = status === 429 && SPENT.test(message);
+    super(spent ? `This is not a slow-down: ${/"message"\s*:\s*"([^"]+)"/.exec(message)?.[1] ?? message} Trying again will not help.` : message);
+    this.name = "ProviderError";
+    this.spent = spent;
+  }
 }
 
 const part = (p: Part) => (p.type === "text" ? { type: "text", text: p.text } : { type: "image_url", image_url: { url: `data:${p.mime};base64,${p.data}` } });

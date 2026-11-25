@@ -8,6 +8,8 @@
 import { createHash } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
+import { PAGES, cursor, onPage } from "./api-items.ts";
+import { PAGES as STATUS_PAGES, statusPage } from "./mc2-data.ts";
 
 let port = 0;
 const secret = process.env.BENCH_SECRET ?? "";
@@ -38,6 +40,14 @@ const handler = (req: Request): Response => {
   if (p === "/start") return page("Start here", `<p>Welcome. Pick a topic.</p><ul><li><a href="/guide/install">Installing</a></li><li><a href="/guide/limits">Rate limits and bursts</a></li><li><a href="/guide/faq">FAQ</a></li></ul>`);
   if (p === "/guide/limits") return page("Rate limits", `<p>Requests are limited per key.</p><p>The burst limit code is ${code("2")}.</p>`);
   if (p === "/guide/install" || p === "/guide/faq") return page(p.slice(7), `<p>Nothing about limits here. ${filler(3, "Note")}</p>`);
+  const status = /^\/status\/(\d+)$/.exec(p);
+  if (status && Number(status[1]) >= 1 && Number(status[1]) <= STATUS_PAGES) { const made = statusPage(secret, Number(status[1])); return page(made.title, made.html); }
+  if (p === "/api/items") {
+    const token = url.searchParams.get("cursor");
+    const at = token === null ? 0 : Array.from({ length: PAGES - 1 }, (_, i) => i + 1).find((n) => cursor(secret, n - 1) === token);
+    if (at === undefined) return Response.json({ error: "unknown cursor" }, { status: 400 });
+    return Response.json({ page: at + 1, items: onPage(secret, at), next: at + 1 < PAGES ? `http://127.0.0.1:${port}/api/items?cursor=${cursor(secret, at)}` : null });
+  }
   if (p === "/search") {
     const q = url.searchParams.get("q") ?? "";
     log("searches.log", q);

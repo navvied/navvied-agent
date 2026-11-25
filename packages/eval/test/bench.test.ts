@@ -42,8 +42,10 @@ describe("every task can be solved by an agent run, not only by the validator", 
       const skills = task.id.startsWith("skill-");
       // The task about a notebook also offers the tool for notebooks (about 400 characters with its place in the list). A web task also offers the two web tools (about 440 characters, and a seventh and eighth tool); the one that says a browser can read what a plain fetch cannot also offers the browser, whose text is the longest.
       const web = task.kind === "web";
-      expect(r.prompt!.systemChars + r.prompt!.toolChars, task.id).toBeLessThanOrEqual((task.id === "web-script-page" ? 5400 : skills ? 4900 : 4600) + PATH_ROOM);
-      expect(r.prompt!.tools, task.id).toBeLessThanOrEqual(web ? 10 : 9);
+      // A task that is given a connected program is offered its four tools too (about 800 characters).
+      const connected = task.mcp ? 4 : 0;
+      expect(r.prompt!.systemChars + r.prompt!.toolChars, task.id).toBeLessThanOrEqual((task.id === "web-script-page" ? 5400 : skills ? 4900 : 4600) + PATH_ROOM + connected * 250);
+      expect(r.prompt!.tools, task.id).toBeLessThanOrEqual((web ? 10 : 9) + connected);
     }
   }, 240_000);
 });

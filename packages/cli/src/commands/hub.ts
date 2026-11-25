@@ -6,7 +6,7 @@
 import { EventEncoder, parseCommand, type Command, type EngineEvent, type HistoryItem, type ScheduleInfo, type SearchHit, type SessionInfo, type SessionKind } from "@navvied/protocol";
 import { historyOf } from "@navvied/engine";
 import type { Options } from "../args.ts";
-import { FileSessionStore, SkillBook, forgetCheckpoints, loadSkills, type Recall } from "@navvied/engine";
+import { FileSessionStore, findChrome, SkillBook, forgetCheckpoints, loadSkills, type Recall } from "@navvied/engine";
 import { createEngine, modelInfoOf, resolved, type Created } from "../create.ts";
 import { checkTarget, handedOver, otherKind, transcriptOf } from "../handover.ts";
 import { FolderBook, folderId } from "../folders.ts";
@@ -17,7 +17,8 @@ import { answerMemory, answerSkill, memoryPending, rollbackSkill, skillReview, t
 import { memoryPathsFor } from "../memory-ui.ts";
 import { ArtifactBook, scanFolder } from "../artifacts.ts";
 import { nextRun, parseCron } from "../cron.ts";
-import { ToolUsage, listSets, listTools, toolId } from "../tools-info.ts";
+import { ToolUsage, type Availability, listEntries, listSets, listTools, resolveRow, switchRow } from "../tools-info.ts";
+import { CATEGORIES, rowOf } from "../tool-table.ts";
 import { TerminalState, listBackends } from "../terminal.ts";
 import { DraftStore } from "../drafts.ts";
 import { checkCredentialFile, findCredentialFile } from "../adc.ts";
@@ -767,7 +768,11 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   const drafts = new DraftStore(draftsPath(io.env));
   const terminalState = new TerminalState(terminalStatePath(io.env));
   const terminalConfig = () => { const f = loadConfig(configPath(io.env, options.config), io.env); return f.ok ? f.value?.terminal : undefined; };
-  const tellTools = (lane: Lane): void => { const items = listTools(pluginState, toolUsage); say(lane, { ev: "tools", items, sets: listSets(items), backends: listBackends(terminalState, terminalConfig()) }); };
+  /** The setups a tool can start with `tool.setup`, by the id of its row. A tool gets one when it gets a way to tell it needs setting up: none has one yet. */
+  const toolSetups = new Map<string, (lane: Lane) => void>();
+  /** What only this computer can say of a tool: the browser tool waits for a browser to be found. */
+  const toolAvailability: Availability = (row) => (row.id === "browser" && !findChrome(io.env) ? "needs-setup" : undefined);
+  const tellTools = (lane: Lane): void => { const items = listTools(pluginState, toolUsage); say(lane, { ev: "tools", items, sets: listSets(items), entries: listEntries(pluginState, toolUsage, undefined, toolAvailability, new Set(toolSetups.keys())), categories: CATEGORIES.map((c) => ({ ...c })), backends: listBackends(terminalState, terminalConfig()) }); };
   const pluginItems = () => { const f = loadConfig(configPath(io.env, options.config), io.env); return listPlugins(pluginState, f.ok ? f.value : null, join(dirname(configPath(io.env, options.config)), "skills"), resolve(main.options.cwd ?? process.cwd())); };
   const tellProviders = (): void => {
     const file = loadConfig(configPath(io.env, main.options.config));
@@ -1003,12 +1008,19 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
         return;
       }
       if (parsed.value.cmd === "tools") { tellTools(lane); return; }
+      if (parsed.value.cmd === "tool.setup") {
+        const start = toolSetups.get(parsed.value.id);
+        if (!start) { say(lane, { ev: "error", msg: "That tool has nothing to set up." }); return; }
+        start(lane);
+        return;
+      }
       if (parsed.value.cmd === "tool.toggle") {
         const { name, enabled } = parsed.value;
         const items = listTools(pluginState, toolUsage);
-        const names = items.some((t) => t.name === name) ? [name] : listSets(items).find((x) => x.id === name)?.tools;
-        if (!names) { say(lane, { ev: "error", msg: "That tool is not one of the agent's." }); return; }
-        for (const n of names) pluginState.set(toolId(n), enabled);
+        const row = resolveRow(name);
+        const rows = row ? [row] : (listSets(items).find((x) => x.id === name)?.tools ?? []).flatMap((n) => rowOf(n) ?? []).filter((r, i, all) => all.indexOf(r) === i);
+        if (!rows.length) { say(lane, { ev: "error", msg: "That tool is not one of the agent's." }); return; }
+        for (const r of rows) switchRow(pluginState, r, enabled);
         tellTools(lane);
         return;
       }

@@ -1,5 +1,6 @@
 import type { Task } from "./task.ts";
-import { repoFiles, solutionFiles } from "./task.ts";
+import { solver } from "../fixtures/mc2-solve.ts";
+import { repoFiles, solutionFiles, solutionScript } from "./task.ts";
 
 /**
  * A scripted model that speaks the chat completions protocol, for trying the harness and the tasks without a real model.
@@ -7,7 +8,8 @@ import { repoFiles, solutionFiles } from "./task.ts";
  * agent run, not only by the validator. The others fail in one known way each, so every reason a run can fail is seen.
  */
 export type Behaviour =
-  | "oracle"  // writes the solution's files, runs its script, says it is done
+  | "oracle"  // writes the solution's files, runs its script, says it is done; a task with a stepwise solution gets its tool calls one by one
+  | "code"    // does the work in one call of the code tool when the task has a script for it, and as the oracle does otherwise
   | "lazy"    // says it looked and changes nothing
   | "tamper"  // rewrites a protected file, then says it is done
   | "unplanned" // does what the oracle does, but keeps no task list
@@ -89,6 +91,18 @@ function valuesOf(task: Task, results: readonly string[], planned: boolean): { a
   return values;
 }
 
+/** A task with a stepwise solution (see mc2-solve.ts): its calls, one at a time, as far as the results so far allow; the next call is decided by what the last one gave. */
+function stepwiseRounds(task: Task, results: readonly string[]): Round[] | undefined {
+  const solution = solver(task.id);
+  if (!solution) return undefined;
+  const rounds: Round[] = [];
+  for (let step = solution.next(), i = 0; !step.done; step = solution.next(results[i++] ?? "")) {
+    rounds.push([{ tool: step.value.tool, args: step.value.args }]);
+    if (i >= results.length) break;
+  }
+  return rounds;
+}
+
 function roundsFor(task: Task, behaviour: Behaviour, leaves: string, results: readonly string[]): Round[] {
   if (behaviour === "stall") behaviour = "oracle";
   if (behaviour === "lazy" || behaviour === "leak" || behaviour === "crash" || behaviour === "hang") return [];
@@ -97,6 +111,10 @@ function roundsFor(task: Task, behaviour: Behaviour, leaves: string, results: re
     return protectedFile ? [...reads(task, [protectedFile]).map((s) => [s]), [{ tool: "Write", args: { file_path: protectedFile, content: "// rewritten by the model\n" } }]] : [];
   }
   if (task.script) return task.script.map((step) => [step]);
+  const code = behaviour === "code" ? solutionScript(task) : undefined;
+  if (code !== undefined) return [[{ tool: "ExecuteCode", args: { code } }]];
+  const stepwise = stepwiseRounds(task, results);
+  if (stepwise) return stepwise;
   const planned = behaviour !== "unplanned";
   const files = solutionFiles(task, valuesOf(task, results, planned));
   const script = files["apply.sh"];

@@ -188,3 +188,12 @@ test("every touch of the window or the tray runs on the GTK main thread", () => 
   }
   expect(offenders).toEqual([]);
 });
+
+test("a macOS disk image is never made by attaching one: the bundler is asked for the app only, and the script that makes the image has no attach", () => {
+  const workflow = readFileSync(resolve(HERE, "../../.github/workflows/desktop.yml"), "utf8");
+  expect(workflow).not.toMatch(/bundles: "[^"]*dmg/);
+  expect(workflow).toContain("scripts/make-dmg.sh");
+  const script = readFileSync(join(HERE, "scripts/make-dmg.sh"), "utf8").split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+  expect(script).toContain("hdiutil makehybrid");
+  expect(script).not.toMatch(/hdiutil (attach|create|mount)/);
+});

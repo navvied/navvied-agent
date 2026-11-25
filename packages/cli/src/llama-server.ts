@@ -1,5 +1,4 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createServer } from "node:net";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -25,15 +24,6 @@ export interface RunningServer { pid: number; port: number; url: string; stop():
 /** The one line the program prints when it listens (its own wording, read from a real run of the pinned release): `srv  server_on_li: listening on http://127.0.0.1:18765`. */
 const LISTENING = /listening on http:\/\/127\.0\.0\.1:(\d+)/;
 
-/** A port that was free a moment ago: asked of the system, so that two programs do not meet on one, and a leftover server never makes the next start fail silently. */
-export function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once("error", reject);
-    s.listen(0, "127.0.0.1", () => { const port = (s.address() as { port: number }).port; s.close(() => resolve(port)); });
-  });
-}
-
 /** The arguments of the pinned release's server (each is in its own `--help`; the notes have the lines). It listens on this computer only. */
 export function argsOf(i: Pick<ServerInput, "model" | "window" | "layers" | "alias">, port: number): string[] {
   return ["-m", i.model, "-c", String(i.window), "-ngl", String(i.layers), "--host", "127.0.0.1", "--port", String(port), "--jinja", "-a", i.alias, "-np", "1"];
@@ -49,7 +39,8 @@ const alive = (pid: number): boolean => { try { process.kill(pid, 0); return tru
  * its process. Anything that goes wrong before that says the last thing the program said.
  */
 export async function startServer(i: ServerInput): Promise<RunningServer | { error: string }> {
-  const port = await freePort();
+  // Port 0: the server binds a port itself and says which one on its listening line, so none is asked for first and handed over after something else could have taken it.
+  const port = 0;
   const child: ChildProcess = spawn(i.binary, argsOf(i, port), { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, env: { ...(i.env ?? process.env) } as NodeJS.ProcessEnv });
   const failedToStart = new Promise<void>((resolve) => { child.once("error", () => resolve()); });
   if (!child.pid) { await failedToStart; return { error: "The program could not be started." }; }
@@ -72,7 +63,8 @@ export async function startServer(i: ServerInput): Promise<RunningServer | { err
   child.stderr!.on("data", (c: Buffer) => lines(c, err));
   const exited = new Promise<void>((resolve) => { child.once("exit", () => { rmSync(i.pidFile, { force: true }); resolve(); }); });
   mkdirSync(dirname(i.pidFile), { recursive: true });
-  writeFileSync(i.pidFile, JSON.stringify({ pid: child.pid, binary: i.binary, port, startedAt: Date.now() } satisfies Note));
+  const startedAt = Date.now();
+  writeFileSync(i.pidFile, JSON.stringify({ pid: child.pid, binary: i.binary, port, startedAt } satisfies Note));
 
   // Whatever ends this program ends the server with it: its normal end, a polite signal when nothing else handles it. (A kill that cannot be caught is found by the note, at the next start.)
   const killNow = (): void => { try { child.kill("SIGKILL"); } catch { /* gone */ } };
@@ -96,6 +88,7 @@ export async function startServer(i: ServerInput): Promise<RunningServer | { err
     new Promise<{ late: true }>((r) => { timer = setTimeout(() => r({ late: true }), i.loadMs ?? 600_000); }),
   ]);
   clearTimeout(timer);
+  if ("port" in result) writeFileSync(i.pidFile, JSON.stringify({ pid: child.pid, binary: i.binary, port: result.port, startedAt } satisfies Note));
   if ("port" in result) return { pid: child.pid, port: result.port, url: `http://127.0.0.1:${result.port}`, stop, exited };
   await stop();
   const said = tail.filter((l) => /\b(error|failed|cannot|unable|invalid|out of memory|exceeds)\b/i.test(l)).slice(-2).map((l) => l.replace(/^\S+\s+[A-Z]\s+/, "").replace(/\s+/g, " ")).join(" ");

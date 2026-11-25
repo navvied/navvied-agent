@@ -15,7 +15,7 @@ const NETWORK = /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|network|socket/i;
  * dropped. Never for an answer that says the request is wrong or the key is not accepted: trying again says the same.
  */
 export function retryable(e: unknown): boolean {
-  if (e instanceof ProviderError) return e.status === 408 || e.status === 429 || (e.status !== undefined && e.status >= 500);
+  if (e instanceof ProviderError) return !e.spent && (e.status === 408 || e.status === 429 || (e.status !== undefined && e.status >= 500));
   return e instanceof TypeError || (e instanceof Error && NETWORK.test(e.message));
 }
 

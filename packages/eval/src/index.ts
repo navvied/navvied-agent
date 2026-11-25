@@ -1,9 +1,9 @@
-export { loadTask, loadTasks, repoFiles, solutionFiles, type Task } from "./task.ts";
+export { loadTask, loadTasks, repoFiles, solutionFiles, solutionScript, type Task } from "./task.ts";
 export { applySolution, check, commandLine, findBash, leftovers, missingPrograms, newSecret, prepare, protectedHashes, shell, type CheckResult } from "./workspace.ts";
 export { validateTask, type Validation } from "./validate.ts";
 export { misuseOf, planKept, runTask, webOf, type Misuse, type RunOptions, type TaskResult, type WebUse } from "./run.ts";
 export { summarize } from "./report.ts";
-export { startMeter, type Hit, type Meter } from "./meter.ts";
+export { startMeter, type Hit, type Meter, type MeterLimits } from "./meter.ts";
 export { startMock, type Behaviour, type Mock } from "./mock.ts";
 export { processes, watchMemory, type MemoryPeak, type Process } from "./memory.ts";
 export { footprint, sizeOf, type Footprint } from "./footprint.ts";

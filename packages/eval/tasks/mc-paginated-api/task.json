@@ -1,0 +1,24 @@
+{
+  "id": "mc-paginated-api",
+  "title": "Collect every page of a paginated API",
+  "kind": "web",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun",
+    "python3"
+  ],
+  "prompt": "The address of a server is in docs-url.txt. Its /api/items answers with JSON: {\"page\": n, \"items\": [{\"id\", \"name\", \"score\"}], \"next\": the address of the next page, or null on the last page}. Collect the items of every page and write items.json: a JSON list of all of them, highest score first, equal scores by id (lowest first), each item as the server gave it.",
+  "check": "bun \"$BENCH_FIXTURES/web-check.ts\" paginated",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 80,
+  "timeoutSeconds": 600,
+  "setup": "bun \"$BENCH_FIXTURES/start-web.ts\" && echo \"http://127.0.0.1:$(cat .bench-port)\" > docs-url.txt",
+  "teardown": "bun \"$BENCH_FIXTURES/stop-web.ts\"",
+  "env": {
+    "NAVVIED_ALLOW_PRIVATE_NETWORK": "1"
+  }
+}

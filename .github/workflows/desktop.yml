@@ -95,12 +95,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # "app" (the raw .app bundle) is only ever a dependency of "dmg", never uploaded on its own; requesting
-          # it here is what makes the bundler also archive it for the updater (macOS's own updater artifact is
-          # always a .tar.gz of the .app, never the .dmg) once signing is on. Harmless and unused when it is not.
+          # On macOS the bundler makes the app (and, once signing is on, archives it for the updater: macOS's updater artifact is
+          # always a .tar.gz of the .app, never the .dmg); the disk image is made by scripts/make-dmg.sh, because the bundler's own way
+          # attaches a fresh image, and that is what macOS now and then refuses to let go of.
           - { name: linux-x64, os: ubuntu-22.04, bundles: "deb,appimage", updater_target: "appimage" }
-          - { name: macos-arm64, os: macos-latest, bundles: "app,dmg", updater_target: "app" }
-          - { name: macos-x64, os: macos-15-intel, bundles: "app,dmg", updater_target: "app" }
+          - { name: macos-arm64, os: macos-latest, bundles: "app", updater_target: "app" }
+          - { name: macos-x64, os: macos-15-intel, bundles: "app", updater_target: "app" }
           - { name: windows-x64, os: windows-latest, bundles: "nsis", updater_target: "nsis" }
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.name == 'windows-x64' || matrix.name == 'macos-x64' }}
@@ -152,14 +152,6 @@ jobs:
       # public half of whatever key signed this (see the doc) — otherwise the app's own verification at update
       # time rejects every release's signature, update-or-not. The check right below refuses to build a signed
       # release with that placeholder still in place, rather than ship one silently nobody can ever update from.
-      # macOS indexes a freshly mounted volume as soon as it appears (Spotlight's own mdworker, sometimes
-      # the file-events daemon), which can hold it open past the disk-image tool's own eject retries —
-      # the bundler then reports a plain "Resource busy" with no other cause in sight. Turning indexing
-      # off before every build removes the actual holder, system-wide; the runner is thrown away after
-      # the job either way, so there is nothing to turn back on.
-      - name: Turn off Spotlight indexing (macOS only)
-        if: runner.os == 'macOS'
-        run: sudo mdutil -a -i off
       - name: Build the installer
         id: build
         working-directory: packages/desktop/src-tauri
@@ -180,11 +172,11 @@ jobs:
             label="installer build (signed, updater artifacts on)"
           fi
           CI_RUN_LOG=/tmp/installer-build.log bash ../scripts/ci-run.sh "$label" "${cmd[@]}"
-      # Only runs if the build above actually failed, and only says anything if that failure was the one
-      # hdiutil eject flake above — so a real bug in the build is never masked by this.
-      - name: If the disk image could not be ejected, show what else was using it
-        if: failure() && steps.build.outcome == 'failure' && runner.os == 'macOS'
-        run: bash packages/desktop/scripts/dmg-diagnose.sh /tmp/installer-build.log
+      - name: The disk image, made from the app without attaching one (macOS only)
+        if: runner.os == 'macOS'
+        run: |
+          b=packages/desktop/target/release/bundle
+          bash packages/desktop/scripts/ci-run.sh "disk image" bash packages/desktop/scripts/make-dmg.sh "$b/macos/navvied.app" "$b/dmg/navvied-${{ matrix.name }}.dmg" navvied
       - name: Name the installers, and their update signatures when this run signed them
         run: |
           ver=$(bun -p "require('./packages/desktop/package.json').version")

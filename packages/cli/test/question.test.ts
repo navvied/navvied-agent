@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { EngineEvent } from "@navvied/protocol";
-import { askQuestions } from "../src/question-ui.ts";
+import { answeredLines, askQuestions } from "../src/question-ui.ts";
 import type { Choice, IO } from "../src/io.ts";
 import { parseArgs } from "../src/args.ts";
 import { main } from "../src/main.ts";
@@ -11,32 +11,43 @@ type Asked = Extract<EngineEvent, { ev: "question" }>;
 /** A fake terminal that picks the rows named in order (a name that is not there picks nothing) and types what it is told. */
 function terminal(picks: (string | undefined)[], typed: string[] = []) {
   const shown: string[][] = [];
+  const frames: { title: string; body?: string[] }[] = [];
   const io = {
     color: false,
-    choose: async (_t: string, items: Choice[]): Promise<number | undefined> => { shown.push(items.map((i) => i.label)); const want = picks.shift(); const at = items.findIndex((i) => i.label === want); return at < 0 ? undefined : at; },
+    choose: async (title: string, items: Choice[], _at: number, frame: { body?: string[] }): Promise<number | undefined> => { frames.push({ title, ...(frame.body ? { body: frame.body } : {}) }); shown.push(items.map((i) => i.label)); const want = picks.shift(); const at = items.findIndex((i) => i.label === want); return at < 0 ? undefined : at; },
     text: async (): Promise<string | undefined> => typed.shift(),
   } as unknown as IO;
-  return { io, shown };
+  return { io, shown, frames };
 }
 const asked = (...questions: Asked["questions"]): Asked => ({ ev: "question", id: "q1", questions });
 
 describe("the questions of the agent in the terminal", () => {
   test("a choice is picked from a list, and the person's own words are the last row", async () => {
-    const { io, shown } = terminal(["SQLite", "Something else"], ["Mongo"]);
+    const { io, shown } = terminal(["SQLite", "In my own words…"], ["Mongo"]);
     expect(await askQuestions(io, asked({ question: "Which?", choices: ["Postgres", "SQLite"] }, { question: "And?", choices: ["x"] }))).toEqual([["SQLite"], ["Mongo"]]);
-    expect(shown[0]).toEqual(["Postgres", "SQLite", "Something else"]);
+    expect(shown[0]).toEqual(["Postgres", "SQLite", "In my own words…"]);
+  });
+  test("every list is titled the same and carries the question under it", async () => {
+    const { io, frames } = terminal(["x"]);
+    await askQuestions(io, asked({ question: "Which?", choices: ["x"] }));
+    expect(frames).toEqual([{ title: "A question", body: ["", "Which?"] }]);
+  });
+  test("the conversation keeps the answered questions and says the agent goes on; nothing when all were skipped", () => {
+    const e = asked({ question: "Which?", choices: ["a"] }, { question: "And?" });
+    expect(answeredLines(false, e, [["a", "b"], []])).toEqual(["Which?", "● a", "● b", "", "Answered. navvied is continuing."]);
+    expect(answeredLines(false, e, [[], []])).toEqual([]);
   });
   test("several can be picked from one list until the person says done", async () => {
     const { io, shown } = terminal(["a", "c", "Done"]);
     expect(await askQuestions(io, asked({ question: "Which?", choices: ["a", "b", "c"], multi: true }))).toEqual([["a", "c"]]);
-    expect(shown[1]).toEqual(["b", "c", "Something else", "Done"]);
+    expect(shown[1]).toEqual(["b", "c", "In my own words…", "Done"]);
   });
   test("leaving the list skips that question and the rest", async () => {
     const { io } = terminal([undefined]);
     expect(await askQuestions(io, asked({ question: "A?", choices: ["x"] }, { question: "B?", choices: ["y"] }))).toEqual([[], []]);
   });
   test("an empty own answer asks the list again; a terminal with no menus skips everything", async () => {
-    const { io } = terminal(["Something else", "x"], [" "]);
+    const { io } = terminal(["In my own words…", "x"], [" "]);
     expect(await askQuestions(io, asked({ question: "A?", choices: ["x"] }))).toEqual([["x"]]);
     expect(await askQuestions({ color: false } as unknown as IO, asked({ question: "A?" }, { question: "B?" }))).toEqual([[], []]);
   });

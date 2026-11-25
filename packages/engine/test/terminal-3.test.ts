@@ -52,6 +52,19 @@ describe("asking for a job again and again", () => {
     jobs.close();
   }, 20_000);
 
+  test("the sentences that start a job read as sentences, and a trailing & is left out of a background job", async () => {
+    const quiet = new Jobs(() => undefined);
+    const plain = await bash(node("0"), { run_in_background: true }, ctx(quiet));
+    expect(plain).toMatch(/^Started job\d+ in the background\. Read what it prints with BashOutput \(job_id "job\d+"\), stop it with KillShell\.$/);
+    const waking = new Jobs(() => undefined, Date.now, { wake: true });
+    const said = await bash(node("0"), { run_in_background: true }, ctx(waking));
+    expect(said).toContain('BashOutput (job_id "job1") reads what it prints, and KillShell stops it.');
+    const withAmp = await bash(`${node("0")} &`, { run_in_background: true }, ctx(quiet));
+    expect(withAmp).toContain("The trailing & was left out");
+    expect(await bash(`${node("0")} && true`, { run_in_background: true }, ctx(quiet))).not.toContain("left out");
+    quiet.close(); waking.close();
+  });
+
   test("what Bash says on starting depends on whether the host wakes the model", async () => {
     const quiet = new Jobs(() => undefined);
     expect(await bash(node("0"), { run_in_background: true }, ctx(quiet))).toContain("Read what it prints with BashOutput");

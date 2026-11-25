@@ -101,6 +101,28 @@ cut out of anything the agent or the model said). The counter lets one request a
 after another. After two runs in a row that ended in a server error or a time-out the run stops: that is for a person to look at.
 A run that does not solve its task keeps what the agent last said, the steps it took and the end of what the check printed.
 
+## Does the code tool help? (the comparison of two arms)
+
+`ExecuteCode` runs a Python script that calls the other tools as functions. It is experimental: it is offered only when its switch (the `code`
+row of the tools, `tool:code` in the agent's own state) is on, so both arms are one program and the same tasks; the harness switches it on for the code arm. Six tasks named `mc-…` need many
+tool calls with logic between them (60 JSON files added up by category, 12 pages of an API followed by their links, a call changed in
+45 files where it matches, 8 logs triaged, an import cycle found among 30 modules, two folders of 40 config files compared); each has
+a reference solution for the ordinary tools (`apply.sh`) and one written for the code tool (`code.py`, run by `--mock code`).
+
+```
+bun packages/eval/src/ab.ts --dry                       the scripted model, both arms: the wiring, no token spent
+bun packages/eval/src/ab.ts --estimate                  what a real run is expected to cost, no token spent
+bun packages/eval/src/ab.ts --upstream <base address> --upstream-model <id> --upstream-key-file <file> \
+  --max-tokens <n> --yes-spend [--tasks mc-…,mc-…] [--repeat 3] [--arms base,code] [--out results.jsonl] [--resume] [--per-minute 20]
+```
+
+Nothing is sent to a real model without `--yes-spend`, and `--max-tokens` is a hard limit: the counter refuses the request that would
+pass it and the run stops (that run is not counted; `--resume` goes on from the results file). The counter also keeps to the service's
+rate (`--per-minute`, 20 by default): requests are spaced, and an answer of "too many requests" is waited out and the request sent
+again, so the agent never sees it. What the counter waited is taken out of the seconds that are reported. The arms change places with
+every repeat. The report gives, per task and in all, the passes of each arm with their interval and, for model calls, tokens, seconds
+and tool calls, the middle of each arm and the difference of the paired repeats with its lowest and highest.
+
 ## Terminal tasks and how the terminal is misused
 
 Seven of the tasks are about the terminal: finding one line in a 200,000-line log, starting a slow server and waiting until it

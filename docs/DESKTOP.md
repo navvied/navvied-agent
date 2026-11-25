@@ -233,6 +233,10 @@ Actions secrets.
    - `TAURI_SIGNING_PRIVATE_KEY` — the contents of `~/navvied-updater.key` (the whole file, exactly as written).
    - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the password chosen in step 1.
 
+The macOS disk image is not made by the bundler: it makes the app, and `scripts/make-dmg.sh` writes the image straight from it without ever
+attaching one (the bundler's own way attaches a fresh image, and macOS's storage daemon then keeps its device open, so the detach fails now and then
+with "Resource busy").
+
 Once both are set and the next tagged release runs, `desktop.yml`'s `bundle` job signs the installer (or, for
 macOS, a separate `.app.tar.gz` next to the `.dmg` — see the workflow's own comment on why) and the `publish` job
 assembles `latest.json` from the `.sig` files that run produced

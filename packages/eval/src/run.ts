@@ -6,7 +6,7 @@ import { instantiate } from "./adapter.ts";
 import { watchMemory } from "./memory.ts";
 import type { Meter } from "./meter.ts";
 import type { Task } from "./task.ts";
-import { check, killProcesses, leftovers, missingPrograms, newSecret, prepare, protectedHashes, scriptEnv, shell, taskEnv } from "./workspace.ts";
+import { check, killProcesses, leftovers, missingPrograms, newSecret, prepare, protectedHashes, mcpConfig, scriptEnv, shell, taskEnv } from "./workspace.ts";
 
 export interface RunOptions {
   /** The program that runs a task, as an argument list (for example `["bun", "packages/cli/src/main.ts"]`). */
@@ -31,6 +31,8 @@ export interface RunOptions {
 /** How the agent misused the terminal: calls the tools refused as wrong, waits that only polled, and a `cd` put in front of a command that could have used `cwd`. */
 export interface Misuse { badCalls: number; polls: number; cdCalls: number }
 
+/** The tool that runs a script which calls other tools: the calls it makes are shown under its step. */
+const CODE_TOOL = "ExecuteCode";
 const TERMINAL_TOOLS = new Set(["Bash", "BashOutput", "BashInput", "KillShell"]);
 
 /** From the steps of one run (each tool call as it ended), how the terminal was misused. */
@@ -100,6 +102,8 @@ export interface TaskResult {
   inTokens?: number;
   /** Some answer carried no token counts, so some of the tokens are characters divided by four. */
   estimated?: boolean;
+  /** Time the counter waited before passing requests on (to keep to the service's rate, to back off): not the model's or the agent's. */
+  waitedMs?: number;
   /** From the start of the agent to its first request to the model. */
   firstRequestMs?: number;
   /** For a run that did not solve the task: what the agent last said, the steps it took, and the tail of what the check printed. */
@@ -110,6 +114,9 @@ export interface TaskResult {
   misuse?: Misuse;
   /** How the agent used the web tools (ours only). */
   web?: WebUse;
+  /** The calls the model made, by tool, and the calls scripts made from inside the code tool (shown under it, not counted in `toolCalls`). */
+  tools?: Record<string, number>;
+  nestedCalls?: number;
   /** How many requests the model answered with a server error or not at all. */
   modelErrors?: number;
   /** The biggest request of the run, whatever became of it (a request that was never answered is counted by its size, estimated): a run that stalls is often one whose request grew. */
@@ -123,11 +130,11 @@ export interface TaskResult {
   workspace?: string;
 }
 
-interface Metrics { /** Every task list the agent sent. */ plans?: PlanEntry[][]; misuse?: Misuse; web?: WebUse; modelCalls: number; toolCalls: number; outTokens: number; peakContext: number; error?: string; /** What the agent said in its last turn. */ said?: string; /** The tools it used, in order, with how each ended. */ steps?: string[] }
+interface Metrics { tools?: Record<string, number>; nested?: number; /** Every task list the agent sent. */ plans?: PlanEntry[][]; misuse?: Misuse; web?: WebUse; modelCalls: number; toolCalls: number; outTokens: number; peakContext: number; error?: string; /** What the agent said in its last turn. */ said?: string; /** The tools it used, in order, with how each ended. */ steps?: string[] }
 
 function measure(stdout: string, known = ""): Metrics {
   const m: Metrics = { modelCalls: 0, toolCalls: 0, outTokens: 0, peakContext: 0 };
-  const seenTools = new Set<string>();
+  const seenTools = new Set<string>(), seenNested = new Set<string>(), names = new Map<string, string>();
   const inputs = new Map<string, unknown>();
   const ended: { name: string; input?: unknown; output?: string; status: string }[] = [];
   for (const line of new LineSplitter().push(`${stdout}\n`)) {
@@ -135,8 +142,9 @@ function measure(stdout: string, known = ""): Metrics {
     if (!parsed.ok) continue;
     const e = parsed.value;
     if (e.ev === "usage") { m.modelCalls += 1; m.outTokens += e.out; m.peakContext = Math.max(m.peakContext, e.ctx); }
-    else if (e.ev === "tool" && !e.parent) {
-      if (!seenTools.has(e.id)) { seenTools.add(e.id); m.toolCalls += 1; }
+    else if (e.ev === "tool" && e.parent) { if (names.get(e.parent) === CODE_TOOL && !seenNested.has(e.id)) { seenNested.add(e.id); m.nested = (m.nested ?? 0) + 1; } }
+    else if (e.ev === "tool") {
+      if (!seenTools.has(e.id)) { seenTools.add(e.id); names.set(e.id, e.name); m.toolCalls += 1; m.tools = { ...m.tools, [e.name]: (m.tools?.[e.name] ?? 0) + 1 }; }
       if (e.input !== undefined) inputs.set(e.id, e.input);
       if (e.status !== "running") { (m.steps ??= []).push(`${e.name}:${e.status}`); ended.push({ name: e.name, status: e.status, input: inputs.get(e.id), ...(e.output !== undefined ? { output: e.output } : {}) }); }
     }
@@ -163,6 +171,7 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
     if (!setup.ok) { killProcesses(leftovers(dir)); rmSync(dir, { recursive: true, force: true }); return { ...about(task), task: task.id, model, passed: false, reason: "setup failed", error: setup.output.trim().split("\n").at(-1)?.slice(0, 300) ?? "", ...none }; }
   }
   const before = protectedHashes(dir, task.protect);
+  const config = mcpConfig(task);
   const started = Date.now();
   const [program, ...base] = opts.command;
   const runId = `${task.id}-${crypto.randomUUID().slice(0, 8)}`;
@@ -171,13 +180,14 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
   const other = opts.agent ? instantiate(opts.agent, { prompt: task.prompt, dir, ...(opts.model ? { model: opts.model } : {}), ...(opts.meter && opts.agent.pointable ? { baseUrl: opts.meter.url(runId) } : {}), ...(opts.key ? { key: opts.key } : {}) }) : undefined;
   const proc = Bun.spawn(
     other ? other.argv : [program!, ...base, "run", task.prompt, "--cwd", dir, "--json", "--mode", "auto", "--max-steps", String(task.maxSteps), ...(task.answers ? ["--answers", JSON.stringify(task.answers)] : []), ...(opts.model ? ["--model", opts.model] : [])],
-    { cwd: dir, env: { ...process.env, ...secret, NAVVIED_TERMINAL_ENV: "BENCH_SECRET", ...opts.env, ...taskEnv(dir, task), ...counted, ...other?.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+    { cwd: dir, env: { ...process.env, ...secret, NAVVIED_TERMINAL_ENV: "BENCH_SECRET", ...opts.env, ...config.env, ...taskEnv(dir, task), ...counted, ...other?.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
   );
   const memory = watchMemory(proc.pid);
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; proc.kill("SIGKILL"); }, task.timeoutSeconds * 1000);
   const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
   const exitCode = await proc.exited;
+  config.remove();
   if (opts.trace) {
     const hide = [opts.env?.NAVVIED_API_KEY, opts.key].filter((k): k is string => !!k && k.length >= 8 && k !== "none");
     const clean = (t: string): string => hide.reduce((x, k) => x.split(k).join("[key]"), t);
@@ -209,11 +219,13 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
     ...about(task), task: task.id, model, passed: reason === "solved", reason, ms,
     modelCalls: hits.length || metrics.modelCalls, toolCalls: metrics.toolCalls, outTokens: hits.length ? hits.reduce((n, h) => n + h.outTokens, 0) : metrics.outTokens, peakContext: metrics.peakContext, exitCode,
     ...(hits.length ? {
-      modelErrors: hits.filter((h) => h.status >= 500).length, inTokens: hits.reduce((n, h) => n + h.inTokens, 0), estimated: hits.some((h) => h.estimated), firstRequestMs: Math.max(0, hits[0]!.at - started),
+      modelErrors: hits.filter((h) => h.status >= 500).length, inTokens: hits.reduce((n, h) => n + h.inTokens, 0), estimated: hits.some((h) => h.estimated), firstRequestMs: Math.max(0, hits[0]!.at - started), waitedMs: hits.reduce((n, h) => n + h.waitedMs, 0),
       largest: ((big) => ({ requestBytes: big.requestBytes, inTokens: big.inTokens, status: big.status }))(hits.reduce((a, h) => (h.requestBytes > a.requestBytes ? h : a), hits[0]!)),
       prompt: { systemChars: hits[0]!.systemChars, tools: hits[0]!.tools, toolChars: hits[0]!.toolChars, requestBytes: hits[0]!.requestBytes },
     } : {}),
     ...(timedOut ? { checkedAtTimeout: result.ok } : {}),
+    ...(metrics.tools ? { tools: metrics.tools } : {}),
+    ...(metrics.nested ? { nestedCalls: metrics.nested } : {}),
     ...(metrics.misuse ? { misuse: metrics.misuse } : {}),
     ...(metrics.web ? { web: metrics.web } : {}),
     ...(peak ? { peakMb: peak.agentMb, peakTreeMb: peak.treeMb } : {}),

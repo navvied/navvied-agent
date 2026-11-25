@@ -255,8 +255,11 @@ function validateOne(raw: unknown): Result<Command> {
       if (typeof raw.key !== "string" || !/^(new|[A-Za-z0-9_-]{1,80})$/.test(raw.key)) return fail("draft needs the id of a conversation, or new");
       if (typeof raw.text !== "string" || raw.text.length > 20_000) return fail("draft.text must be text of at most 20000 characters");
       return ok({ cmd: "draft", key: raw.key, text: raw.text });
+    case "tool.setup":
+      if (typeof raw.id !== "string" || !/^[a-z][a-z0-9-]{0,40}$/.test(raw.id)) return fail("tool.setup needs the id of a tool");
+      return ok({ cmd: "tool.setup", id: raw.id });
     case "tool.toggle":
-      if (typeof raw.name !== "string" || !/^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(raw.name)) return fail("tool.toggle needs the name of a tool");
+      if (typeof raw.name !== "string" || !/^[A-Za-z][A-Za-z0-9_-]{0,40}$/.test(raw.name)) return fail("tool.toggle needs the name of a tool");
       if (typeof raw.enabled !== "boolean") return fail("tool.toggle.enabled must be true or false");
       return ok({ cmd: "tool.toggle", name: raw.name, enabled: raw.enabled });
     case "terminal.use":

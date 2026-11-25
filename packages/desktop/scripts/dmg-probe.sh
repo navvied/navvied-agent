@@ -21,12 +21,26 @@ mkdir -p "$work/parts"
 head -c 95000000 /dev/urandom >"$work/parts/program"
 head -c 25000000 /dev/urandom >"$work/parts/rest"
 
-# $1: folder to fill; $2: "plain", or "quiet" to also tell the file-events daemon and Spotlight to leave the volume alone
+# $1: folder to fill; $2: "plain", or "quiet" to also tell the file-events daemon and Spotlight to leave the volume alone.
+# The app is a real, signed one in miniature: a program of the system as its executable, the random bytes as a sealed resource, a link
+# inside the bundle and an extended attribute on a file, the things a copy of an app can lose.
 stage() {
-  mkdir -p "$1/navvied.app/Contents/MacOS" "$1/navvied.app/Contents/Resources"
-  cp "$work/parts/program" "$1/navvied.app/Contents/MacOS/navvied"
-  cp "$work/parts/rest" "$1/navvied.app/Contents/Resources/rest"
-  printf '<plist/>' >"$1/navvied.app/Contents/Info.plist"
+  app="$1/navvied.app"
+  mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+  cp /bin/ls "$app/Contents/MacOS/navvied"
+  cp "$work/parts/program" "$app/Contents/Resources/program"
+  cp "$work/parts/rest" "$app/Contents/Resources/rest"
+  ln -s rest "$app/Contents/Resources/rest-link"
+  xattr -w com.navvied.probe kept "$app/Contents/Resources/rest"
+  cat >"$app/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>navvied</string>
+<key>CFBundleIdentifier</key><string>probe.navvied</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+</dict></plist>
+PLIST
+  codesign --force --deep --sign - "$app" >/dev/null 2>&1
   ln -s /Applications "$1/Applications"
   if [ "$2" = quiet ]; then
     mkdir -p "$1/.fseventsd"
@@ -34,6 +48,9 @@ stage() {
     : >"$1/.metadata_never_index"
   fi
 }
+
+# Says which check of a chain failed, so the first failure's annotation names it.
+need() { "$@" || { echo "check failed: $*" >&2; return 1; }; }
 
 # Detaches whatever image this probe left attached, so one failure cannot make the next one fail.
 cleanup() {
@@ -70,14 +87,15 @@ attempt() {
 attempt create plain 'hdiutil create -srcfolder "$stage" -volname probe -fs HFS+ -fsargs "-c c=64,a=16,e=16" -format UDRW "$image"'
 # The same, with the volume told in advance that nothing needs to watch it.
 attempt create-quiet quiet 'hdiutil create -srcfolder "$stage" -volname probe -fs HFS+ -fsargs "-c c=64,a=16,e=16" -format UDRW "$image"'
-# Built from the folder directly, never attached: there is no volume for anything to hold.
-attempt hybrid plain 'hdiutil makehybrid -default-volume-name probe -hfs -o "$image" "$stage" && hdiutil convert -format UDRW -ov -o "$image" "$image"'
-# The finished download made that way, then opened the way a person opens it: attached read-only, its contents read, detached.
-attempt hybrid-final plain 'hdiutil makehybrid -default-volume-name probe -hfs -o "$work/h-$way-$i.dmg" "$stage" && hdiutil convert -format UDZO -ov -o "$image" "$work/h-$way-$i.dmg" && hdiutil verify "$image" && m=$(mktemp -d "$work/mount.XXXXXX") && hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$m" "$image" >/dev/null && test -d "$m/navvied.app/Contents/MacOS" && test -L "$m/Applications" && cmp "$m/navvied.app/Contents/MacOS/navvied" "$work/parts/program" && hdiutil detach "$m"'
+# The way the installer now makes it: scripts/make-dmg.sh, from the app alone, never attaching an image.
+attempt script plain 'bash "$here/make-dmg.sh" "$stage/navvied.app" "$image" navvied'
+# That finished download opened the way a person opens it: attached read-only, its contents read, detached; and the app inside still
+# passes the system's own signature check, keeps its link and its extended attribute.
+attempt script-opened plain 'bash "$here/make-dmg.sh" "$stage/navvied.app" "$image" navvied && m=$(mktemp -d "$work/mount.XXXXXX") && hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$m" "$image" >/dev/null && need test -L "$m/Applications" && need cmp "$m/navvied.app/Contents/Resources/program" "$work/parts/program" && need codesign --verify --deep --strict "$m/navvied.app" && need test "$(readlink "$m/navvied.app/Contents/Resources/rest-link")" = rest && need test "$(xattr -p com.navvied.probe "$m/navvied.app/Contents/Resources/rest")" = kept && hdiutil detach "$m"'
 
 {
   echo "way             images  failed  slowest (s)"
-  for way in create create-quiet hybrid hybrid-final; do
+  for way in create create-quiet script script-opened; do
     awk -v w="$way" '$1 == w {n++; if ($2 == "fail") f++; if ($3 > s) s = $3} END {printf "%-15s %6d  %6d  %11d\n", w, n, f, s}' "$results"
   done
 } >"$work/summary.txt"

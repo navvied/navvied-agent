@@ -19,18 +19,33 @@ export interface PluginInfo {
 /** What the person switched off, kept in the computer's own state (the files and the configuration are never touched). */
 export class PluginState {
   constructor(private readonly file: string) {}
-  disabled(): Set<string> {
-    try { const raw = JSON.parse(readFileSync(this.file, "utf8")) as { disabled?: unknown }; return new Set(Array.isArray(raw.disabled) ? raw.disabled.filter((x): x is string => typeof x === "string") : []); } catch { return new Set(); }
+  #read(): { disabled: Set<string>; enabled: Set<string> } {
+    try {
+      const raw = JSON.parse(readFileSync(this.file, "utf8")) as { disabled?: unknown; enabled?: unknown };
+      const list = (v: unknown): Set<string> => new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+      return { disabled: list(raw.disabled), enabled: list(raw.enabled) };
+    } catch { return { disabled: new Set(), enabled: new Set() }; }
   }
-  set(id: string, enabled: boolean): void {
-    const off = this.disabled();
-    if (enabled) off.delete(id); else off.add(id);
+  #write(state: { disabled: Set<string>; enabled: Set<string> }): void {
     try {
       mkdirSync(dirname(this.file), { recursive: true });
       const tmp = `${this.file}.${process.pid}.tmp`;
-      writeFileSync(tmp, JSON.stringify({ version: 1, disabled: [...off].slice(-500) }));
+      writeFileSync(tmp, JSON.stringify({ version: 1, disabled: [...state.disabled].slice(-500), enabled: [...state.enabled].slice(-500) }));
       renameSync(tmp, this.file);
     } catch { /* a full disk must not stop the work */ }
+  }
+  disabled(): Set<string> { return this.#read().disabled; }
+  /** What the person switched on although it is off until then (an experimental tool). */
+  enabledExplicitly(): Set<string> { return this.#read().enabled; }
+  set(id: string, enabled: boolean): void {
+    const state = this.#read();
+    if (enabled) { state.disabled.delete(id); state.enabled.add(id); } else { state.enabled.delete(id); state.disabled.add(id); }
+    this.#write(state);
+  }
+  /** Takes back what was said about it, either way. */
+  forget(id: string): void {
+    const state = this.#read();
+    if (state.disabled.delete(id) || state.enabled.delete(id)) this.#write(state);
   }
 }
 

@@ -1,4 +1,5 @@
-import nativePath from "node:path";
+import { homedir } from "node:os";
+import nativePath, { posix } from "node:path";
 import { shellView } from "./shell-scan.ts";
 import { EDIT_LIKE, FILE_WRITERS, changedPaths } from "./tools/changed.ts";
 
@@ -139,6 +140,21 @@ const WINDOWS_SYSTEM_DIRS = /^[a-z]:\/(windows|program files|program files \(x86
 /** What `rm -r` must never be pointed at: the disk, the home folder, or a whole system folder. */
 const WHOLE = /^(\/|~|\$HOME|\/\*|~\/\*|\$HOME\/\*|\/(etc|boot|usr|bin|sbin|lib|lib64|var|opt|root|home|System|Library|Applications|dev|proc|sys)\/?\*?)$/;
 
+const SYSTEM_WHOLE = /^\/(etc|boot|usr|bin|sbin|lib|lib64|var|opt|root|home|Users|System|Library|Applications|dev|proc|sys)$/;
+
+/**
+ * Whether a target of a delete is the disk, a folder every program depends on, or a whole home folder, however it is spelt: `~`, `$HOME` and
+ * `${HOME}` are put in for the home folder first, then the path is made plain the way the shell makes it (`//` is `/`, a last `/` or `/.` is nothing,
+ * `..` goes up), then it is compared as a place, not as writing. A path that is not absolute here is the project's own, and is not this.
+ */
+function wholeFolder(target: string): boolean {
+  const home = posix.normalize((process.env.HOME || homedir()).replace(/\\/g, "/")).replace(/(.)\/+$/, "$1");
+  let t = target.replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, home);
+  if (!t.startsWith("/")) return false;
+  t = posix.normalize(t).replace(/\/\*$/, "").replace(/(.)\/+$/, "$1") || "/";
+  return t === "/" || t === home || home.startsWith(`${t}/`) || SYSTEM_WHOLE.test(t) || /^\/(home|Users)\/[^/]+$/.test(t);
+}
+
 /**
  * What a delete must never be pointed at on Windows, in any of its shells: a drive (`C:`, `/c` in Git Bash), the folders every
  * Windows install is made of, a user's whole home folder, or the variables that stand for them. Spelt with `/` or `\\`, in any case.
@@ -155,7 +171,7 @@ function blockedLine(line: string): string | undefined {
     const recursive = args.some((a) => /^-[a-zA-Z]*[rR]/.test(a) || a === "--recursive" || /^\/s$/i.test(a));
     // `/q` after rd, rmdir, del or erase is a switch, not the folder /q.
     const targets = /^(rm|ri|remove-item)\s/i.test(words) ? args : args.filter((a) => !/^\/[a-z]$/i.test(a));
-    const everything = args.some((a) => !a.startsWith("-") && WHOLE.test(a)) || WINDOWS_WHOLE.test(targets.join(" ").toLowerCase().replace(/\\/g, "/"));
+    const everything = args.some((a) => !a.startsWith("-") && (WHOLE.test(a) || wholeFolder(a))) || WINDOWS_WHOLE.test(targets.join(" ").toLowerCase().replace(/\\/g, "/"));
     if (recursive && everything) return "this would delete the whole home folder, a system folder or the whole disk";
   }
   if (/^format(\.com)?\s+[a-z]:/i.test(words) || /^(format-volume|clear-disk|remove-partition)(\s|$)/i.test(words)) return "this would format a disk";

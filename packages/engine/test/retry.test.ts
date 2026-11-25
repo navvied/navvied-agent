@@ -187,3 +187,23 @@ describe("what the engine says while it waits", () => {
     r.cleanup();
   });
 });
+
+describe("a limit that is used up is not a slow-down", () => {
+  const spent = (): ProviderError => new ProviderError('the model endpoint answered 429: {"error":{"message":"This session has used all it may. Start a new one.","type":"budget_exhausted"}}', 429);
+
+  test("it is not tried again, and it says so in plain words", () => {
+    const e = spent();
+    expect(e.spent).toBe(true);
+    expect(retryable(e)).toBe(false);
+    expect(e.message).toBe("This is not a slow-down: This session has used all it may. Start a new one. Trying again will not help.");
+    expect(retryable(new ProviderError("the model endpoint answered 429: slow down", 429))).toBe(true);
+    expect(new ProviderError("slow down", 429).spent).toBe(false);
+  });
+
+  test("the call is made once", async () => {
+    const inner = flaky([spent(), spent(), spent()]);
+    const { on } = heard();
+    await expect(new RetryProvider(inner, options).stream(req, signal(), on)).rejects.toThrow("Trying again will not help");
+    expect(inner.calls).toBe(1);
+  });
+});

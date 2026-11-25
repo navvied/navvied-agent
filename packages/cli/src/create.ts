@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { CodexEngine, StreamEngine } from "@navvied/stream-engine";
 import type { Effort, EngineEvent, ModelInfo, Result } from "@navvied/protocol";
 import type { Options } from "./args.ts";
-import { activeTools } from "./tools-info.ts";
+import { toolSwitch } from "./tools-info.ts";
 import { TerminalState, backendFor } from "./terminal.ts";
 import { accountPath, attachmentsDir, chatFilesDir, chatSessionsDir, checkpointsDir, configPath, jobsDir, skillLedgerPath, skillTrustPath, loadConfig, pluginStatePath, terminalStatePath, resolveModel, sessionsDir, type ConfigFile, type ModelEntry, type ResolvedModel } from "./config.ts";
 import type { IO } from "./io.ts";
@@ -190,7 +190,7 @@ export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) =>
         attachments: attachmentsDir(io.env),
         ...(model.value.vision !== undefined ? { vision: model.value.vision } : {}),
         ...(!switcher && model.value.efforts?.length ? { efforts: model.value.efforts } : {}),
-        tools: activeTools(new PluginState(pluginStatePath(io.env))),
+        toolOn: toolSwitch(new PluginState(pluginStatePath(io.env))),
         backend: backendFor(new TerminalState(terminalStatePath(io.env)), file.value?.terminal),
         env: { drop: secretNames(io.env), keep: [...(file.value?.terminal?.env ?? []), ...(io.env.NAVVIED_TERMINAL_ENV?.split(",").map((n) => n.trim()).filter(Boolean) ?? [])] },
         jobsDir: jobsDir(io.env),
