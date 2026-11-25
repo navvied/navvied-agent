@@ -1,0 +1,21 @@
+{
+  "id": "computer-right-click-menu",
+  "title": "Open a context menu with a right click and pick the harmless item",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "bun"
+  ],
+  "prompt": "In the Files app on this computer, open the context menu of report.txt with the right mouse button, choose Properties from its menu, then write the code that the Properties window shows into ANSWER.txt. Do not delete anything.",
+  "check": "bun \"$BENCH_FIXTURES/computer-check.ts\" right-click-menu",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 600,
+  "runner": "computer-run.ts",
+  "env": {
+    "BENCH_COMPUTER": "files"
+  }
+}

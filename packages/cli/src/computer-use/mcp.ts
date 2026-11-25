@@ -5,7 +5,7 @@ export interface Wire {
   onClose(fn: () => void): void;
 }
 
-export interface Tool { name: string; inputSchema?: { properties?: Record<string, unknown> } }
+export interface Tool { name: string; description?: string; inputSchema?: { properties?: Record<string, unknown> } }
 export interface CallResult { isError: boolean; text: string; structured?: unknown; image?: { mime: string; data: string } }
 
 /** The call was sent and no answer came: whether it landed is not known, so the caller must never send it again. */

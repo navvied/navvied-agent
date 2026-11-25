@@ -9,10 +9,16 @@ import { clip, num, outputBudget, str } from "./util.ts";
  * the helper's, so a run without them cannot skip them.
  */
 export const COMPUTER_TOOL = "computer";
-const ACTIONS = ["capture", "click", "type", "key", "scroll", "list", "wait"] as const;
+const ACTIONS = ["capture", "click", "type", "key", "scroll", "list", "wait", "drag"] as const;
+const BUTTONS = ["left", "right", "middle"] as const;
+const DIRECTIONS = ["up", "down", "left", "right"] as const;
+/** What the driver takes: a wheel moves 1 to 50 ticks, a wait lasts at most 30 seconds. */
+const TICKS = { min: 1, max: 50, normal: 3 };
+const WAIT_MAX_S = 30;
 /** What plan mode allows: looking at what is there and waiting. A capture shows a person's screen, so it is not looking only. */
 export const PLAN_COMPUTER_ACTIONS: ReadonlySet<string> = new Set(["list", "wait"]);
-const INPUT: ReadonlySet<string> = new Set(["click", "type", "key", "scroll"]);
+const INPUT: ReadonlySet<string> = new Set(["click", "type", "key", "scroll", "drag"]);
+const NUMBERS = ["target", "x", "y", "to", "to_x", "to_y", "count", "amount", "seconds"];
 
 type Refusal = ComputerCode | "stale_target";
 const NEXT: Record<Refusal, string> = {
@@ -56,6 +62,13 @@ function incomplete(a: Record<string, unknown>, action: string): string | undefi
   if (action === "type" && typeof a.text !== "string") return "type needs text";
   if (action === "key" && !has("keys")) return "key needs keys, such as cmd+s";
   if (action === "scroll" && !has("target") && !has("app")) return "scroll needs target or app";
+  if (action === "scroll" && a.direction !== undefined && !(DIRECTIONS as readonly unknown[]).includes(a.direction)) return `direction is one of ${DIRECTIONS.join(", ")}`;
+  if (action === "click" && a.button !== undefined && !(BUTTONS as readonly unknown[]).includes(a.button)) return `button is one of ${BUTTONS.join(", ")}`;
+  if (action === "drag") {
+    const from = has("target") ? "target" : typeof a.x === "number" && typeof a.y === "number" ? "xy" : "";
+    if (!from) return "drag needs target (where it starts), or x and y";
+    if (!(from === "target" ? has("to") : typeof a.to_x === "number" && typeof a.to_y === "number")) return from === "target" ? "drag needs to, the number of the element it ends on" : "drag needs to_x and to_y, where it ends";
+  }
   return undefined;
 }
 
@@ -68,6 +81,19 @@ function callFor(a: Record<string, unknown>, action: (typeof ACTIONS)[number], s
   if (typeof a.text === "string") call.text = a.text;
   if (str(a.keys).trim()) call.keys = str(a.keys).trim();
   if (typeof a.x === "number" && typeof a.y === "number") { call.x = Math.round(a.x); call.y = Math.round(a.y); }
+  if (action === "click") {
+    if (BUTTONS.includes(a.button as never) && a.button !== "left") call.button = a.button as "right" | "middle";
+    if (typeof a.count === "number" && a.count >= 2) call.count = 2;
+  }
+  if (action === "drag") {
+    if (typeof a.to === "number") call.to = Math.floor(a.to);
+    if (typeof a.to_x === "number" && typeof a.to_y === "number") { call.to_x = Math.round(a.to_x); call.to_y = Math.round(a.to_y); }
+  }
+  if (action === "scroll") {
+    call.direction = DIRECTIONS.includes(a.direction as never) ? (a.direction as (typeof DIRECTIONS)[number]) : "down";
+    call.amount = typeof a.amount === "number" ? Math.max(TICKS.min, Math.min(TICKS.max, Math.round(a.amount))) : TICKS.normal;
+  }
+  if (action === "wait" && typeof a.seconds === "number") call.seconds = Math.max(0, Math.min(WAIT_MAX_S, a.seconds));
   if (action !== "capture") return { call };
   const asked = str(a.mode);
   const mode = seeing ? (asked === "ax" || asked === "vision" ? asked : "som") : "ax";
@@ -92,7 +118,7 @@ async function run(a: Record<string, unknown>, ctx: ToolContext): Promise<string
   const stale = (next?: string): string => said(refuse("stale_target", next), "refused", { code: "stale_target", next: next ?? NEXT.stale_target });
 
   const input = INPUT.has(kind);
-  const numbered = typeof a.target === "number";
+  const numbered = typeof a.target === "number" || typeof a.to === "number";
   const other = numbered && str(a.app).trim() !== "" && screen.app !== "" && !same(screen.app, str(a.app));
   if (input && screen.unconfirmed) return stale(UNCONFIRMED);
   if (numbered && (!screen.fresh || other)) return stale();
@@ -145,7 +171,7 @@ export const computer: Tool = {
   readOnly: false,
   inPlan: true,
   offeredWhen: ({ small, computer: on }) => on === true && !small,
-  description: "Use an app on this computer. capture it first: its elements are numbered. Then click, type, key or scroll by number; numbers die after any input, so capture again. If the result is unverified or refused, do what Next says.",
+  description: "Use an app on this computer. capture it first: its elements are numbered. Then click, type, key, scroll or drag by number; numbers die after any input, so capture again. If unverified or refused, do what Next says. list with an app names its windows.",
   parameters: {
     type: "object",
     properties: {
@@ -153,14 +179,19 @@ export const computer: Tool = {
       app: { type: "string", description: "needed for capture" },
       target: { type: "number", description: "element number" },
       text: { type: "string" },
-      keys: { type: "string", description: "such as cmd+s" },
+      keys: { type: "string", description: "cmd+s; held while clicking" },
       x: { type: "number" }, y: { type: "number" },
       mode: { type: "string", enum: ["ax", "som", "vision"] },
+      button: { type: "string", enum: [...BUTTONS] },
+      count: { type: "number", description: "2 = double" },
+      to: { type: "number", description: "drag end" }, to_x: { type: "number" }, to_y: { type: "number" },
+      direction: { type: "string", enum: [...DIRECTIONS] }, amount: { type: "number" },
+      seconds: { type: "number" },
     },
     required: ["action"],
   },
   // A small model writes the number as text ("3").
-  fixArgs: (a) => Object.fromEntries(Object.entries(a).map(([k, v]) => [k, (k === "target" || k === "x" || k === "y") && typeof v === "string" && /^\s*\d+\s*$/.test(v) ? Number(v) : v])),
-  title: (a) => `Computer: ${str(a.action)}${str(a.app) ? ` ${str(a.app)}` : ""}${a.target !== undefined ? ` ${num(a.target, 0)}` : ""}`,
+  fixArgs: (a) => Object.fromEntries(Object.entries(a).map(([k, v]) => [k, NUMBERS.includes(k) && typeof v === "string" && /^\s*\d+(\.\d+)?\s*$/.test(v) ? Number(v) : v])),
+  title: (a) => `Computer: ${str(a.action)}${str(a.app) ? ` ${str(a.app)}` : ""}${a.target !== undefined ? ` ${num(a.target, 0)}` : ""}${a.to !== undefined ? ` to ${num(a.to, 0)}` : ""}`,
   run,
 };

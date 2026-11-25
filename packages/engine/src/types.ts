@@ -101,15 +101,29 @@ export interface WebProxy { url: string; token: string }
 
 /** One step on a person's screen, as the engine sends it to the helper that owns the screen (the desktop app's host). */
 export interface ComputerCall {
-  action: "capture" | "click" | "type" | "key" | "scroll" | "list" | "wait";
+  action: "capture" | "click" | "type" | "key" | "scroll" | "list" | "wait" | "drag";
   app?: string;
   /** An element number from the last capture. */
   target?: number;
   text?: string;
+  /** For `key`, a combination such as `cmd+s`. For `click`, `drag` and `scroll`, the keys held down while it happens (`shift`, `cmd+shift`). */
   keys?: string;
-  /** Pixels, only when the capture had no number for the place. */
+  /** Pixels, only when the capture had no number for the place. For `drag`, where it starts. */
   x?: number;
   y?: number;
+  /** For `click`: sent only when it is not the left button. */
+  button?: "right" | "middle";
+  /** For `click`: sent only as 2 (a double click). */
+  count?: 2;
+  /** For `drag`: the element number it ends on (with `target` as the start), or the pixels (with `x` and `y` as the start). */
+  to?: number;
+  to_x?: number;
+  to_y?: number;
+  /** For `scroll`: always sent, with `amount` as wheel ticks, 1 to 50. */
+  direction?: "up" | "down" | "left" | "right";
+  amount?: number;
+  /** For `wait`, when given: 0 to 30. Without it, the helper's own short pause. */
+  seconds?: number;
   /** For `capture`: `ax` (numbered accessibility tree, no image), `som` (screenshot with numbers, plus the tree) or `vision`. The engine never asks for an image of a model that cannot see. */
   mode?: "ax" | "som" | "vision";
 }

@@ -15,6 +15,18 @@ const WORLD: FakeWorld = {
     },
   },
   Vault: { start: "x", screens: { x: { tree: ["1 button"] } }, capture: { refuse: { code: "permission_missing", which: "Accessibility" } } },
+  Canvas: {
+    start: "board",
+    screens: {
+      board: { tree: ['1 window "Board"', '2 card "Todo"', '3 column "Done"', '4 canvas "Drawing"'], on: { "drag 2>3": "moved", "drag 10,10>90,90": "drawn", "right click 2": "menu", "double click 2": "editing", "click 2+shift": "selected", "scroll 1 up": "top" } },
+      moved: { tree: ['1 text "Moved. Code {code:2}"'] },
+      drawn: { tree: ['1 text "Drawn"'] },
+      menu: { tree: ['1 menu "Card"', '2 item "Archive"'] },
+      editing: { tree: ['1 text field "Title"'] },
+      selected: { tree: ['1 text "Two selected"'] },
+      top: { tree: ['1 text "Top"'] },
+    },
+  },
   Mail: { start: "inbox", screens: { inbox: { tree: ['1 button "Send"'], on: { "click 1": { verdict: "unverified" }, key: { refuse: { code: "blocked_by_policy", next: "That shortcut is never pressed." } } } } } },
 };
 
@@ -29,8 +41,8 @@ const saved = (): { store: { save(id: string, m: Message[]): void; load(id: stri
 const asText = (m: Message): string => (typeof m.content === "string" ? m.content : (m.content ?? []).map((p) => (p.type === "text" ? p.text : `<${p.type}>`)).join(" "));
 
 describe("the tool", () => {
-  test("its description and parameters take at most 700 characters", () => {
-    expect(JSON.stringify({ description: computer.description, parameters: computer.parameters }).length).toBeLessThanOrEqual(700);
+  test("its description and parameters take at most 1,100 characters", () => {
+    expect(JSON.stringify({ description: computer.description, parameters: computer.parameters }).length).toBeLessThanOrEqual(1100);
   });
 
   test("it is not among the default tools: it exists where a helper is given, and only there", async () => {
@@ -153,7 +165,7 @@ describe("element numbers", () => {
       "Error: capture needs app, the application to look at.",
       "Error: type needs text.",
       "Error: key needs keys, such as cmd+s.",
-      "Error: action is one of capture, click, type, key, scroll, list, wait.",
+      "Error: action is one of capture, click, type, key, scroll, list, wait, drag.",
     ]);
     expect(fake.calls).toEqual([{ action: "click", app: "Notes", x: 10, y: 20 }]);
     r.cleanup();
@@ -275,7 +287,7 @@ describe("what each mode means for the screen", () => {
   test("plan lets through only list and wait", () => {
     expect(call("plan", { action: "list" })).toBe("go");
     expect(call("plan", { action: "wait" })).toBe("go");
-    for (const action of ["capture", "click", "type", "key", "scroll", "nonsense"]) expect(call("plan", { action }), action).toBe("stop");
+    for (const action of ["capture", "click", "type", "key", "scroll", "drag", "nonsense"]) expect(call("plan", { action }), action).toBe("stop");
     expect(call("plan", { action: "click" }, {}) === "stop").toBe(true);
   });
 
@@ -307,5 +319,94 @@ describe("what each mode means for the screen", () => {
     expect(results(r)[0]).toContain("the tool computer is turned off by the person");
     expect(fake.calls).toEqual([]);
     r.cleanup();
+  });
+});
+
+describe("the actions beyond click and type", () => {
+  const run = async (steps: Call[]) => {
+    const fake = new FakeComputer(WORLD);
+    const r = rig(script(use("capture", { app: "Canvas" }), ...steps), { computer: fake });
+    await r.turn(prompt("go"));
+    return { fake, r, told: r.provider.requests.at(-1)!.messages.filter((m) => m.role === "tool").map(asText) };
+  };
+
+  test("a drag goes from one number to another and the helper gets both; a right and a double click say so; the left button and one click are not sent", async () => {
+    const { fake, r } = await run([use("drag", { target: 2, to: 3 })]);
+    expect(fake.calls[1]).toEqual({ action: "drag", target: 2, to: 3 });
+    r.cleanup();
+    const b = await run([use("click", { target: 2, button: "right" })]);
+    expect(b.fake.calls[1]).toEqual({ action: "click", target: 2, button: "right" });
+    b.r.cleanup();
+    const c = await run([use("click", { target: 2, count: 2 })]);
+    expect(c.fake.calls[1]).toEqual({ action: "click", target: 2, count: 2 });
+    c.r.cleanup();
+    const d = await run([use("click", { target: 2, button: "left", count: 1 })]);
+    expect(d.fake.calls[1]).toEqual({ action: "click", target: 2 });
+    d.r.cleanup();
+  });
+
+  test("a drag by pixels needs both ends, and a drag by numbers needs both numbers; the helper is not asked otherwise", async () => {
+    const { fake, told, r } = await run([use("drag", { target: 2 }), use("drag", { x: 1, y: 1 }), use("drag"), use("drag", { x: 10, y: 10, to_x: 90, to_y: 90, app: "Canvas" })]);
+    expect(told.slice(1, 4)).toEqual([
+      "Error: drag needs to, the number of the element it ends on.",
+      "Error: drag needs to_x and to_y, where it ends.",
+      "Error: drag needs target (where it starts), or x and y.",
+    ]);
+    expect(fake.calls.map((c) => c.action)).toEqual(["capture", "drag"]);
+    expect(fake.calls[1]).toEqual({ action: "drag", app: "Canvas", x: 10, y: 10, to_x: 90, to_y: 90 });
+    r.cleanup();
+  });
+
+  test("the number a drag ends on is as stale as the one it starts on, and a drag is an input: it kills the numbers", async () => {
+    const { fake, told, r } = await run([use("drag", { target: 2, to: 3 }), use("drag", { target: 2, to: 3 }), use("click", { target: 1 })]);
+    expect(told[1]).toBe("delivered");
+    expect(told[2]).toContain("refused: stale_target");
+    expect(told[3]).toContain("refused: stale_target");
+    expect(fake.calls.map((c) => c.action)).toEqual(["capture", "drag"]);
+    r.cleanup();
+  });
+
+  test("keys held while clicking go with the click; a button or a direction that does not exist is told, not sent", async () => {
+    const { fake, told, r } = await run([use("click", { target: 2, keys: "shift" }), use("capture", { app: "Canvas" }), use("click", { target: 2, button: "back" }), use("scroll", { app: "Canvas", direction: "sideways" })]);
+    expect(fake.calls[1]).toEqual({ action: "click", target: 2, keys: "shift" });
+    expect(told[3]).toBe("Error: button is one of left, right, middle.");
+    expect(told[4]).toBe("Error: direction is one of up, down, left, right.");
+    r.cleanup();
+  });
+
+  test("a scroll always carries a direction (down) and wheel ticks kept between 1 and 50; a wait is kept within 30 seconds; numbers written as text are numbers", async () => {
+    const { fake, r } = await run([use("scroll", { app: "Canvas" }), use("scroll", { app: "Canvas", direction: "up", amount: "500" }), use("scroll", { app: "Canvas", direction: "left", amount: 0 }), use("wait", { seconds: 99 }), use("wait", { seconds: "2" }), use("wait")]);
+    expect(fake.calls.slice(1)).toEqual([
+      { action: "scroll", app: "Canvas", direction: "down", amount: 3 },
+      { action: "scroll", app: "Canvas", direction: "up", amount: 50 },
+      { action: "scroll", app: "Canvas", direction: "left", amount: 1 },
+      { action: "wait", seconds: 30 },
+      { action: "wait", seconds: 2 },
+      { action: "wait" },
+    ]);
+    r.cleanup();
+  });
+
+  test("a list with an app names its windows; the unverified rule holds for a drag too", async () => {
+    const fake = new FakeComputer(WORLD);
+    const r = rig(script(use("list", { app: "Notes" }), use("capture", { app: "Mail" }), use("click", { target: 1 }), use("drag", { x: 1, y: 1, to_x: 2, to_y: 2 })), { computer: fake });
+    await r.turn(prompt("go"));
+    expect(fake.calls[0]).toEqual({ action: "list", app: "Notes" });
+    expect(results(r)[3]).toContain("refused: stale_target");
+    expect(fake.calls.map((c) => c.action)).toEqual(["list", "capture", "click"]);
+    r.cleanup();
+  });
+
+  test("the scripted screen answers each of these by the most specific rule", async () => {
+    const fake = new FakeComputer(WORLD);
+    await fake.call({ action: "capture", app: "Canvas", mode: "ax" });
+    await fake.call({ action: "click", target: 2, button: "right" });
+    expect((await fake.call({ action: "capture", app: "Canvas", mode: "ax" })).tree).toContain("menu");
+    const shift = new FakeComputer(WORLD);
+    await shift.call({ action: "click", target: 2, keys: "Shift", app: "Canvas" });
+    expect((await shift.call({ action: "capture", app: "Canvas" })).tree).toContain("Two selected");
+    const up = new FakeComputer(WORLD);
+    await up.call({ action: "scroll", target: 1, direction: "up", amount: 3, app: "Canvas" });
+    expect((await up.call({ action: "capture", app: "Canvas" })).tree).toContain("Top");
   });
 });

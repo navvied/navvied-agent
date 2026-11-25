@@ -1,0 +1,21 @@
+{
+  "id": "computer-drag-card",
+  "title": "Drag a card to another column by its numbers",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "bun"
+  ],
+  "prompt": "In the Board app on this computer, move the card \"Write release notes\" into the Done column by dragging it, then write the confirmation code the app shows into ANSWER.txt. Do nothing else in the app.",
+  "check": "bun \"$BENCH_FIXTURES/computer-check.ts\" drag-card",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 600,
+  "runner": "computer-run.ts",
+  "env": {
+    "BENCH_COMPUTER": "board"
+  }
+}

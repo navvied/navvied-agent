@@ -1,0 +1,8 @@
+[
+  {"tool": "computer", "args": {"action": "capture", "app": "Files"}},
+  {"tool": "computer", "args": {"action": "click", "app": "Files", "target": "${result:(\\d+) file \"report.txt\"}", "button": "right"}},
+  {"tool": "computer", "args": {"action": "capture", "app": "Files"}},
+  {"tool": "computer", "args": {"action": "click", "app": "Files", "target": "${result:(\\d+) item \"Properties\"}"}},
+  {"tool": "computer", "args": {"action": "capture", "app": "Files"}},
+  {"tool": "Write", "args": {"file_path": "ANSWER.txt", "content": "${result:Code (\\w+)}\n"}}
+]

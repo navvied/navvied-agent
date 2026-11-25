@@ -7,6 +7,7 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import { homedir, platform as osPlatform, arch as osArch } from "node:os";
 import { join } from "node:path";
 import { describeTools } from "./describe.ts";
+import { findNumber, firstNumber } from "./find.ts";
 import { DriverHost, missingFrom } from "./host.ts";
 import { install } from "./install.ts";
 import { PIN, supportOf } from "./pin.ts";
@@ -37,9 +38,25 @@ writeFileSync(listing, JSON.stringify(tools, null, 2));
 say("tools", `${tools.length}, written in full to ${listing}`);
 say("missing", missingFrom(PIN, tools).join(", ") || "none");
 say("surface", `\n${describeTools(tools)}`);
+for (const t of tools.filter((x) => ["get_window_state", "list_apps", "list_windows", "click", "type_text", "press_key", "hotkey", "scroll", "drag"].includes(x.name))) say(`about ${t.name}`, (t.description ?? "").replace(/\s+/g, " ").slice(0, 600));
 // Looking only, no input: what the driver says about this computer's programs and windows, as it is.
-for (const name of ["list_apps", "list_windows"]) {
-  try { const r = await started.client.call(name, {}, 20_000); say(name, `${r.isError ? "error: " : ""}${r.text.slice(0, 1500)}`); } catch (e) { say(name, `no answer: ${e instanceof Error ? e.message : e}`); }
+const shown = (r: { isError: boolean; text: string; structured?: unknown }) => `${r.isError ? "error: " : ""}${JSON.stringify(r.structured ?? null).slice(0, 2500)}${r.text ? `\ntext: ${r.text.slice(0, 600)}` : ""}`;
+const ask = async (name: string, args: Record<string, unknown>) => {
+  try { const r = await started.client.call(name, args, 30_000); say(name, shown(r)); return r; } catch (e) { say(name, `no answer: ${e instanceof Error ? e.message : e}`); return undefined; }
+};
+const apps = await ask("list_apps", {});
+await ask("list_windows", {});
+// `--app <name>`: the shape of what the driver reads from one running program (looking only, no input).
+const needle = process.argv.includes("--app") ? process.argv[process.argv.indexOf("--app") + 1] : undefined;
+if (needle) {
+  const pid = apps ? findNumber(apps.structured, "pid", needle) : undefined;
+  if (pid === undefined) say("target", `no running program matches "${needle}"`);
+  else {
+    say("target", `${needle} is pid ${pid}`);
+    const windows = await ask("list_windows", { pid });
+    const windowId = windows ? firstNumber(windows.structured, "window_id") : undefined;
+    await ask("get_window_state", { pid, ...(windowId !== undefined ? { window_id: windowId } : {}), tree_format: "both", include_screenshot: false, full_output: true, timeout_ms: 8000 });
+  }
 }
 say("result", "the driver starts and answers; no input was sent");
 host.stop();

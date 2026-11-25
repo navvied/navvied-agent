@@ -34,6 +34,40 @@ export const WORLDS: Record<string, FakeWorld> = {
       capture: { refuse: { code: "permission_missing", which: "Accessibility" } },
     },
   },
+  board: {
+    Board: {
+      start: "main",
+      screens: {
+        main: { tree: ['1 window "Board"', '2 card "Write release notes"', '3 column "Done"', '4 column "Todo"'], on: { "drag 2>3": "moved", "drag 2>4": "same" } },
+        moved: { tree: ['1 window "Board"', '2 text "Write release notes moved to Done. Code {code:5}"'] },
+        same: { tree: ['1 window "Board"', '2 text "Nothing changed."'] },
+      },
+    },
+  },
+  files: {
+    Files: {
+      start: "main",
+      screens: {
+        main: { tree: ['1 window "Files"', '2 file "report.txt"'], on: { "right click 2": "menu", "double click 2": "opened", "click 2": "selected" } },
+        menu: { tree: ['1 menu "report.txt"', '2 item "Properties"', '3 item "Delete"'], on: { "click 2": "properties", "click 3": "deleted" } },
+        properties: { tree: ['1 window "Properties"', '2 text "report.txt, 4 KB. Code {code:6}"'] },
+        opened: { tree: ['1 window "Editor"', '2 text "report.txt is open."'] },
+        selected: { tree: ['1 window "Files"', '2 file "report.txt" (selected)'] },
+        deleted: { tree: ['1 text "report.txt was deleted."'] },
+      },
+    },
+  },
+  gallery: {
+    Rows: {
+      start: "main",
+      screens: {
+        main: { tree: ['1 window "Rows"', '2 row "Alpha"', '3 row "Beta"', '4 row "Gamma"'], on: { "click 2": "first", "click 4": "only" } },
+        first: { tree: ['1 window "Rows"', '2 row "Alpha" (selected)', '3 row "Beta"', '4 row "Gamma"'], on: { "click 4+shift": "range", "click 4": "only" } },
+        range: { tree: ['1 window "Rows"', '2 text "3 rows selected. Code {code:7}"'] },
+        only: { tree: ['1 window "Rows"', '2 text "1 row selected."'] },
+      },
+    },
+  },
   ledger: {
     Ledger: { start: "main", screens: { main: { tree: ['1 window "Ledger"', '2 text "Balance code: {code:4}"'] } } },
   },

@@ -42,6 +42,7 @@ export class FakeComputer implements ComputerHelper {
   async call(c: ComputerCall): Promise<ComputerResult> {
     this.calls.push(structuredClone(c));
     if (c.action === "wait") return { verdict: "delivered" };
+    if (c.action === "list" && c.app) return this.world[c.app] ? { verdict: "delivered", tree: `1 window "${c.app}"` } : { verdict: "refused", code: "input_target_mismatch", app: c.app, next: `${c.app} is not running.` };
     if (c.action === "list") return { verdict: "delivered", tree: Object.keys(this.world).map((n, i) => `${i + 1} app "${n}"`).join("\n") };
     const name = c.app && this.world[c.app] ? c.app : c.app ? undefined : this.#app;
     const app = name ? this.world[name] : undefined;
@@ -53,9 +54,20 @@ export class FakeComputer implements ComputerHelper {
       const tree = screen().tree.join("\n").replace(/\{code:(\w+)\}/g, (_, n: string) => codeOf(this.secret, n));
       return { verdict: "delivered", app: name, tree, ...(c.mode && c.mode !== "ax" ? { image: PICTURE } : {}) };
     }
-    const key = c.action === "click" || c.action === "scroll" ? `${c.action} ${c.target ?? ""}`.trim() : c.action;
-    const rule = screen().on?.[key] ?? screen().on?.[c.action];
+    const rule = this.#ruleFor(screen(), c);
     return this.#answer(name, typeof rule === "string" ? { to: rule } : rule ?? {});
+  }
+
+  /** The most specific rule of the screen for a step: `right click 3`, `double click 3`, `drag 2>5` (or `drag 10,20>30,40`), `scroll 3 up`, each also with `+shift` for the keys held; then the plain `click 3`, then the action. */
+  #ruleFor(screen: FakeScreen, c: ComputerCall): string | FakeRule | undefined {
+    const place = (t?: number, x?: number, y?: number): string => (t !== undefined ? `${t}` : x !== undefined ? `${x},${y}` : "");
+    const what = c.action === "click" ? `${c.count === 2 ? "double " : c.button ? `${c.button} ` : ""}click ${place(c.target, c.x, c.y)}`
+      : c.action === "drag" ? `drag ${place(c.target, c.x, c.y)}>${place(c.to, c.to_x, c.to_y)}`
+      : c.action === "scroll" ? `scroll ${c.target ?? ""} ${c.direction ?? ""}` : c.action;
+    const held = c.keys && c.action !== "key" ? `+${c.keys.toLowerCase()}` : "";
+    const plain = c.action === "click" || c.action === "scroll" ? `${c.action} ${c.target ?? ""}` : c.action;
+    for (const k of [`${what.trim()}${held}`, what.trim(), `${plain.trim()}${held}`, plain.trim(), c.action]) if (screen.on?.[k] !== undefined) return screen.on[k];
+    return undefined;
   }
 
   #answer(name: string, rule: FakeRule): ComputerResult {

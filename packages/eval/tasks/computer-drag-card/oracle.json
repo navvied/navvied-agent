@@ -1,0 +1,6 @@
+[
+  {"tool": "computer", "args": {"action": "capture", "app": "Board"}},
+  {"tool": "computer", "args": {"action": "drag", "app": "Board", "target": "${result:(\\d+) card \"Write release notes\"}", "to": "${result:(\\d+) column \"Done\"}"}},
+  {"tool": "computer", "args": {"action": "capture", "app": "Board"}},
+  {"tool": "Write", "args": {"file_path": "ANSWER.txt", "content": "${result:Code (\\w+)}\n"}}
+]

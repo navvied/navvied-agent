@@ -1,0 +1,8 @@
+[
+  {"tool": "computer", "args": {"action": "capture", "app": "Rows"}},
+  {"tool": "computer", "args": {"action": "click", "app": "Rows", "target": "${result:(\\d+) row \"Alpha\"}"}},
+  {"tool": "computer", "args": {"action": "capture", "app": "Rows"}},
+  {"tool": "computer", "args": {"action": "click", "app": "Rows", "target": "${result:(\\d+) row \"Gamma\"}", "keys": "shift"}},
+  {"tool": "computer", "args": {"action": "capture", "app": "Rows"}},
+  {"tool": "Write", "args": {"file_path": "ANSWER.txt", "content": "${result:Code (\\w+)}\n"}}
+]

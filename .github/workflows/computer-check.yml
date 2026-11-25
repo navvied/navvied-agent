@@ -25,14 +25,18 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: A virtual screen and the accessibility bus (Linux only)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb x11-utils libxtst6 libxi6 libatspi2.0-0 at-spi2-core dbus-x11
-      - name: Fetch the driver, start it, list what it offers
+        run: sudo apt-get update && sudo apt-get install -y xvfb x11-utils libxtst6 libxi6 libatspi2.0-0 at-spi2-core dbus-x11 python3-gi gir1.2-gtk-3.0
+      - name: Fetch the driver, start it, list what it offers, read one open program
         run: |
-          cmd=(bun packages/cli/src/computer-use/check.ts --report "$RUNNER_TEMP/report.txt")
+          cmd=(bash packages/desktop/scripts/computer-drive.sh "$RUNNER_TEMP/report.txt")
           [ "$RUNNER_OS" = Linux ] && cmd=(xvfb-run -a dbus-run-session -- "${cmd[@]}")
           bash packages/desktop/scripts/ci-run.sh "driver check" "${cmd[@]}"
       - name: What the driver said
         if: always()
         run: |
           source packages/desktop/scripts/ci-annotate.sh
-          [ -f "$RUNNER_TEMP/report.txt" ] && annotate notice "driver check on ${{ matrix.os }}" "$RUNNER_TEMP/report.txt" || echo "no report was written"
+          # One annotation holds about four thousand characters, so the report goes out in pieces, each cut at the end of a line.
+          if [ -f "$RUNNER_TEMP/report.txt" ]; then
+            split -C 3500 -d "$RUNNER_TEMP/report.txt" "$RUNNER_TEMP/part."
+            for f in "$RUNNER_TEMP"/part.*; do annotate notice "driver check on ${{ matrix.os }} ${f##*.}" "$f"; done
+          else echo "no report was written"; fi

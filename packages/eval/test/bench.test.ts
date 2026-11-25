@@ -46,8 +46,8 @@ describe("every task can be solved by an agent run, not only by the validator", 
       const web = task.kind === "web";
       // A task that is given a connected program is offered its four tools too (about 800 characters).
       const connected = task.mcp ? 4 : 0;
-      // A task that is given a screen is offered the tool for it (at most 700 characters, its budget).
-      const screen = task.runner === "computer-run.ts" ? 700 : 0;
+      // A task that is given a screen is offered the tool for it (at most 1,100 characters, its budget).
+      const screen = task.runner === "computer-run.ts" ? 1100 : 0;
       // A task that is given other agents to ask is offered the tool for it (about 340 characters, one tool).
       const peers = task.a2a ? 1 : 0;
       // A task about timing also offers the scheduling tool (about 670 characters).

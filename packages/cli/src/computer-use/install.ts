@@ -46,14 +46,15 @@ export async function checkSigner(run: Run, signer: Signer, entry: string, platf
     return team && signer.teamIds.includes(team) ? undefined : "The driver is not signed by the expected publisher.";
   }
   if (platform !== "win32") return undefined;
-  const ps = `$s = Get-AuthenticodeSignature -LiteralPath $args[0]; @{status = "$($s.Status)"; subject = "$($s.SignerCertificate.Subject)"} | ConvertTo-Json -Compress`;
-  const r = await run("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps, entry]);
+  const quoted = entry.replace(/'/g, "''");
+  const ps = `$s = Get-AuthenticodeSignature -LiteralPath '${quoted}'; @{status = "$($s.Status)"; subject = "$($s.SignerCertificate.Subject)"} | ConvertTo-Json -Compress`;
+  const r = await run("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps]);
   try {
     const s = JSON.parse(r.out) as { status: string; subject: string };
     const m = /(?:^|,\s*)CN=(?:"((?:[^"]|"")*)"|([^,]+))/.exec(s.subject);
     const cn = m?.[1]?.replace(/""/g, '"') ?? m?.[2];
     return s.status === "Valid" && cn === signer.subject ? undefined : "The driver is not signed by the expected publisher.";
-  } catch { return "The driver's signature could not be read."; }
+  } catch { return `The driver's signature could not be read (${(r.out + r.err).trim().slice(0, 200)}).`; }
 }
 
 /**
@@ -82,7 +83,10 @@ export async function install(i: InstallInput): Promise<Installed> {
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
   const unpacked = await i.run(tar, ["-xf", archive, "-C", out]);
-  if (unpacked.code !== 0 || !existsSync(entry)) { rmSync(out, { recursive: true, force: true }); return { ok: false, why: "unpack", message: "The driver could not be unpacked." }; }
+  if (unpacked.code !== 0 || !existsSync(entry)) {
+    rmSync(out, { recursive: true, force: true });
+    return { ok: false, why: "unpack", message: `The driver could not be unpacked (${unpacked.code === 0 ? `its program is not where expected; the archive holds ${listing.out.split(/\r?\n/).filter(Boolean).slice(0, 12).join(", ")}` : (unpacked.err || unpacked.out).trim().slice(0, 200)}).` };
+  }
   if (i.platform !== "win32") chmodSync(entry, 0o755);
   const bad = await checkSigner(i.run, a.signer, entry, i.platform);
   if (bad) { rmSync(out, { recursive: true, force: true }); return { ok: false, why: "signature", message: bad }; }

@@ -66,6 +66,12 @@ describe("installing the driver", () => {
     const r = await install(input(dir, pinFor(sha(body)), tarOf(["other"], undefined)));
     expect(r).toMatchObject({ ok: false, why: "unpack" });
   });
+  test("an archive without the program says what it holds, so the pin can be corrected", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cu-"));
+    const r = await install(input(dir, pinFor(sha(body)), tarOf(["CuaDriver.app/", "CuaDriver.app/Contents/MacOS/other"], undefined)));
+    expect(r).toMatchObject({ ok: false, why: "unpack" });
+    expect((r as { message: string }).message).toContain("CuaDriver.app/Contents/MacOS/other");
+  });
   test("a program signed by someone else is removed again", async () => {
     const dir = mkdtempSync(join(tmpdir(), "cu-"));
     const pin = pinFor(sha(body), { kind: "apple", teamIds: ["TEAMOK"] });

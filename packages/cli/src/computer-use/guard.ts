@@ -1,7 +1,7 @@
 import type { PermMode } from "@navvied/protocol";
 
 /** What decides, before the driver is asked anything, whether a call of the `computer` tool may happen. The host owns it, so a run without the desktop app cannot skip it. */
-export type Action = "capture" | "click" | "type" | "key" | "scroll" | "list" | "wait";
+export type Action = "capture" | "click" | "drag" | "type" | "key" | "scroll" | "list" | "wait";
 
 export const REFUSALS = ["background_unavailable", "background_occluded", "background_uipi_blocked", "human_has_control", "input_target_mismatch", "permission_missing", "blocked_by_policy", "stale_target"] as const;
 export type Refusal = (typeof REFUSALS)[number];

@@ -1,0 +1,21 @@
+{
+  "id": "computer-hold-key",
+  "title": "Hold a key while clicking to select a range",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "bun"
+  ],
+  "prompt": "In the Rows app on this computer, select the rows Alpha through Gamma as one range (select Alpha, then extend the selection to Gamma with the Shift key held), then write the code the app shows into ANSWER.txt.",
+  "check": "bun \"$BENCH_FIXTURES/computer-check.ts\" hold-key",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 600,
+  "runner": "computer-run.ts",
+  "env": {
+    "BENCH_COMPUTER": "gallery"
+  }
+}

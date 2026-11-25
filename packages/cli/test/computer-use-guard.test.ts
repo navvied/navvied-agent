@@ -46,6 +46,13 @@ describe("what each mode allows", () => {
     const { g } = make("edits"); g.approve("Notes"); g.settle(capture, true);
     expect(g.decide(click).kind).toBe("ask");
   });
+  test("a drag is input like a click: it asks, and keys held down for it are not a key press", () => {
+    const { g } = make("ask");
+    expect(g.decide({ action: "drag", app: "Notes" })).toEqual({ kind: "ask", about: "input", app: "Notes" });
+    const b = make("bypass").g;
+    expect(b.decide({ action: "click", app: "Notes", keys: "shift" }).kind).toBe("allow");
+    expect(make("plan").g.decide({ action: "drag", app: "Notes" })).toMatchObject({ kind: "refuse", code: "blocked_by_policy" });
+  });
   test("plan only lists and waits", () => {
     const { g } = make("plan");
     expect(refused(g.decide(capture))).toBe("blocked_by_policy");
