@@ -3,13 +3,15 @@ import { approvalScope, type Scope } from "./approval-scope.ts";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { needsApproval } from "./permissions.ts";
 import { riskOf, type Risk } from "./risk.ts";
+import { afterOutside, type Outside } from "./taint.ts";
 import { hardBlock, type Rules } from "./rules.ts";
 import { readPaths } from "./tools/changed.ts";
+import { COMPUTER_TOOL, PLAN_COMPUTER_ACTIONS } from "./tools/computer.ts";
 import type { Tool } from "./types.ts";
 
 export interface JudgeInput {
   mode: PermMode;
-  tool: Pick<Tool, "name" | "readOnly">;
+  tool: Pick<Tool, "name" | "readOnly" | "askAfterOutside">;
   args: Record<string, unknown>;
   cwd: string;
   rules?: Rules | undefined;
@@ -19,6 +21,8 @@ export interface JudgeInput {
   knownUrl: (url: unknown) => boolean;
   /** Folders outside the project that the program itself keeps things in (attachments, notes, long output): reading is free there. When this is not given, a look outside the project is not asked about. */
   readable?: readonly string[] | undefined;
+  /** What this turn has read from outside. Once it has read something, a few actions are asked about even in Auto (see `afterOutside`). */
+  outside?: Pick<Outside, "seen" | "copied"> | undefined;
 }
 
 const within = (root: string, path: string, cwd: string): boolean => { const r = relative(resolve(cwd, root), resolve(cwd, path)); return r !== ".." && !r.startsWith("../") && !r.startsWith("..\\") && !isAbsolute(r); };
@@ -34,6 +38,8 @@ export type Judgement =
       risk?: Risk;
       /** An address nobody gave: asked about, so that a page cannot send the agent anywhere. */
       strange: boolean;
+      /** The call holds a long piece of text that was read from outside, word for word. */
+      copied?: true;
     };
 
 /**
@@ -48,8 +54,15 @@ export function judge(i: JudgeInput): Judgement {
   if (forbidden) return { kind: "stop", message: `Blocked: ${forbidden}. navvied never does this.` };
   const verdict = i.rules?.check(tool.name, args) ?? { kind: "none" as const };
   if (verdict.kind === "deny") return { kind: "stop", message: `Blocked by the permission rule ${verdict.rule}. Do not try again; tell the user what you wanted to do.` };
+  // The screen is the host's: it asks (once per app, or per input), keeps its hard blocks and knows the mode, so the engine adds no question of its own. Plan mode is the one thing it says itself: only looking at what is there, and waiting. A rule that says "ask" still asks.
+  if (tool.name === COMPUTER_TOOL) {
+    if (mode === "plan") return PLAN_COMPUTER_ACTIONS.has(String(args.action)) ? { kind: "go" } : { kind: "stop", message: "Plan mode only allows list and wait on the screen. Do not capture or send input; say what you would do." };
+    if (verdict.kind !== "ask") return { kind: "go" };
+  }
   // What cannot be undone is asked about in every mode but Bypass, and a rule that allows "git" does not allow it: what is allowed is a kind of thing.
-  const risk = tool.readOnly || mode === "plan" || mode === "bypass" ? undefined : riskOf(tool.name, args, cwd);
+  // What an instruction in outside text would need is asked about too, unless the person's own allow rule names the call; Bypass is the person's word, Plan changes nothing.
+  const tainted = i.outside?.seen && mode !== "plan" && mode !== "bypass" && verdict.kind !== "allow" ? afterOutside(tool, args, cwd) : undefined;
+  const risk = (tool.readOnly || mode === "plan" || mode === "bypass" ? undefined : riskOf(tool.name, args, cwd)) ?? tainted;
   const riskAsked = risk !== undefined && !i.allowed.has(risk.key);
   // An address nobody gave is the way out for what an injected page asks for: asked about, or refused where nobody is asked.
   const strange = tool.name === "WebFetch" && verdict.kind !== "allow" && mode !== "auto" && mode !== "bypass" && !i.knownUrl(args.url);
@@ -62,5 +75,5 @@ export function judge(i: JudgeInput): Judgement {
   const scope = riskAsked ? { key: risk!.key, phrase: risk!.phrase } : looked ? { key: `read-outside:${looked}`, phrase: `reads in ${looked}` } : approvalScope(tool.name, args, cwd);
   const always = verdict.kind === "ask" || riskAsked;
   if (!always && (scope.keys ?? [scope.key]).every((k) => i.allowed.has(k))) return { kind: "go" };
-  return { kind: "ask", scope, ...(risk ? { risk } : {}), strange: strange && !riskAsked };
+  return { kind: "ask", scope, ...(risk ? { risk } : {}), strange: strange && !riskAsked, ...(i.outside?.copied(args) ? { copied: true as const } : {}) };
 }

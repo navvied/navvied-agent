@@ -12,18 +12,20 @@ import { CLI, TASKS, agentWorld, codeTool, option } from "./world.ts";
 
 const USAGE = `navvied-ab — does the code tool help? The same program and tasks, with and without it.
 
-  bun packages/eval/src/ab.ts --dry [--tasks mc-…,mc-…] [--repeat n] [--arms base,code]      the scripted model: checks the wiring, spends nothing
+  bun packages/eval/src/ab.ts --dry [--tasks mc-…,mc-…] [--repeat n] [--arms base,code,auto]      the scripted model: checks the wiring, spends nothing
   bun packages/eval/src/ab.ts --estimate [--repeat n]                                        what a real measurement is expected to cost, spends nothing
   bun packages/eval/src/ab.ts --upstream <base address> --upstream-model <id> --upstream-key-file <file> --max-tokens <n> --yes-spend
         [--tasks mc-…,mc-…] [--repeat 3] [--arms base,code] [--out results.jsonl] [--resume] [--per-minute 20] [--upstream-window <tokens>] [--upstream-api chat|messages|responses] [--trace <folder>]
 
   base   the program as it is
-  code   the same program with the code tool switched on (its row switch, "code")
+  code   the same program with the code tool switched on and offered from the first request
+  auto   the code row switched on and nothing else, as the product would run: the tool comes in when the turn shows it pays
   A real model costs tokens: nothing is sent without --yes-spend, and --max-tokens stops the run when the count reaches it.
   The key is read from the file into the environment of the agent only: never shown, never on a command line.
 `;
 
-const ARMS = ["base", "code"];
+const ARMS = ["base", "code", "auto"];
+const DEFAULT_ARMS = ["base", "code"];
 const WINDOW_DEFAULT = 100_000;
 
 export interface Plan { dry: boolean; estimate: boolean; tasks: Task[]; arms: string[]; repeat: number; out?: string; resume: boolean; perMinute: number; window: number; maxTokens?: number; api?: string; upstream?: string; model?: string; keyFile?: string; trace?: string }
@@ -36,8 +38,8 @@ export function plan(args: string[], tasksRoot = TASKS): Plan | string {
   let tasks: Task[];
   try { tasks = loadTasks(tasksRoot, wanted).filter((t) => wanted.length || t.id.startsWith("mc-")); } catch (e) { return `error: ${e instanceof Error ? e.message : String(e)}`; }
   if (!tasks.length) return "error: no task to run (the multi-call tasks are named mc-…)";
-  const arms = (one("arms") ?? ARMS.join(",")).split(",").filter(Boolean);
-  if (arms.some((a) => !ARMS.includes(a)) || new Set(arms).size !== arms.length) return `error: --arms is a list of ${ARMS.join(" and ")}, each once`;
+  const arms = (one("arms") ?? DEFAULT_ARMS.join(",")).split(",").filter(Boolean);
+  if (arms.some((a) => !ARMS.includes(a)) || new Set(arms).size !== arms.length) return `error: --arms is a list of ${ARMS.join(", ")}, each once`;
   const repeat = Math.max(1, Number(one("repeat") ?? 3) || 1);
   const perMinute = Number(one("per-minute") ?? 20) || 20;
   const base = { dry, estimate, tasks, arms, repeat, resume: args.includes("--resume"), perMinute, window: Number(one("upstream-window") ?? WINDOW_DEFAULT) || WINDOW_DEFAULT, ...(one("upstream-api") ? { api: one("upstream-api")! } : {}), ...(one("out") ? { out: one("out")! } : {}), ...(one("trace") ? { trace: one("trace")! } : {}) };
@@ -74,7 +76,7 @@ export async function main(argv: string[]): Promise<number> {
   let mock: Mock | undefined, meter: Meter | undefined;
   const home = mkdtempSync(join(tmpdir(), "navvied-ab-home-"));
   try {
-    mock = scripted ? startMock(loadTasks(TASKS), () => (arm === "code" ? "code" : "oracle")) : undefined;
+    mock = scripted ? startMock(loadTasks(TASKS), () => (arm !== "base" ? "code" : "oracle")) : undefined;
     meter = startMeter(mock?.url ?? p.upstream!, scripted ? {} : { perMinute: p.perMinute, ...(p.maxTokens ? { maxTokens: p.maxTokens } : {}) });
     const key = p.keyFile ? readFileSync(resolve(p.keyFile), "utf8").trim() : undefined;
     const model = scripted ? "scripted" : p.model!;
@@ -82,7 +84,7 @@ export async function main(argv: string[]): Promise<number> {
 
     const one = async (task: Task, which: string, repeat: number): Promise<AbRun | undefined> => {
       arm = which;
-      codeTool(world, which === "code");
+      codeTool(world, which !== "base", which === "code");
       const r = await runTask(task, { command: ["bun", CLI], label: `${model}:${which}`, env: world, meter: meter!, key: key ?? "none", agentEnv: (base) => ({ NAVVIED_BASE_URL: base }), ...(p.trace ? { trace: resolve(p.trace, which, `${repeat}`) } : {}) });
       // A run that was cut off by the limit is not a measurement of the model.
       return meter!.exhausted() ? undefined : { ...r, arm: which, repeat };

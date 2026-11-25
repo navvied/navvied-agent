@@ -1,0 +1,3 @@
+#!/bin/sh
+# A stand-in for whisper.cpp: always hears the same sentence.
+echo "The launch moves to Thursday."

@@ -1,0 +1,23 @@
+[
+  {
+    "tool": "Remember",
+    "args": {
+      "action": "forget",
+      "target": "alpha.example.test"
+    }
+  },
+  {
+    "tool": "Remember",
+    "args": {
+      "action": "add",
+      "note": "The staging server is beta.example.test"
+    }
+  },
+  {
+    "tool": "Bash",
+    "args": {
+      "command": "printf 'beta.example.test\\n' > ANSWER.txt",
+      "description": "write the host"
+    }
+  }
+]

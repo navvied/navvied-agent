@@ -1,0 +1,5 @@
+#!/bin/sh
+# A stand-in for stable-diffusion.cpp: a picture that says what size it was asked for.
+while [ $# -gt 0 ]; do case "$1" in -o) out="$2";; -W) w="$2";; -H) h="$2";; esac; shift; done
+printf "\211PNG\r\n\032\n" > "$out"
+printf "W=%s H=%s" "$w" "$h" >> "$out"

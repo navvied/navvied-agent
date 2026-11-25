@@ -1,0 +1,5 @@
+{
+  "jobs": [
+    { "id": "ddd444", "prompt": "Check that the service answers.", "cwd": ".", "mode": "plan", "cron": "", "every": 60000, "title": "pulse", "created": 1700000000000, "lastRun": 1700000000000 }
+  ]
+}

@@ -6,6 +6,7 @@ import { doctorCommand } from "./commands/doctor.ts";
 import { acpCommand } from "./commands/acp.ts";
 import { guardCommand } from "./commands/guard.ts";
 import { scheduleCommand } from "./commands/schedule.ts";
+import { pluginCommand } from "./commands/plugin.ts";
 import { webCommand } from "./commands/web.ts";
 import { updateCommand } from "./commands/update.ts";
 import { modelsCommand } from "./commands/models.ts";
@@ -13,6 +14,7 @@ import { EXIT, runCommand } from "./commands/run.ts";
 import { serveCommand } from "./commands/serve.ts";
 import { ensureGuestModels } from "./guest-models.ts";
 import { serveHttpCommand } from "./commands/serve-http.ts";
+import { a2aCommand, serveA2aCommand } from "./commands/a2a.ts";
 import { HELP, VERSION } from "./help.ts";
 import { configPath, loadConfig } from "./config.ts";
 import { processIO, type IO } from "./io.ts";
@@ -32,6 +34,7 @@ export async function main(argv: readonly string[], io: IO = processIO()): Promi
     case "acp": return acpCommand(options, env);
     case "guard": return guardCommand(options, env);
     case "schedule": return scheduleCommand(prompt, options, env);
+    case "plugin": return pluginCommand(prompt, options, env);
     case "models": return modelsCommand(options, env);
     case "init": await ensureGuestModels(env, options); return chatCommand(prompt, { ...options, providers: true }, env);
     case "update": return updateCommand(prompt, env);
@@ -39,7 +42,9 @@ export async function main(argv: readonly string[], io: IO = processIO()): Promi
     case "checkpoints": return checkpointsCommand(options, env);
     case "restore": return restoreCommand(prompt, options, env);
     case "run": return runCommand(prompt, options, env);
-    case "serve": if (options.http) await ensureGuestModels(env, options); return options.http ? serveHttpCommand(options, env) : serveCommand(options, env);
+    case "a2a": return a2aCommand(prompt, env);
+    case "serve": if (options.a2a && !options.http) return serveA2aCommand(options, env);
+      if (options.http) await ensureGuestModels(env, options); return options.http ? serveHttpCommand(options, env) : serveCommand(options, env);
     case "web": return webCommand(options, env);
     case "chat": await ensureGuestModels(env, options); return chatCommand(prompt, options, env);
   }

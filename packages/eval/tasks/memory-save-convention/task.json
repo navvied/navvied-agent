@@ -1,0 +1,17 @@
+{
+  "id": "memory-save-convention",
+  "title": "Keep a convention as a note for later conversations, then use it",
+  "kind": "terminal",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "bun"
+  ],
+  "prompt": "Our deploy labels are written zx-build-N, where N is the build number. Keep that as a note for this project so later conversations know it, then write the deploy label for build 37 into ANSWER.txt, alone on one line.",
+  "check": "test \"$(tr -d '[:space:]' < ANSWER.txt)\" = \"zx-build-37\" && bun \"$BENCH_FIXTURES/skills-check.ts\" note-added",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 600
+}

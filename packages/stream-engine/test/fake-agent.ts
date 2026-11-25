@@ -65,6 +65,11 @@ async function viaHook(command: string, id: string) {
 function reply(text: string, content: Record<string, unknown>[]) {
   const t = text.toLowerCase();
   const asked = /run bash: (.+)/i.exec(text);
+  const page = /read page: (.*?) then run bash:/i.exec(text);
+  if (page) {
+    out({ type: "assistant", message: { content: [{ type: "tool_use", id: "w1", name: "WebFetch", input: { url: "https://docs.example.com/p" } }], usage } });
+    out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "w1", content: page[1]! }] } });
+  }
   if (asked) { void viaHook(asked[1]!.trim(), `hook${Math.random().toString(36).slice(2, 8)}`); return; }
   if (t.includes("die")) { process.stderr.write("boom: something broke\n"); process.exit(3); }
   if (t.includes("stubborn")) return; // never answers, ignores interrupts

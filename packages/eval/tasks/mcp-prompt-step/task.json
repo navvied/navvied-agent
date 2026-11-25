@@ -1,0 +1,23 @@
+{
+  "id": "mcp-prompt-step",
+  "title": "The first step of a checklist that is a prompt of a connected program",
+  "kind": "agent",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun"
+  ],
+  "prompt": "The connected program has a prompt called release-checklist. Get it for version 2.4 and write the command of its first step, and nothing else, to step.txt.",
+  "check": "bun \"$BENCH_FIXTURES/mcp-depth-check.ts\" prompt",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 40,
+  "timeoutSeconds": 600,
+  "mcp": {
+    "ops": {
+      "fixture": "mcp-depth.ts"
+    }
+  }
+}

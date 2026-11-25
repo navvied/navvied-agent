@@ -7,7 +7,6 @@ import { num, outputBudget, str } from "./util.ts";
 import { pages, type Page } from "./web-cache.ts";
 import { refusal, vet, web } from "./web-guard.ts";
 import { decodeBody } from "./web-charset.ts";
-import { untrusted } from "./untrusted.ts";
 import { fixFetchArgs } from "./web-names.ts";
 import { htmlToText, linkLines } from "./web-text.ts";
 import { viaProxy } from "./web-proxy.ts";
@@ -108,7 +107,7 @@ function slice(page: Page, offset: number, budget: number): string {
   }
   const head = `Page ${page.url}${page.title ? ` "${page.title}"` : ""}`;
   const more = end < total ? `\n[characters ${offset}–${end} of ${total}; the rest: ${call("WebFetch", { url: page.url, offset: end })}]` : "";
-  return `${untrusted("fetch", `${head}\n${page.text.slice(offset, end).trim()}`)}${more}`;
+  return `${head}\n${page.text.slice(offset, end).trim()}${more}`;
 }
 
 function failed(status: number, url: URL, text: string): string | undefined {
@@ -122,6 +121,7 @@ function failed(status: number, url: URL, text: string): string | undefined {
 export const webFetch: Tool = {
   name: "WebFetch",
   readOnly: true,
+  fromOutside: true,
   offeredWhen: ({ userText, chat }) => chat === true || /https?:\/\/|\b(website|web ?page|url|documentation|docs)\b/i.test(userText),
   description: "Read a web page or PDF as text. A long page ends with the call that reads on (offset).",
   parameters: { type: "object", properties: { url: { type: "string" }, offset: { type: "number" } }, required: ["url"] },

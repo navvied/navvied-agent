@@ -56,7 +56,7 @@ function wall(t: number, zone?: string): Wall {
 }
 
 /** The instant whose wall clock in `zone` reads this; none when that time does not exist there (the hour a clock skips forward). */
-function instantOf(zone: string, year: number, month: number, day: number, hour: number, minute: number): number | undefined {
+export function instantOf(zone: string, year: number, month: number, day: number, hour: number, minute: number): number | undefined {
   const guess = Date.UTC(year, month - 1, day, hour, minute);
   const offsetAt = (t: number): number => { const w = wall(t, zone); return Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute) - Math.floor(t / 60_000) * 60_000; };
   let t = guess - offsetAt(guess);

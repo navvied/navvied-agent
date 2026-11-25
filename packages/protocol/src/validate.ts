@@ -169,6 +169,21 @@ function validateOne(raw: unknown): Result<Command> {
     case "account.signin.cancel": case "account.signout":
       if (!isName(raw.id)) return fail(`${raw.cmd}.id must be the id of a program`);
       return ok({ cmd: raw.cmd, id: raw.id });
+    case "mcp.signin": case "mcp.signin.cancel":
+      if (!isId(raw.server)) return fail(`${raw.cmd}.server must be the name of a connected program`);
+      return ok({ cmd: raw.cmd, server: raw.server });
+    case "mcp.prompts": return ok({ cmd: "mcp.prompts" });
+    case "mcp.prompt": {
+      if (!isId(raw.server) || !isId(raw.name)) return fail("mcp.prompt needs the server and the name of a prompt");
+      let args: Record<string, string> | undefined;
+      if (raw.args !== undefined) {
+        if (!raw.args || typeof raw.args !== "object" || Array.isArray(raw.args) || Object.keys(raw.args).length > 20) return fail("mcp.prompt.args must be an object of at most 20 texts");
+        const given = Object.entries(raw.args as Record<string, unknown>);
+        if (given.some(([k, v]) => k.length > 100 || typeof v !== "string" || v.length > 20_000)) return fail("mcp.prompt.args must be texts");
+        args = Object.fromEntries(given as [string, string][]);
+      }
+      return ok({ cmd: "mcp.prompt", server: raw.server, name: raw.name, ...(args ? { args } : {}) });
+    }
     case "account.install":
       if (!isName(raw.id)) return fail("account.install.id must be the id of a program");
       return ok({ cmd: "account.install", id: raw.id });

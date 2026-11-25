@@ -17,7 +17,8 @@ export function option(args: string[], name: string): string[] {
 export const agentWorld = (home: string, model: string, window: number, key?: string, api?: string): Record<string, string> => ({ HOME: home, XDG_STATE_HOME: home, XDG_CONFIG_HOME: home, NAVVIED_MODEL: model, NAVVIED_WINDOW: String(window), ...(key ? { NAVVIED_API_KEY: key } : {}), ...(api ? { NAVVIED_API: api } : {}) });
 
 /** Switches the code tool on in the agent's own home (the same switch a person uses), or leaves it off: the two arms of a comparison run the same program. */
-export function codeTool(world: Record<string, string>, on: boolean): void {
+export function codeTool(world: Record<string, string>, on: boolean, always = false): void {
+  if (always) world.NAVVIED_CODE_OFFER = "always"; else delete world.NAVVIED_CODE_OFFER;
   const state = new PluginState(pluginStatePath(world));
   if (on) state.set("tool:code", true); else state.forget("tool:code");
 }

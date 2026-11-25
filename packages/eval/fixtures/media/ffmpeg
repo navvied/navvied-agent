@@ -1,0 +1,4 @@
+#!/bin/sh
+# A stand-in for ffmpeg: whatever it is asked to convert, it writes a sound file.
+for last; do :; done
+printf RIFF > "$last"

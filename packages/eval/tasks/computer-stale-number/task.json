@@ -1,0 +1,15 @@
+{
+  "id": "computer-stale-number",
+  "title": "Numbers of a capture die after a click: look again before the next one",
+  "kind": "agent",
+  "level": 2,
+  "lang": "none",
+  "requires": ["bun"],
+  "prompt": "In the Tasks app on this computer, open the task \"Call Bob\" and mark it done (never delete anything). Then write the receipt code the app shows into ANSWER.txt.",
+  "check": "bun \"$BENCH_FIXTURES/computer-check.ts\" stale-number",
+  "protect": ["README.md"],
+  "maxSteps": 25,
+  "timeoutSeconds": 600,
+  "runner": "computer-run.ts",
+  "env": { "BENCH_COMPUTER": "tasks" }
+}

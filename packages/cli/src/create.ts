@@ -2,14 +2,15 @@ import { leanSoul, referenceFor, soulFor, type Brain } from "./soul.ts";
 import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { secretNames, ChatCompletionsProvider, SkillBook, type Recall, type ToolContext, loadAgents, Rules, hasRules, parseRules, type RuleSet, commandHooks, memoryText, connectMcp, loadSkills, projectDirs, type ModelSwitch, Checkpoints, Engine, FileSessionStore, MessagesApiProvider, OllamaProvider, ResponsesApiProvider, SMALL_WINDOW, defaultTools, instructionFiles, loadInstructions, agentDirs, type AgentEngine, type ChatCompletionsConfig, type Credentials, type Provider, FallbackProvider, type FallbackLink, type RetryOptions } from "@navvied/engine";
+import { secretNames, ChatCompletionsProvider, SkillBook, type ComputerHelper, type Recall, type ToolContext, loadAgents, Rules, hasRules, parseRules, type RuleSet, commandHooks, memoryText, connectMcp, OAuthStore, loadSkills, projectDirs, type ModelSwitch, Checkpoints, Engine, FileSessionStore, MessagesApiProvider, OllamaProvider, ResponsesApiProvider, SMALL_WINDOW, defaultTools, instructionFiles, loadInstructions, agentDirs, type AgentEngine, type ChatCompletionsConfig, type Credentials, type Provider, FallbackProvider, type FallbackLink, type RetryOptions } from "@navvied/engine";
 import { randomUUID } from "node:crypto";
 import { CodexEngine, StreamEngine } from "@navvied/stream-engine";
 import type { Effort, EngineEvent, ModelInfo, Result } from "@navvied/protocol";
 import type { Options } from "./args.ts";
 import { toolSwitch } from "./tools-info.ts";
 import { TerminalState, backendFor } from "./terminal.ts";
-import { accountPath, attachmentsDir, chatFilesDir, chatSessionsDir, checkpointsDir, configPath, jobsDir, skillLedgerPath, skillTrustPath, loadConfig, pluginStatePath, terminalStatePath, resolveModel, sessionsDir, type ConfigFile, type ModelEntry, type ResolvedModel } from "./config.ts";
+import { accountPath, attachmentsDir, chatFilesDir, chatSessionsDir, checkpointsDir, configPath, mcpAuthPath, jobsDir, schedulesPath, skillLedgerPath, skillTrustPath, loadConfig, pluginStatePath, terminalStatePath, resolveModel, sessionsDir, type ConfigFile, type ModelEntry, type ResolvedModel } from "./config.ts";
+import { scheduleFor } from "./schedule-tool.ts";
 import type { IO } from "./io.ts";
 import { memoryPathsFor } from "./memory-ui.ts";
 import { DEFAULT_SERVER, catalogOf, readAccount } from "./account.ts";
@@ -18,7 +19,9 @@ import { adcCredentials } from "./adc.ts";
 import { LiveProvider } from "./live-provider.ts";
 import { savedSecrets } from "./providers.ts";
 import { credentialsFor } from "./logins.ts";
-import { PluginState, SkillTrust, activeHooks, activeSkills, mcpId, projectSkillDirs } from "./plugins.ts";
+import { mediaFor } from "./media-setup.ts";
+import { peerBook } from "./a2a-peers.ts";
+import { PluginState, SkillTrust, activeHooks, activePacks, activeSkills, mcpId, packServers, pluginPlaces, projectSkillDirs, readPacks, withPackHooks } from "./plugins.ts";
 
 /** `where` says in plain words how the model is reached, for the welcome screen. */
 /** Search: the person's own server when there is one; otherwise the keyless ladder, whose last public rung is navvied's own search, asked with this computer's account when it has one. Not in a session that reaches the web through the service. */
@@ -29,6 +32,16 @@ export function searchFor(env: Record<string, string | undefined>, options: { co
     ...(order?.length ? { order } : {}),
     ...(proxied || options.sandboxed ? {} : { navvied: () => { const account = readAccount(accountPath(env, options.config)); return { server: account?.server ?? env.NAVVIED_SERVER ?? DEFAULT_SERVER, ...(account ? { token: account.token } : {}) }; } }),
   };
+}
+
+/** The model that looks at pictures for the tools that return words: the one the configuration names, else the conversation's own model when it sees pictures. */
+export function visionFor(file: ConfigFile | null, model: ResolvedModel, env: Record<string, string | undefined>, path: string): Provider | undefined {
+  const named = file?.media?.vision?.model;
+  if (named) {
+    const other = resolved(named, file, env, path);
+    return other.ok && other.value.provider && other.value.vision !== false ? serviceOf(named, other.value, file, env, path) : undefined;
+  }
+  return model.vision === true && model.provider ? serviceOf(model.name, model, file, env, path) : undefined;
 }
 
 export interface Created { engine: AgentEngine; /** The name of the model in the configuration. */ entry: string; modelName: string; where: string; cwd: string; tools?: string[]; notes: string[]; /** The model is reached through a program the person is signed in to, which keeps its own sessions. */ program?: true }
@@ -157,7 +170,10 @@ function switcherFor(file: ConfigFile | null, current: string, env: Record<strin
 }
 
 /** What the hub gives an engine that it cannot make for itself: the person's earlier conversations. */
-export interface EngineExtras { /** A command that ended wakes the conversation (a host that shows it live says so). */ wake?: boolean; /** Whether a person is looking at this conversation (a window or a terminal is attached): only then is a question waited for. */ attended?: () => boolean; recall?: Recall; /** What was said in this conversation before it came to a program from another model: the program is told it with its instructions, and answers as one that was there. */ earlier?: string }
+export interface EngineExtras { /** A command that ended wakes the conversation (a host that shows it live says so). */ wake?: boolean; /** Whether a person is looking at this conversation (a window or a terminal is attached): only then is a question waited for. */ attended?: () => boolean; recall?: Recall; /** The conversation of an agent that is not the person's (see a2a-server.ts): no other agents to ask, no memory, no notes or standing instructions of the person, no skills made, files held to the folder. */ inbound?: true; /** What drives this computer's screen, when computer use is on. */ computer?: ComputerHelper; /** Said after the Schedule tool changed the tasks of this computer. */ schedulesChanged?: () => void; /** What was said in this conversation before it came to a program from another model: the program is told it with its instructions, and answers as one that was there. */ earlier?: string }
+
+/** What an agent that is not the person's may not use even when the mode would allow it: it must not write to the person's memory or make skills. */
+const INBOUND_OFF = new Set(["Remember", "SkillManage", "Recall"]);
 
 export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) => void, extras: EngineExtras = {}): Result<Created> {
   const path = configPath(io.env, options.config);
@@ -180,6 +196,13 @@ export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) =>
   const shown = file.value?.models[model.value.name]?.display?.name;
   const brain: Brain = { label: cli ? (cli.adapter === "codex" ? "the model of the user's ChatGPT plan" : "the model of the program the user is signed in to") : `"${shown ?? provider?.model ?? model.value.name}"`, ...(cli ? { program: true, ownTools: TOOL_NAMES() } : { tools: TOOL_NAMES(), small: model.value.window <= SMALL_WINDOW }), ...(kind === "chat" ? { chat: true } : {}) };
   const program = cli && { ...common, ...(rulesFor(file.value?.permissions, cwd) ? { rules: rulesFor(file.value?.permissions, cwd)! } : {}), entry: { id: model.value.name, name: shown ?? model.value.name }, persona: `${soulFor(brain, loadInstructions(cwd, dirname(path), memoryText(memory), INSTRUCTION_FILE_NAMES))}${extras.earlier ? `\n\n${extras.earlier}` : ""}`, ...(options.session ? { sessionId: options.session } : {}), guard: guardCommandFor(path, cwd), command: cli.command, args: cli.args, env: cli.env, ...(cli.model ? { model: cli.model } : {}), ...(cli.models?.length ? { models: cli.models.map((m) => ({ id: m.id, name: m.name, ...(m.badge ? { badge: m.badge } : {}), ...(m.blurb ? { blurb: m.blurb } : {}) })) } : {}), ...(model.value.efforts ? { efforts: model.value.efforts } : {}) };
+  // What a command the model runs and a hook may inherit: the same, less every secret.
+  const scrub = { drop: secretNames(io.env), keep: [...(file.value?.terminal?.env ?? []), ...(io.env.NAVVIED_TERMINAL_ENV?.split(",").map((n) => n.trim()).filter(Boolean) ?? [])] };
+  const pluginState = new PluginState(pluginStatePath(io.env));
+  const skillTrust = new SkillTrust(skillTrustPath(io.env), file.value?.skills?.trust === "confirm");
+  const places = pluginPlaces(path);
+  const live = kind === "chat" || cli ? [] : activePacks(pluginState, skillTrust, readPacks(dirname(path), places.lock, cwd));
+  const hookConfig = withPackHooks(activeHooks(pluginState, file.value?.hooks), live);
   const switcher = cli ? undefined : switcherFor(file.value, model.value.name, io.env, path, model.value.window, model.value.efforts);
   const engine: AgentEngine = cli
     ? cli.adapter === "codex" ? new CodexEngine(program!) : new StreamEngine(program!)
@@ -190,12 +213,16 @@ export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) =>
         attachments: attachmentsDir(io.env),
         ...(model.value.vision !== undefined ? { vision: model.value.vision } : {}),
         ...(!switcher && model.value.efforts?.length ? { efforts: model.value.efforts } : {}),
-        toolOn: toolSwitch(new PluginState(pluginStatePath(io.env))),
+        ...(io.env.NAVVIED_CODE_OFFER === "always" ? { codeOffer: { mode: "always" as const } } : {}),
+        toolOn: extras.inbound ? ((on) => (name: string) => on(name) && !INBOUND_OFF.has(name))(toolSwitch(new PluginState(pluginStatePath(io.env)))) : toolSwitch(new PluginState(pluginStatePath(io.env))),
+        ...(extras.inbound ? { outside: true as const } : file.value?.a2a && Object.keys(file.value.a2a.peers).length ? { peers: peerBook(file.value.a2a.peers, io.env, io.fetch) } : {}),
         backend: backendFor(new TerminalState(terminalStatePath(io.env)), file.value?.terminal),
-        env: { drop: secretNames(io.env), keep: [...(file.value?.terminal?.env ?? []), ...(io.env.NAVVIED_TERMINAL_ENV?.split(",").map((n) => n.trim()).filter(Boolean) ?? [])] },
+        env: scrub,
         jobsDir: jobsDir(io.env),
         ...(extras.wake ? { wake: true } : {}),
         ...(extras.recall ? { recall: extras.recall } : {}),
+        schedule: scheduleFor({ env: io.env, file: schedulesPath(io.env), webProxy: file.value?.webProxy, cwd, chat: kind === "chat", changed: extras.schedulesChanged }),
+        ...(extras.computer ? { computer: extras.computer } : {}),
         ...(extras.attended ? { attended: extras.attended } : {}),
         ...(Number(io.env.NAVVIED_ASK_WAIT_SECONDS) >= 0 && io.env.NAVVIED_ASK_WAIT_SECONDS ? { askWaitMs: Number(io.env.NAVVIED_ASK_WAIT_SECONDS) * 1000 } : {}),
         provider: withFallback(serviceOf(model.value.name, model.value, file.value, io.env, path), model.value.name, file.value, io.env, path, emit),
@@ -209,26 +236,27 @@ export function createEngine(options: Options, io: IO, emit: (e: EngineEvent) =>
         ...(options.sandboxed ? { sandboxed: true } : {}),
         // A chat has no project: no helpers, no rules or hooks written for projects, no skills, no project instructions, no checkpoints, no outside tool servers.
         ...(kind === "chat" ? {} : {
-          agents: loadAgents(agentDirs(io.env.HOME ?? io.env.USERPROFILE ?? homedir(), dirname(path), projectDirs(cwd))),
+          agents: loadAgents([...live.map((p) => join(p.dir, "agents")), ...agentDirs(io.env.HOME ?? io.env.USERPROFILE ?? homedir(), dirname(path), projectDirs(cwd))]),
           ...(rulesFor(file.value?.permissions, cwd) ? { rules: rulesFor(file.value?.permissions, cwd)! } : {}),
-          ...(activeHooks(new PluginState(pluginStatePath(io.env)), file.value?.hooks) ? { hooks: commandHooks(activeHooks(new PluginState(pluginStatePath(io.env)), file.value?.hooks)!, cwd, () => sessionId) } : {}),
-          skills: () => activeSkills(new PluginState(pluginStatePath(io.env)), { user: join(dirname(path), "skills"), project: projectSkillDirs(cwd) }, new SkillTrust(skillTrustPath(io.env), file.value?.skills?.trust === "confirm")),
+          ...(hookConfig ? { hooks: commandHooks(hookConfig, cwd, () => sessionId, scrub) } : {}),
+          skills: () => activeSkills(pluginState, { user: join(dirname(path), "skills"), project: projectSkillDirs(cwd), plugins: live.map((p) => join(p.dir, "skills")) }, skillTrust),
           skillBook: new SkillBook({ user: join(dirname(path), "skills"), project: join(cwd, ".navvied", "skills"), ledger: skillLedgerPath(io.env) }),
           skillApproval: () => file.value?.skills?.approval ?? "auto",
         }),
         search: searchFor(io.env, options, !!file.value?.webProxy),
         ...(file.value?.webProxy ? { webProxy: file.value.webProxy } : {}),
+        media: mediaFor(io.env, file.value?.media, { ...(options.config ? { config: options.config } : {}), ...(options.sandboxed ? { sandboxed: true } : {}), ...(file.value?.webProxy ? { webProxy: file.value.webProxy } : {}) }, visionFor(file.value, model.value, io.env, path)),
         ...(io.env.NAVVIED_ALLOW_PRIVATE_NETWORK === "1" ? { allowPrivateNetwork: true } : {}),
-        ...(kind === "chat" ? {} : { instructions: () => loadInstructions(cwd, dirname(path), memoryText(memory), INSTRUCTION_FILE_NAMES) }),
-        ...(kind === "chat" ? {} : { memory }),
+        ...(kind === "chat" ? {} : { instructions: (request) => (extras.inbound ? loadInstructions(cwd, undefined, undefined, INSTRUCTION_FILE_NAMES) : loadInstructions(cwd, dirname(path), memoryText(memory, request?.userText), INSTRUCTION_FILE_NAMES)) }),
+        ...(kind === "chat" || extras.inbound ? {} : { memory, ...(file.value?.memory?.extract ? { memoryExtract: file.value.memory.extract } : {}) }),
         ...(kind === "chat" ? {} : { checkpoints: new Checkpoints({ dir: checkpointsDir(io.env), session: sessionId }) }),
         ...(options.maxSteps ? { maxSteps: options.maxSteps } : {}),
         ...(file.value?.applyPatch ? { applyPatch: file.value.applyPatch } : {}),
       });
-  if (engine instanceof Engine && file.value?.mcp && kind === "agent") {
+  if (engine instanceof Engine && (file.value?.mcp || live.some((p) => Object.keys(p.mcp).length)) && kind === "agent") {
     const off = new PluginState(pluginStatePath(io.env)).disabled();
-    const servers = Object.fromEntries(Object.entries(file.value.mcp).filter(([name]) => !off.has(mcpId(name))).map(([name, e]) => [name, { ...e, cwd: e.cwd ?? cwd }]));
-    engine.loadTools(connectMcp(servers, model.value.window <= SMALL_WINDOW, engine.closing));
+    const servers = { ...Object.fromEntries(Object.entries(file.value?.mcp ?? {}).filter(([name]) => !off.has(mcpId(name))).map(([name, e]) => [name, { ...e, cwd: e.cwd ?? cwd }])), ...Object.fromEntries(Object.entries(packServers(live)).map(([name, e]) => [name, { ...e, cwd: e.cwd ?? cwd }])) };
+    engine.loadTools(connectMcp(servers, model.value.window <= SMALL_WINDOW, engine.closing, { window: model.value.window, store: new OAuthStore(mcpAuthPath(io.env, options.config)) }));
   }
   const notes = instructionFiles(cwd, dirname(path), INSTRUCTION_FILE_NAMES);
   return { ok: true, value: { engine, entry: model.value.name, modelName: shown || provider?.model || cli?.model || model.value.name, where: describeModel(cli, provider?.baseUrl), cwd, ...(cli ? { program: true as const } : { tools: defaultTools().map((t) => t.name) }), notes } };

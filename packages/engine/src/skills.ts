@@ -69,9 +69,10 @@ function fromDir(root: string, source: SkillInfo["source"], trusted: (s: SkillIn
  * (an outer folder before an inner one, and within a folder the shared layouts before navvied's own), and a later skill with the
  * same name replaces an earlier one. `trusted` says whether the person has accepted a project skill (all are when it is not given).
  */
-export function loadSkills(dirs: { user?: string; project?: string[]; trusted?: (s: SkillInfo) => boolean }): SkillInfo[] {
+export function loadSkills(dirs: { user?: string; project?: string[]; /** Folders of plugins the person switched on and accepted: the skills in them count as the person's own, below the person's own folder. */ plugins?: string[]; trusted?: (s: SkillInfo) => boolean }): SkillInfo[] {
   const byName = new Map<string, SkillInfo>();
   const trusted = dirs.trusted ?? (() => true);
+  for (const root of dirs.plugins ?? []) for (const s of fromDir(root, "user", trusted)) byName.set(s.name, s);
   if (dirs.user) for (const s of fromDir(dirs.user, "user", trusted)) byName.set(s.name, s);
   for (const root of dirs.project ?? []) for (const s of fromDir(root, "project", trusted)) byName.set(s.name, s);
   return [...byName.values()];

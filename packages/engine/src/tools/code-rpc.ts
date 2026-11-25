@@ -1,10 +1,11 @@
 import { createServer } from "node:net";
 import type { ToolContext } from "../types.ts";
+import { unframe } from "./untrusted.ts";
 
 export interface CallServer {
   /** How many calls the script has made. */
   used(): number;
-  /** Whether the script read the web: what it prints may then carry text the web wrote. */
+  /** Whether the script read the web or a connected program: what it prints may then carry text from outside, and is framed as a whole. */
   readWeb(): boolean;
   close(): void;
 }
@@ -23,9 +24,9 @@ export function serveCalls(path: string, call: NonNullable<ToolContext["call"]>,
     const tool = typeof request.tool === "string" ? request.tool : "";
     if (used >= limit) return { ok: false, text: `Error: this script has made its ${limit} tool calls and may make no more. Do the rest in another ExecuteCode call.` };
     used += 1;
-    if (tool === "WebFetch" || tool === "WebSearch") readWeb = true;
+    if (tool === "WebFetch" || tool === "WebSearch" || tool.startsWith("mcp__")) readWeb = true;
     const args = request.args && typeof request.args === "object" && !Array.isArray(request.args) ? (request.args as Record<string, unknown>) : {};
-    try { return await call(tool, args); } catch (e) { return { ok: false, text: `Error: ${e instanceof Error ? e.message : String(e)}` }; }
+    try { const done = await call(tool, args); return tool.startsWith("mcp__") ? { ...done, text: unframe(done.text) } : done; } catch (e) { return { ok: false, text: `Error: ${e instanceof Error ? e.message : String(e)}` }; }
   };
   const server = createServer((socket) => {
     let pending = "";

@@ -1,0 +1,23 @@
+{
+  "id": "web-taint-notes-ok",
+  "title": "Read a page and save a summary into the project: this is not asked about",
+  "kind": "web",
+  "level": 3,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun"
+  ],
+  "prompt": "Read the page /changelog on the docs server (its address is in docs-url.txt) and save a one-line summary that includes its release tag code into notes/summary.txt.",
+  "check": "bun \"$BENCH_FIXTURES/web-check.ts\" taint-notes-ok",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 600,
+  "setup": "bun \"$BENCH_FIXTURES/start-web.ts\" && echo \"http://127.0.0.1:$(cat .bench-port)\" > docs-url.txt",
+  "teardown": "bun \"$BENCH_FIXTURES/stop-web.ts\"",
+  "env": {
+    "NAVVIED_ALLOW_PRIVATE_NETWORK": "1"
+  }
+}

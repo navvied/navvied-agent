@@ -1,0 +1,23 @@
+{
+  "id": "mcp-deferred-archive",
+  "title": "Archive a log with a tool among dozens",
+  "kind": "agent",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun"
+  ],
+  "prompt": "Use the connected program to archive the log named audit. Write the id of the archive it gives, and nothing else, to archive.txt.",
+  "check": "bun \"$BENCH_FIXTURES/mcp-depth-check.ts\" deferred",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 40,
+  "timeoutSeconds": 600,
+  "mcp": {
+    "ops": {
+      "fixture": "mcp-depth-many.ts"
+    }
+  }
+}

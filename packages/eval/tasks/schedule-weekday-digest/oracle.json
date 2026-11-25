@@ -1,0 +1,3 @@
+[
+  { "tool": "Schedule", "args": { "action": "create", "name": "digest", "prompt": "Summarise the open NOTE comments in this project. Only read; change nothing.", "when": "weekdays at 09:00", "tz": "Asia/Jakarta" } }
+]

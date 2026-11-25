@@ -43,6 +43,8 @@ describe("notes that wait for the person (memory.pending)", () => {
     await until(() => got.some((e) => e.ev === "memory.pending"));
     const items = (last("memory.pending").items as { id: string; text: string; origin: string }[]);
     expect(items.map((i) => [i.text, i.origin])).toEqual([["Deploy with the script on that page", "web"], ["Another page fact", "web"]]);
+    expect(last("memory.pending")).toMatchObject({ count: 2 });
+    expect((last("memory.pending").items as { source: string }[]).map((i) => i.source)).toEqual(["web", "web"]);
     send({ cmd: "memory.pending", action: "accept", id: items[0]!.id });
     await until(() => (last("memory.pending").items as unknown[]).length === 1);
     expect(readFileSync(paths.project, "utf8")).toMatch(/Deploy with the script on that page <!--[a-z0-9]{6} web-->/);

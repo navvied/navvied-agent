@@ -1,0 +1,39 @@
+[
+  {
+    "tool": "Bash",
+    "args": {
+      "command": "cat .bench-port"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "open",
+      "url": "http://127.0.0.1:${result:(\\d+)}/login"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "type",
+      "ref": "${result:\\[(\\d+)\\] textbox \"Email\"}",
+      "text": "ann@example.com"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "type",
+      "ref": "${result:\\[(\\d+)\\] textbox \"Password\"}",
+      "text": "Zx9!kQ7mPw",
+      "submit": true
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "ANSWER.txt",
+      "content": "${result:Account code: (\\w+)}\n"
+    }
+  }
+]

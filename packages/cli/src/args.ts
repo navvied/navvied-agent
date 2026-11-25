@@ -1,7 +1,7 @@
 import { EFFORTS, PERM_MODES, SESSION_KINDS, type Effort, type PermMode, type SessionKind } from "@navvied/protocol";
 
-export type CommandName = "run" | "chat" | "serve" | "web" | "models" | "checkpoints" | "restore" | "init" | "update" | "doctor" | "help" | "version" | "guard" | "schedule" | "acp";
-const COMMANDS: readonly CommandName[] = ["run", "chat", "serve", "web", "models", "checkpoints", "restore", "init", "update", "doctor", "help", "version", "guard", "schedule", "acp"];
+export type CommandName = "run" | "chat" | "serve" | "web" | "models" | "checkpoints" | "restore" | "init" | "update" | "doctor" | "help" | "version" | "guard" | "schedule" | "acp" | "plugin" | "a2a";
+const COMMANDS: readonly CommandName[] = ["run", "chat", "serve", "web", "models", "checkpoints", "restore", "init", "update", "doctor", "help", "version", "guard", "schedule", "acp", "plugin", "a2a"];
 
 export interface Options {
   mode?: PermMode;
@@ -31,6 +31,8 @@ export interface Options {
   color?: boolean;
   /** `serve`: listen on a WebSocket instead of standard input/output. */
   http?: boolean;
+  /** `serve`: let other agents ask this computer (agent-to-agent calls). */
+  a2a?: boolean;
   port?: number;
   host?: string;
   /** `serve --http`: a built front-end to serve at `/`. */
@@ -52,7 +54,7 @@ export type ParseResult =
 const fail = (error: string): ParseResult => ({ ok: false, error });
 
 const VALUE_FLAGS = new Set(["mode", "model", "effort", "cwd", "session", "schema", "answers", "max-steps", "config", "port", "host", "web", "allow-origin", "site", "kind"]);
-const BOOLEAN_FLAGS = new Set(["last", "json", "yes", "thinking", "no-color", "color", "stdio", "http", "help", "version", "ready-line", "exit-when-stdin-closes", "sandboxed"]);
+const BOOLEAN_FLAGS = new Set(["last", "json", "yes", "thinking", "no-color", "color", "stdio", "http", "a2a", "help", "version", "ready-line", "exit-when-stdin-closes", "sandboxed"]);
 const SHORT: Record<string, string> = { h: "help", v: "version", m: "model", y: "yes" };
 
 export function parseArgs(argv: readonly string[]): ParseResult {
@@ -89,6 +91,7 @@ export function parseArgs(argv: readonly string[]): ParseResult {
         case "ready-line": options.readyLine = true; break;
         case "exit-when-stdin-closes": options.exitWhenStdinCloses = true; break;
         case "http": options.http = true; break;
+        case "a2a": options.a2a = true; break;
         case "sandboxed": options.sandboxed = true; break;
         case "stdio": break; // accepted for `serve --stdio`, which is the default transport
         case "http": options.http = true; break;
@@ -144,6 +147,6 @@ export function parseArgs(argv: readonly string[]): ParseResult {
     command = "chat";
   }
   const text = positional.join(" ").trim();
-  if (command !== "run" && command !== "schedule" && command !== "chat" && command !== "restore" && command !== "update" && text) return fail(`"${command}" does not take arguments`);
+  if (command !== "run" && command !== "schedule" && command !== "plugin" && command !== "a2a" && command !== "chat" && command !== "restore" && command !== "update" && text) return fail(`"${command}" does not take arguments`);
   return { ok: true, command, prompt: text || undefined, options };
 }

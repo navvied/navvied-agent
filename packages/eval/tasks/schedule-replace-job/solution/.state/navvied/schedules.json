@@ -1,0 +1,6 @@
+{
+  "jobs": [
+    { "id": "bbb222", "prompt": "Summarise the week.", "cwd": ".", "mode": "plan", "cron": "0 17 * * 5", "title": "keep-me", "created": 1700000000000, "lastRun": 1700000000000 },
+    { "id": "ccc333", "prompt": "check the build", "cwd": ".", "mode": "plan", "cron": "", "at": 1700001800000, "title": "build-check", "created": 1700000000000, "lastRun": 1700000000000 }
+  ]
+}

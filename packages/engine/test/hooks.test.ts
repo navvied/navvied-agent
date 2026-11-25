@@ -25,7 +25,7 @@ describe("hooks that run commands", () => {
     const hooks = commandHooks({ PostToolUse: [{ command: record }] }, dir, () => "sess1");
     await hooks.post({ tool: "Bash", input: { command: "ls" }, output: "a\nb" }, signal);
     const seen = JSON.parse(readFileSync(log, "utf8").trim().split("\n").at(-1)!);
-    expect(seen).toEqual({ event: "PostToolUse", cwd: dir, session: "sess1", tool: "Bash", input: { command: "ls" }, output: "a\nb" });
+    expect(seen).toEqual({ event: "PostToolUse", cwd: dir, session: "sess1", tool: "Bash", input: { command: "ls" }, output: "a\nb", hook_event_name: "PostToolUse", session_id: "sess1", tool_name: "Bash", tool_input: { command: "ls" }, tool_response: "a\nb" });
   });
   test("before a tool, exit code 2 stops it and the reason is what the command wrote on standard error", async () => {
     const hooks = commandHooks({ PreToolUse: [{ command: deny }] }, dir, () => "s");

@@ -1,0 +1,15 @@
+[
+  {
+    "tool": "Read",
+    "args": {
+      "file_path": "NOTES.md"
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "CODENAME.txt",
+      "content": "${result:codename is ([0-9a-f]+)}\n"
+    }
+  }
+]

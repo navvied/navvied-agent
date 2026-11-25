@@ -26,6 +26,9 @@ export interface InstallInput {
 /** Where the program of a pinned version is, whether or not it is there. */
 export const entryOf = (dir: string, pin: Pin, target: Target): string => join(dir, pin.version, target, pin.assets[target].entry);
 
+/** Windows ships its own `tar` (it reads zip files); a `tar` that comes first on the path may be another one (Git's cannot). */
+export const tarProgram = (platform: string, systemRoot: string | undefined): string => (platform === "win32" ? join(systemRoot ?? "C:\\Windows", "System32", "tar.exe") : "tar");
+
 /** An archive that names a path outside its own folder must never be unpacked. */
 export function unsafeEntry(names: string[]): string | undefined {
   return names.find((n) => n.startsWith("/") || /^[A-Za-z]:/.test(n) || n.split(/[\\/]/).includes(".."));
@@ -62,6 +65,7 @@ export async function install(i: InstallInput): Promise<Installed> {
   const entry = entryOf(i.dir, i.pin, i.target);
   const out = join(i.dir, i.pin.version, i.target);
   const archive = join(i.dir, i.pin.version, a.asset);
+  const tar = tarProgram(i.platform, process.env.SystemRoot);
   mkdirSync(join(i.dir, i.pin.version), { recursive: true });
 
   if (existsSync(entry)) {
@@ -72,12 +76,12 @@ export async function install(i: InstallInput): Promise<Installed> {
   const got = await download(i.fetchFn, { url: `${i.pin.base}/${a.asset}`, dest: archive, sha256: a.sha256, ...(a.size !== undefined ? { size: a.size } : {}), ...(i.signal ? { signal: i.signal } : {}), ...(i.onProgress ? { onProgress: i.onProgress } : {}) });
   if (!got.ok) return { ok: false, why: "download", result: got };
 
-  const listing = await i.run("tar", ["-tf", archive]);
+  const listing = await i.run(tar, ["-tf", archive]);
   if (listing.code !== 0) return { ok: false, why: "unpack", message: "The driver's archive could not be read." };
   if (unsafeEntry(listing.out.split(/\r?\n/).filter(Boolean))) return { ok: false, why: "unpack", message: "The driver's archive names a place outside its folder." };
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
-  const unpacked = await i.run("tar", ["-xf", archive, "-C", out]);
+  const unpacked = await i.run(tar, ["-xf", archive, "-C", out]);
   if (unpacked.code !== 0 || !existsSync(entry)) { rmSync(out, { recursive: true, force: true }); return { ok: false, why: "unpack", message: "The driver could not be unpacked." }; }
   if (i.platform !== "win32") chmodSync(entry, 0o755);
   const bad = await checkSigner(i.run, a.signer, entry, i.platform);

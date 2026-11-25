@@ -171,19 +171,25 @@ const tool = defaultTools().find((t) => t.name === "Remember")!;
 const ctx = (memory: MemoryPaths | undefined, more: Partial<ToolContext> = {}): ToolContext => ({ cwd: ".", signal: new AbortController().signal, emit: () => undefined, allowPrivateNetwork: false, jobs: new Jobs(() => undefined), ...(memory ? { memory } : {}), ...more });
 
 describe("the Remember tool", () => {
-  test("is offered on the words of the request, and otherwise named in the prompt with the nudge, so a request in any language can use it", async () => {
-    const big = rig((req) => (req.messages.at(-1)?.role === "tool" ? { text: "ok" } : { text: "x" }), { memory: paths() });
+  test("is offered to a large model whatever the language of the request, and only named (with the nudge) to a small one", async () => {
+    const big = rig(() => ({ text: "x" }), { memory: paths() });
     await big.turn(prompt("merk dir bitte, dass ich Tabs mag"));
-    const first = big.provider.requests[0]!;
+    await big.turn(prompt("fix the failing test"));
+    for (const first of big.provider.requests) {
+      expect(first.tools.map((t) => t.name)).toContain("Remember");
+      expect(first.system).toContain("save lasting facts about the person and project");
+    }
+    const small = rig(() => ({ text: "x" }), { window: 8_000, memory: paths() });
+    await small.turn(prompt("from now on, answer in short sentences"));
+    const first = small.provider.requests[0]!;
     expect(first.tools.map((t) => t.name)).not.toContain("Remember");
     expect(first.system).toMatch(/Also available, by name: [^.]*\bRemember\b/);
     expect(first.system).toContain("save lasting facts about the person and project");
-    await big.turn(prompt("remember that I prefer tabs"));
-    expect(big.provider.requests[1]!.tools.map((t) => t.name)).toContain("Remember");
-    const small = rig(() => ({ text: "x" }), { window: 8_000, memory: paths() });
-    await small.turn(prompt("from now on, answer in short sentences"));
-    expect(small.provider.requests[0]!.tools.map((t) => t.name)).toContain("Remember");
-    big.cleanup(); small.cleanup();
+    const nowhere = rig(() => ({ text: "x" }));
+    await nowhere.turn(prompt("remember that I like tabs"));
+    expect(nowhere.provider.requests[0]!.tools.map((t) => t.name)).not.toContain("Remember");
+    expect(nowhere.provider.requests[0]!.system).not.toContain("Remember");
+    big.cleanup(); small.cleanup(); nowhere.cleanup();
   });
   test("a call to it is run even when it was only named, in any language", async () => {
     const p = paths();

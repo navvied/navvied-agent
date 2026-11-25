@@ -34,6 +34,33 @@ describe("the search index for the agent", () => {
     expect(db.recent(5).map((r) => r.id)).toEqual(["b", "a"]);
     expect(matchQuery("a b", true)).toBe('"a" OR "b"*');
   });
+  test("a turn adds only its new messages; a changed history is written again; the results stay the same either way", () => {
+    const db = new SearchIndex(":memory:");
+    const first = [say("user", "plan the Tresor move"), say("assistant", "we will move it on Monday")];
+    expect(db.put("a", "move", 10, first)).toBe(2);
+    expect(db.put("a", "move", 11, first)).toBe(0);
+    const grown = [...first, say("tool", "Read"), say("user", "and the Schlüssel too"), say("assistant", "yes, both")];
+    expect(db.put("a", "move", 12, grown)).toBe(2);
+    expect(db.search("schlussel")[0]).toMatchObject({ id: "a", n: 4 });
+    expect(db.search("monday")[0]).toMatchObject({ id: "a", n: 2 });
+    expect(db.recent(1)[0]).toMatchObject({ id: "a", updated: 12 });
+    expect(db.put("a", "move", 13, [say("user", "plan the Tresor move"), say("assistant", "we will move it on Friday")])).toBe(2);
+    expect(db.search("monday")).toEqual([]);
+    expect(db.search("friday")[0]).toMatchObject({ n: 2 });
+    expect(db.put("a", "move", 14, [say("user", "completely new start")])).toBe(1);
+    expect(db.search("tresor")).toEqual([]);
+  });
+  test("of two equal matches the fresher conversation comes first; words of any script and with accents are found", () => {
+    const db = new SearchIndex(":memory:");
+    const day = 86_400_000, now = 400 * day;
+    db.put("old", "old", now - 300 * day, [say("user", "the deploy token rotation plan")]);
+    db.put("new", "new", now - day, [say("user", "the deploy token rotation plan")]);
+    expect(db.search("deploy rotation", 5, false, now).map((h) => h.id)).toEqual(["new", "old"]);
+    db.put("ru", "ru", now, [say("user", "Планы на деплой завтра")]);
+    db.put("fr", "fr", now, [say("assistant", "Le déploiement est reporté à demain")]);
+    expect(db.search("ДЕПЛОЙ")[0]).toMatchObject({ id: "ru", n: 1 });
+    expect(db.search("deploiement")[0]).toMatchObject({ id: "fr" });
+  });
   test("a file made before the item number was kept is dropped and starts again", () => {
     const dir = tempDir();
     dirs.push(dir);

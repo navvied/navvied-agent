@@ -1,0 +1,30 @@
+[
+  {
+    "tool": "AskAgent",
+    "args": {
+      "agent": "alpha",
+      "message": "What is your code?"
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "ANSWER.txt",
+      "content": "${result:code is ([0-9a-f]+)}\n"
+    }
+  },
+  {
+    "tool": "AskAgent",
+    "args": {
+      "agent": "beta",
+      "message": "What is your code?"
+    }
+  },
+  {
+    "tool": "Bash",
+    "args": {
+      "command": "echo \"${result:code is ([0-9a-f]+)}\" >> ANSWER.txt",
+      "description": "add the second code"
+    }
+  }
+]

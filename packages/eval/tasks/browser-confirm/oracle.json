@@ -1,0 +1,36 @@
+[
+  {
+    "tool": "Bash",
+    "args": {
+      "command": "cat .bench-port"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "open",
+      "url": "http://127.0.0.1:${result:(\\d+)}/order"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "click",
+      "ref": "${result:\\[(\\d+)\\] button \"Place order\"}"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "dialog",
+      "accept": true
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "ANSWER.txt",
+      "content": "${result:Order code: (\\w+)}\n"
+    }
+  }
+]

@@ -1,5 +1,6 @@
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { gitEnv } from "../../engine/src/git-env.ts";
+import { findChrome } from "../../engine/src/tools/browser.ts";
 import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";
 import { dirname, join, sep, win32 } from "node:path";
@@ -51,30 +52,42 @@ export const FIXTURES = join(import.meta.dir, "..", "fixtures");
 export const scriptEnv = (secret: Record<string, string>): Record<string, string> => ({ ...secret, BENCH_FIXTURES: FIXTURES });
 
 /**
- * The configuration of an agent for a task that declares MCP servers, in a folder of its own outside the workspace: the agent starts each
- * server itself, from this file, and stops it when the run ends. `NAVVIED_CONFIG` points at it, so the person's own configuration is
- * never read or written. Nothing is written for a task without servers.
+  * The configuration of an agent for a task that declares MCP servers, hooks, stand-ins for media programs or other agents to ask, in a folder of its own outside the workspace: the agent starts each
+ * server itself, runs each hook, from this file, and stops the servers when the run ends. `NAVVIED_CONFIG` points at it, so the person's own configuration is
+ * never read or written. For other agents to ask, their address is the port the setup left in the workspace `where`, and their path. Nothing is written for a task with none of them.
  */
-export function mcpConfig(task: Task): { env: Record<string, string>; remove(): void } {
-  if (!task.mcp) return { env: {}, remove: () => undefined };
+export function agentConfig(task: Task, where?: string): { env: Record<string, string>; remove(): void } {
+  if (!task.mcp && !task.hooks && !task.media?.length && !task.a2a) return { env: {}, remove: () => undefined };
   const dir = mkdtempSync(join(tmpdir(), "navvied-eval-config-"));
-  const mcp = Object.fromEntries(Object.entries(task.mcp).map(([name, s]) => [name, { command: process.execPath, args: [join(FIXTURES, s.fixture)] }]));
+  const mcp = task.mcp ? Object.fromEntries(Object.entries(task.mcp).map(([name, s]) => [name, { command: process.execPath, args: [join(FIXTURES, s.fixture)] }])) : undefined;
+  const hooks = Object.fromEntries(Object.entries(task.hooks ?? {}).map(([event, list]) => [event, list.map((h) => ({ ...(h.matcher ? { matcher: h.matcher } : {}), command: `"${process.execPath.replaceAll("\\", "/")}" "${join(FIXTURES, h.fixture).replaceAll("\\", "/")}"` }))]));
+  const program = (name: string): string => join(FIXTURES, "media", name);
+  const engines = { stt: { bin: program("whisper-cli"), model: program("model.bin") }, tts: { bin: program("piper"), model: program("model.bin") }, image: { bin: program("sd"), model: program("model.bin") } };
+  const media = task.media?.length ? { ...Object.fromEntries(task.media.map((k) => [k, engines[k]])), ffmpeg: program("ffmpeg") } : undefined;
+  const port = where && existsSync(join(where, ".bench-port")) ? readFileSync(join(where, ".bench-port"), "utf8").trim() : "";
+  const peers = task.a2a ? Object.fromEntries(Object.entries(task.a2a).map(([name, path]) => [name, { url: `http://127.0.0.1:${port}${path}` }])) : undefined;
   const path = join(dir, "config.json");
-  writeFileSync(path, JSON.stringify({ models: {}, guestModels: false, mcp }), { mode: 0o600 });
+  writeFileSync(path, JSON.stringify({ models: {}, guestModels: false, ...(mcp ? { mcp } : {}), ...(task.hooks ? { hooks } : {}), ...(media ? { media } : {}), ...(peers ? { a2a: { peers } } : {}) }), { mode: 0o600 });
   return { env: { NAVVIED_CONFIG: path }, remove: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 /** What the agent is given besides the usual: the task's own variables, with the fixture port in them. */
 export function taskEnv(dir: string, task: Task): Record<string, string> {
   const port = existsSync(join(dir, ".bench-port")) ? readFileSync(join(dir, ".bench-port"), "utf8").trim() : "";
-  return Object.fromEntries(Object.entries(task.env ?? {}).map(([k, v]) => [k, v.replaceAll("{port}", port)]));
+  return Object.fromEntries(Object.entries(task.env ?? {}).map(([k, v]) => [k, v.replaceAll("{port}", port).replaceAll("{dir}", dir)]));
+}
+
+/** The prompt of the task, with the fixture port in it where it says `{port}` (a task that is about a site the person names by address). */
+export function taskPrompt(dir: string, task: Task): string {
+  const port = existsSync(join(dir, ".bench-port")) ? readFileSync(join(dir, ".bench-port"), "utf8").trim() : "";
+  return task.prompt.replaceAll("{port}", port);
 }
 
 /** A random value for one run, in the environment of the setup, the agent and the check: an answer that holds it was made in this run. */
 export const newSecret = (): string => crypto.randomUUID().replaceAll("-", "").slice(0, 16);
 
 /** The programs a task needs that this computer does not have. */
-export const missingPrograms = (task: Task, has: (program: string) => boolean = (p) => (p === "bash" ? findBash() !== undefined : Bun.which(p) !== null)): string[] => task.requires.filter((p) => !has(p));
+export const missingPrograms = (task: Task, has: (program: string) => boolean = (p) => (p === "bash" ? findBash() !== undefined : p === "browser" ? findChrome() !== undefined : Bun.which(p) !== null)): string[] => task.requires.filter((p) => !has(p));
 
 /** Processes, other than this one, that run in the workspace or were started from it. Where processes cannot be listed (not Linux) nothing is found. */
 export function leftovers(dir: string): number[] {

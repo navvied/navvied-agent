@@ -195,6 +195,10 @@ describe("connected programs in the file", () => {
     const r = loadConfig(write("mcp.json", { models: {}, mcp: { notes: { command: "notes-server", args: ["--quiet"], env: { A: "1", B: 2 }, cwd: "/work", extra: true }, files: { command: "files-server" } } }));
     expect(r.ok && r.value?.mcp).toEqual({ notes: { command: "notes-server", args: ["--quiet"], env: { A: "1" }, cwd: "/work" }, files: { command: "files-server" } });
   });
+  test("a server on the web may name the client id and scope its sign-in needs; anything else of oauth is dropped", () => {
+    const r = loadConfig(write("mcp-oauth.json", { models: {}, mcp: { web: { url: "https://x.invalid/mcp", oauth: { clientId: "c", clientSecret: "s", scope: "read", extra: 1 } }, plain: { url: "https://y.invalid/mcp", oauth: {} } } }));
+    expect(r.ok && r.value?.mcp).toEqual({ web: { url: "https://x.invalid/mcp", oauth: { clientId: "c", clientSecret: "s", scope: "read" } }, plain: { url: "https://y.invalid/mcp" } });
+  });
   test("an empty list is the same as none, and a damaged one is refused with the program's name", () => {
     const none = loadConfig(write("mcp0.json", { models: {}, mcp: {} }));
     expect(none.ok && none.value?.mcp).toBeUndefined();

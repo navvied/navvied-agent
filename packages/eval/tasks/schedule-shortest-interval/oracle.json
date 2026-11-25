@@ -1,0 +1,4 @@
+[
+  { "tool": "Schedule", "args": { "action": "create", "name": "pulse", "prompt": "Check that the service answers.", "when": "every 10s" } },
+  { "tool": "Schedule", "args": { "action": "create", "name": "pulse", "prompt": "Check that the service answers.", "when": "every 60s" } }
+]

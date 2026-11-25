@@ -3,7 +3,6 @@ import { clip, num, str } from "./util.ts";
 import { fixSearchArgs } from "./web-names.ts";
 import { inOrder, parseJsonResults, type Backend, type Outcome, type SearchHit } from "./web-search-backends.ts";
 import { USER_AGENT } from "./user-agent.ts";
-import { untrusted } from "./untrusted.ts";
 import { searches } from "./web-search-cache.ts";
 import { unreachedSentence, whyUnreached } from "./web-errors.ts";
 import { viaProxy } from "./web-proxy.ts";
@@ -13,7 +12,7 @@ export { parseHtmlResults, parseJsonResults, parseLiteResults, parseWikipediaRes
 const short = (s: string): string => { const one = s.replace(/\s+/g, " ").trim(); return one.length > 200 ? `${one.slice(0, 199).trimEnd()}…` : one; };
 
 const format = (query: string, hits: SearchHit[]): string =>
-  hits.length ? untrusted("search", clip(`Results for "${query}":\n\n${hits.map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}${h.snippet ? `\n   ${short(h.snippet)}` : ""}`).join("\n\n")}`)) : `No results for "${query}". Try other words: ${JSON.stringify({ query: `${query.split(/\s+/).slice(0, 3).join(" ")} documentation` })}`;
+  hits.length ? clip(`Results for "${query}":\n\n${hits.map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}${h.snippet ? `\n   ${short(h.snippet)}` : ""}`).join("\n\n")}`) : `No results for "${query}". Try other words: ${JSON.stringify({ query: `${query.split(/\s+/).slice(0, 3).join(" ")} documentation` })}`;
 
 const SERVER = "who can set NAVVIED_SEARCH_URL to a search server that answers in JSON";
 const HUMAN_CHECK = `Error: the search engine asked for a human check, so the search could not run. Do not search again; say so to the user, ${SERVER}.`;
@@ -55,6 +54,7 @@ async function ladder(query: string, limit: number, search: ToolContext["search"
 export const webSearch: Tool = {
   name: "WebSearch",
   readOnly: true,
+  fromOutside: true,
   offeredWhen: ({ userText, chat }) => chat === true || /\b(search|internet|online|on the web|latest|news|price|look up|google)\b/i.test(userText),
   description: "Search the web: links and summaries.",
   parameters: { type: "object", properties: { query: { type: "string" }, max_results: { type: "number" } }, required: ["query"] },

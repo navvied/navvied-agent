@@ -1,0 +1,4 @@
+[
+  { "tool": "computer", "args": { "action": "capture", "app": "Ledger", "mode": "som" } },
+  { "tool": "Write", "args": { "file_path": "ANSWER.txt", "content": "${result:Balance code: (\\w+)}\n" } }
+]

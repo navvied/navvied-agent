@@ -1,0 +1,14 @@
+{
+  "id": "schedule-weekday-digest",
+  "title": "Schedule a read-only job on weekdays in a time zone",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": ["bun"],
+  "prompt": "Set up a scheduled job named digest that runs every weekday at 09:00 in the Asia/Jakarta time zone and summarises the open NOTE comments in this project. It must only read, never change anything.",
+  "check": "bun \"$BENCH_FIXTURES/schedule-check.ts\" digest",
+  "protect": ["README.md"],
+  "env": { "XDG_STATE_HOME": "{dir}/.state" },
+  "maxSteps": 20,
+  "timeoutSeconds": 120
+}

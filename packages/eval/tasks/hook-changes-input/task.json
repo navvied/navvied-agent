@@ -1,0 +1,26 @@
+{
+  "id": "hook-changes-input",
+  "title": "A hook stamps every report that is written",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "bun",
+    "python3"
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write",
+        "fixture": "hook-report-header.ts"
+      }
+    ]
+  },
+  "prompt": "Write the line `all green` into reports/today.md. Write exactly that line, nothing else; the tooling around you adds what a report needs.",
+  "check": "test \"$(head -1 reports/today.md)\" = \"# Report $(python3 -c \"import hashlib,os; print(hashlib.sha1((os.environ['BENCH_SECRET']+'stamp').encode()).hexdigest()[:10])\")\" && test \"$(sed -n 2p reports/today.md)\" = 'all green' && test \"$(wc -l < reports/today.md | tr -d ' ')\" = 2",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 15,
+  "timeoutSeconds": 300
+}

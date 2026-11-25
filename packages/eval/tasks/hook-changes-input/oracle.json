@@ -1,0 +1,9 @@
+[
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "reports/today.md",
+      "content": "all green\n"
+    }
+  }
+]

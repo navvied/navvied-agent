@@ -1,11 +1,13 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { expandEndpointModel, modelNames, endpointModel, type EndpointRecord } from "./endpoints.ts";
 import { expandLocalModel } from "./local-entry.ts";
+import { parseMedia, type MediaConfig } from "./media-config.ts";
 import { PROVIDERS } from "./presets.ts";
 import { expandModel, type SavedProvider } from "./providers.ts";
 import { dirname, posix, win32 } from "node:path";
-import { hasRules, parseRules, type ChatCompletionsConfig, type HookConfig, type HookEvent, type RuleSet } from "@navvied/engine";
+import { HOOK_EVENTS, hasRules, parseRules, type ChatCompletionsConfig, type HookConfig, type HookEvent, type RuleSet } from "@navvied/engine";
 import { EFFORTS, isBaseAddress, type Effort, type Result } from "@navvied/protocol";
+import { parseA2a, type A2aConfig } from "./a2a-config.ts";
 import { DEFAULT_SERVER, GUEST_PREFIX, HOSTED_PREFIX, guestEntries, hostedEntries, readAccount, readHostedModels } from "./account.ts";
 
 export type Env = Record<string, string | undefined>;
@@ -63,13 +65,13 @@ export interface ModelEntry {
   display?: { name?: string; brand?: string; badge?: string; blurb?: string; /** Shown but not usable now, such as a model that needs a plan. */ locked?: boolean };
 }
 /** A program that gives the agent more tools (an MCP server): the command that starts it. */
-export interface McpEntry { command?: string; args?: string[]; env?: Record<string, string>; cwd?: string; /** A server reached over the web instead of a program started here. */ url?: string; headers?: Record<string, string> }
-const HOOK_EVENTS = ["PreToolUse", "PostToolUse", "Stop", "UserPromptSubmit", "SessionStart", "PreCompact"];
+export interface McpEntry { command?: string; args?: string[]; env?: Record<string, string>; cwd?: string; /** A server reached over the web instead of a program started here. */ url?: string; headers?: Record<string, string>; /** For a server on the web that signs in by itself but cannot register navvied on its own. */ oauth?: { clientId?: string; clientSecret?: string; scope?: string } }
 
 /** Where the Bash tool may run its commands besides this computer. The host and the image are set here, never from a page. */
 /** `env`: names of environment variables a command may keep although they look like secrets (the keys navvied itself uses are never passed on). */
 export interface TerminalConfig { docker?: { image?: string }; ssh?: { host: string; user?: string; dir?: string }; env?: string[] }
-export interface ConfigFile { default?: string; terminal?: TerminalConfig; /** Folders an agent may be started in, besides the one the program starts in and the ones worked in lately. Added here, never from a page. */ folders?: string[]; /** `false`: do not use the free models of navvied.com without an account (the default is to use them, as listed by the server). */ guestModels?: boolean; /** `list` (default): every step is one line, a failure or a change shows more. `fold`: steps that went well are folded away. `all`: everything every step printed. */ steps?: "list" | "fold" | "all"; /** Whether the model is offered the `apply_patch` tool: `auto` (default: when its window is not small), `on` or `off`. */ applyPatch?: "auto" | "on" | "off"; /** Models to use, in this order, when the one chosen cannot be reached (names of entries in `models`). */ fallback?: string[]; theme?: string; accent?: string; autoUpdate?: boolean; /** Where a hosted session reaches the web, and the token to ask with. Written by the service that runs the session. */ webProxy?: { url: string; token: string }; models: Record<string, ModelEntry>; /** What this computer keeps for the providers a person has a key of their own for (see providers.ts). Never sent anywhere. */ providers?: Record<string, SavedProvider>; /** The servers of the person's own that were added from a page (see endpoints.ts). Never sent anywhere, keys included. */ endpoints?: Record<string, EndpointRecord>; mcp?: Record<string, McpEntry>; hooks?: HookConfig; /** `false` keeps this computer's conversations off the account (default: they are kept there while signed in) */ syncConversations?: boolean; /** allow / ask / deny rules; see docs/CLI.md */ permissions?: RuleSet; /** `approval`: a skill the agent makes or changes waits for the person (`ask`) or is made and can be undone (`auto`, the default). `trust: "confirm"`: a skill that comes with a project is not offered to the model until the person accepts it. */ skills?: { approval?: "ask" | "auto"; trust?: "confirm" }; }
+export interface ConfigFile { default?: string; terminal?: TerminalConfig; /** Folders an agent may be started in, besides the one the program starts in and the ones worked in lately. Added here, never from a page. */ folders?: string[]; /** `false`: do not use the free models of navvied.com without an account (the default is to use them, as listed by the server). */ guestModels?: boolean; /** `list` (default): every step is one line, a failure or a change shows more. `fold`: steps that went well are folded away. `all`: everything every step printed. */ steps?: "list" | "fold" | "all"; /** Whether the model is offered the `apply_patch` tool: `auto` (default: when its window is not small), `on` or `off`. */ applyPatch?: "auto" | "on" | "off"; /** Models to use, in this order, when the one chosen cannot be reached (names of entries in `models`). */ fallback?: string[]; theme?: string; accent?: string; autoUpdate?: boolean; /** Where a hosted session reaches the web, and the token to ask with. Written by the service that runs the session. */ webProxy?: { url: string; token: string }; /** The engines for speech, pictures and looking at media on this computer (see media-setup.ts). */ media?: MediaConfig; models: Record<string, ModelEntry>; /** What this computer keeps for the providers a person has a key of their own for (see providers.ts). Never sent anywhere. */ providers?: Record<string, SavedProvider>; /** The servers of the person's own that were added from a page (see endpoints.ts). Never sent anywhere, keys included. */ endpoints?: Record<string, EndpointRecord>; mcp?: Record<string, McpEntry>; hooks?: HookConfig; /** `false` keeps this computer's conversations off the account (default: they are kept there while signed in) */ syncConversations?: boolean; /** allow / ask / deny rules; see docs/CLI.md */ permissions?: RuleSet; /** `approval`: a skill the agent makes or changes waits for the person (`ask`) or is made and can be undone (`auto`, the default). `trust: "confirm"`: a skill that comes with a project is not offered to the model until the person accepts it. */ skills?: { approval?: "ask" | "auto"; trust?: "confirm" }; /** `extract`: notes that fill themselves after a turn: `rules` (default, what the person stated outright), `model` (also one short call to the model in use, secrets hidden), `off`. */ memory?: { extract?: "off" | "rules" | "model" }; }
+export interface ConfigFile { default?: string; /** Agent-to-agent calls: the peers this computer may ask and the server it may offer. Off until written. */ a2a?: A2aConfig; terminal?: TerminalConfig; /** Folders an agent may be started in, besides the one the program starts in and the ones worked in lately. Added here, never from a page. */ folders?: string[]; /** `false`: do not use the free models of navvied.com without an account (the default is to use them, as listed by the server). */ guestModels?: boolean; /** `list` (default): every step is one line, a failure or a change shows more. `fold`: steps that went well are folded away. `all`: everything every step printed. */ steps?: "list" | "fold" | "all"; /** Whether the model is offered the `apply_patch` tool: `auto` (default: when its window is not small), `on` or `off`. */ applyPatch?: "auto" | "on" | "off"; /** Models to use, in this order, when the one chosen cannot be reached (names of entries in `models`). */ fallback?: string[]; theme?: string; accent?: string; autoUpdate?: boolean; /** Where a hosted session reaches the web, and the token to ask with. Written by the service that runs the session. */ webProxy?: { url: string; token: string }; models: Record<string, ModelEntry>; /** What this computer keeps for the providers a person has a key of their own for (see providers.ts). Never sent anywhere. */ providers?: Record<string, SavedProvider>; /** The servers of the person's own that were added from a page (see endpoints.ts). Never sent anywhere, keys included. */ endpoints?: Record<string, EndpointRecord>; mcp?: Record<string, McpEntry>; hooks?: HookConfig; /** `false` keeps this computer's conversations off the account (default: they are kept there while signed in) */ syncConversations?: boolean; /** allow / ask / deny rules; see docs/CLI.md */ permissions?: RuleSet; /** `approval`: a skill the agent makes or changes waits for the person (`ask`) or is made and can be undone (`auto`, the default). `trust: "confirm"`: a skill that comes with a project is not offered to the model until the person accepts it. */ skills?: { approval?: "ask" | "auto"; trust?: "confirm" }; }
 
 export interface ResolvedModel {
   name: string;
@@ -133,6 +135,8 @@ export const chatJournalDir = (env: Env, platform: Platform = process.platform):
 export const chatSearchIndexPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(chatDir(env, platform), "search.sqlite");
 /** The account this computer is signed in to lives next to the configuration file; what the server last said it offers is kept with the program's own state. */
 export const accountPath = (env: Env, flag?: string, platform: Platform = process.platform): string => joiner(platform)(dirnameOf(configPath(env, flag, platform), platform), "account.json");
+/** The tokens of the connected programs on the web that signed in (see the engine's mcp-oauth.ts), next to the configuration file. */
+export const mcpAuthPath = (env: Env, flag?: string, platform: Platform = process.platform): string => joiner(platform)(dirnameOf(configPath(env, flag, platform), platform), "mcp-auth.json");
 /** The free models of navvied.com for a computer without an account, as last listed by the server. */
 export const guestModelsPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "guest-models.json");
 /** What the person accepted among the skills that come with projects, and the record of every change the agent made to a skill. */
@@ -144,6 +148,9 @@ export const pluginStatePath = (env: Env, platform: Platform = process.platform)
 export const foldersPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "folders.json");
 export const hostedModelsPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "hosted-models.json");
 const dirnameOf = (path: string, platform: Platform): string => (platform === "win32" ? win32.dirname(path) : posix.dirname(path));
+/** The tokens of the agents that may call this computer (only their hashes). */
+export const a2aTokensPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "a2a-tokens.json");
+export const a2aAuditPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "a2a-audit.jsonl");
 export const devicesPath = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "devices.json");
 export const checkpointsDir = (env: Env, platform: Platform = process.platform): string => joiner(platform)(stateDir(env, platform), "checkpoints");
 
@@ -267,7 +274,7 @@ function loadConfigFile(path: string): Result<ConfigFile | null> {
     if (!isObj(raw.hooks)) return { ok: false, error: `${path}: "hooks" must be an object of events` };
     const hooks: HookConfig = {};
     for (const [event, list] of Object.entries(raw.hooks)) {
-      if (!HOOK_EVENTS.includes(event)) return { ok: false, error: `${path}: hooks: "${event}" is not an event (${HOOK_EVENTS.join(", ")})` };
+      if (!(HOOK_EVENTS as readonly string[]).includes(event)) return { ok: false, error: `${path}: hooks: "${event}" is not an event (${HOOK_EVENTS.join(", ")})` };
       if (!Array.isArray(list) || !list.every((h) => isObj(h) && typeof h.command === "string" && h.command)) return { ok: false, error: `${path}: hooks: ${event} must be a list of { "command": "…" }` };
       hooks[event as HookEvent] = list.map((h) => ({ command: h.command as string, ...(typeof h.matcher === "string" ? { matcher: h.matcher } : {}), ...(typeof h.timeout === "number" && h.timeout > 0 ? { timeout: h.timeout } : {}) }));
     }
@@ -281,6 +288,11 @@ function loadConfigFile(path: string): Result<ConfigFile | null> {
     const k = raw.skills as { approval?: unknown; trust?: unknown } | null;
     if (!k || typeof k !== "object" || Array.isArray(k) || (k.approval !== undefined && k.approval !== "ask" && k.approval !== "auto") || (k.trust !== undefined && k.trust !== "confirm")) return { ok: false, error: `${path}: "skills" may have "approval" ("ask" or "auto") and "trust" ("confirm")` };
     config.skills = { ...(k.approval ? { approval: k.approval as "ask" | "auto" } : {}), ...(k.trust ? { trust: "confirm" as const } : {}) };
+  }
+  if (raw.memory !== undefined) {
+    const k = raw.memory as { extract?: unknown } | null;
+    if (!k || typeof k !== "object" || Array.isArray(k) || (k.extract !== undefined && k.extract !== "off" && k.extract !== "rules" && k.extract !== "model")) return { ok: false, error: `${path}: "memory" may have "extract" ("off", "rules" or "model")` };
+    config.memory = k.extract ? { extract: k.extract as "off" | "rules" | "model" } : {};
   }
   if (raw.steps !== undefined) {
     if (raw.steps !== "list" && raw.steps !== "fold" && raw.steps !== "all") return { ok: false, error: `${path}: "steps" must be "list", "fold" or "all"` };
@@ -306,6 +318,11 @@ function loadConfigFile(path: string): Result<ConfigFile | null> {
     }
     config.terminal = terminal;
   }
+  if (raw.a2a !== undefined) {
+    const a2a = parseA2a(path, raw.a2a);
+    if (!a2a.ok) return a2a;
+    config.a2a = a2a.value;
+  }
   if (raw.folders !== undefined) {
     if (!Array.isArray(raw.folders) || raw.folders.some((f) => typeof f !== "string")) return { ok: false, error: `${path}: "folders" must be a list of folder paths` };
     config.folders = raw.folders as string[];
@@ -314,6 +331,11 @@ function loadConfigFile(path: string): Result<ConfigFile | null> {
     const w = raw.webProxy as Record<string, unknown> | null;
     if (typeof w !== "object" || w === null || typeof w.url !== "string" || typeof w.token !== "string" || !/^https?:\/\//.test(w.url) || !w.token) return { ok: false, error: `${path}: "webProxy" needs a web address in "url" and a "token"` };
     config.webProxy = { url: w.url.replace(/\/+$/, ""), token: w.token };
+  }
+  if (raw.media !== undefined) {
+    const m = parseMedia(raw.media);
+    if (typeof m === "string") return { ok: false, error: `${path}: ${m}` };
+    config.media = m;
   }
   if (raw.providers !== undefined) {
     if (!isObj(raw.providers)) return { ok: false, error: `${path}: "providers" must be an object` };
@@ -367,7 +389,8 @@ function loadConfigFile(path: string): Result<ConfigFile | null> {
       if (hasUrl && hasCommand) return { ok: false, error: `${path}: connected program "${name}": use either command or url, not both` };
       if (hasUrl) {
         if (!/^https?:\/\//.test(value.url as string)) return { ok: false, error: `${path}: connected program "${name}": url must start with http:// or https://` };
-        mcp[name] = { url: value.url as string, ...(isObj(value.headers) ? { headers: Object.fromEntries(Object.entries(value.headers).filter((e): e is [string, string] => typeof e[1] === "string")) } : {}) };
+        const oauth = isObj(value.oauth) ? Object.fromEntries((["clientId", "clientSecret", "scope"] as const).flatMap((k) => (typeof (value.oauth as Record<string, unknown>)[k] === "string" ? [[k, (value.oauth as Record<string, string>)[k]]] : []))) : undefined;
+        mcp[name] = { url: value.url as string, ...(isObj(value.headers) ? { headers: Object.fromEntries(Object.entries(value.headers).filter((e): e is [string, string] => typeof e[1] === "string")) } : {}), ...(oauth && Object.keys(oauth).length ? { oauth } : {}) };
         continue;
       }
       if (value.args !== undefined && !(Array.isArray(value.args) && value.args.every((a) => typeof a === "string"))) return { ok: false, error: `${path}: connected program "${name}": args must be an array of strings` };

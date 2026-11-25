@@ -1,7 +1,7 @@
 import { patchPaths } from "./apply-patch.ts";
 
 /** The tools that change files: the one place that knows which, and what each one's arguments say about files. */
-export const FILE_WRITERS: ReadonlySet<string> = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"]);
+export const FILE_WRITERS: ReadonlySet<string> = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch", "Speak", "MakeImage", "MakeVideo"]);
 /** The writers a rule for `Edit` also covers, as in the rest of the world's permission rules. */
 export const EDIT_LIKE: ReadonlySet<string> = new Set(["MultiEdit", "NotebookEdit", "apply_patch"]);
 
@@ -27,8 +27,10 @@ export function textOf(args: Record<string, unknown>): string {
 }
 
 /** The tools that only look at files, and the places a call of one looks at (a search without a place looks at the project). */
-export const READERS: ReadonlySet<string> = new Set(["Read", "Glob", "Grep"]);
+export const READERS: ReadonlySet<string> = new Set(["Read", "Glob", "Grep", "Transcribe", "LookAt", "Watch"]);
+/** The readers that name one file in `file_path`. */
+const ONE_FILE: ReadonlySet<string> = new Set(["Read", "Transcribe", "LookAt", "Watch"]);
 export function readPaths(tool: string, args: Record<string, unknown>): string[] {
-  const where = tool === "Read" ? args.file_path : args.path ?? ".";
+  const where = ONE_FILE.has(tool) ? args.file_path : args.path ?? ".";
   return READERS.has(tool) && typeof where === "string" ? [where] : [];
 }

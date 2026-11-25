@@ -1,0 +1,14 @@
+{
+  "id": "schedule-replace-job",
+  "title": "Remove one scheduled job and add a one-time job, leaving the other alone",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": ["bun"],
+  "prompt": "Two jobs are scheduled. Remove the one named old-backup, leave keep-me as it is, and add a job that runs once, 30 minutes from now, with the prompt \"check the build\".",
+  "check": "bun \"$BENCH_FIXTURES/schedule-check.ts\" replace",
+  "protect": ["README.md"],
+  "env": { "XDG_STATE_HOME": "{dir}/.state" },
+  "maxSteps": 20,
+  "timeoutSeconds": 120
+}

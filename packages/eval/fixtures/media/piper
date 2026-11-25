@@ -1,0 +1,5 @@
+#!/bin/sh
+# A stand-in for Piper: writes a sound file that holds the text it was given.
+while [ "$1" != "--output_file" ]; do shift; done
+printf RIFF > "$2"
+cat >> "$2"

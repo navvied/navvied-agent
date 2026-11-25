@@ -1,0 +1,9 @@
+[
+  { "tool": "computer", "args": { "action": "capture", "app": "Tasks" } },
+  { "tool": "computer", "args": { "action": "click", "app": "Tasks", "target": "${result:(\\d+) button \"Open Call Bob\"}" } },
+  { "tool": "computer", "args": { "action": "click", "app": "Tasks", "target": 3 } },
+  { "tool": "computer", "args": { "action": "capture", "app": "Tasks" } },
+  { "tool": "computer", "args": { "action": "click", "app": "Tasks", "target": "${result:(\\d+) button \"Mark done\"}" } },
+  { "tool": "computer", "args": { "action": "capture", "app": "Tasks" } },
+  { "tool": "Write", "args": { "file_path": "ANSWER.txt", "content": "${result:Receipt (\\w+)}\n" } }
+]

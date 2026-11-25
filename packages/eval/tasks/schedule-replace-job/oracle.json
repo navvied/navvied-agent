@@ -1,0 +1,5 @@
+[
+  { "tool": "Schedule", "args": { "action": "list" } },
+  { "tool": "Schedule", "args": { "action": "remove", "id": "old-backup" } },
+  { "tool": "Schedule", "args": { "action": "create", "name": "build-check", "prompt": "check the build", "when": "in 30 minutes" } }
+]

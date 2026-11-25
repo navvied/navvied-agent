@@ -7,7 +7,7 @@ import { instantiate } from "./adapter.ts";
 import { watchMemory } from "./memory.ts";
 import type { Meter } from "./meter.ts";
 import type { Task } from "./task.ts";
-import { check, killProcesses, leftovers, missingPrograms, newSecret, prepare, protectedHashes, mcpConfig, scriptEnv, shell, taskEnv } from "./workspace.ts";
+import { FIXTURES, check, killProcesses, leftovers, missingPrograms, newSecret, prepare, protectedHashes, agentConfig, scriptEnv, shell, taskEnv, taskPrompt } from "./workspace.ts";
 
 export interface RunOptions {
   /** The program that runs a task, as an argument list (for example `["bun", "packages/cli/src/main.ts"]`). */
@@ -172,15 +172,16 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
     if (!setup.ok) { killProcesses(leftovers(dir)); rmSync(dir, { recursive: true, force: true }); return { ...about(task), task: task.id, model, passed: false, reason: "setup failed", error: setup.output.trim().split("\n").at(-1)?.slice(0, 300) ?? "", ...none }; }
   }
   const before = protectedHashes(dir, task.protect);
-  const config = mcpConfig(task);
+  const config = agentConfig(task, dir);
+  const prompt = taskPrompt(dir, task);
   const started = Date.now();
-  const [program, ...base] = opts.command;
+  const [program, ...base] = task.runner ? [process.execPath, join(FIXTURES, task.runner)] : opts.command;
   const runId = `${task.id}-${crypto.randomUUID().slice(0, 8)}`;
   const counted = opts.meter && opts.agentEnv ? opts.agentEnv(opts.meter.url(runId)) : {};
   // Another agent is started as its file says, in the workspace; ours is started with its own `run`.
-  const other = opts.agent ? instantiate(opts.agent, { prompt: task.prompt, dir, ...(opts.model ? { model: opts.model } : {}), ...(opts.meter && opts.agent.pointable ? { baseUrl: opts.meter.url(runId) } : {}), ...(opts.key ? { key: opts.key } : {}) }) : undefined;
+  const other = opts.agent ? instantiate(opts.agent, { prompt, dir, ...(opts.model ? { model: opts.model } : {}), ...(opts.meter && opts.agent.pointable ? { baseUrl: opts.meter.url(runId) } : {}), ...(opts.key ? { key: opts.key } : {}) }) : undefined;
   const proc = Bun.spawn(
-    other ? other.argv : [program!, ...base, "run", task.prompt, "--cwd", dir, "--json", "--mode", "auto", "--max-steps", String(task.maxSteps), ...(task.answers ? ["--answers", JSON.stringify(task.answers)] : []), ...(opts.model ? ["--model", opts.model] : [])],
+    other ? other.argv : [program!, ...base, "run", prompt, "--cwd", dir, "--json", "--mode", "auto", "--max-steps", String(task.maxSteps), ...(task.answers ? ["--answers", JSON.stringify(task.answers)] : []), ...(opts.model ? ["--model", opts.model] : [])],
     { cwd: dir, env: { ...gitEnv(), ...secret, NAVVIED_TERMINAL_ENV: "BENCH_SECRET", ...opts.env, ...config.env, ...taskEnv(dir, task), ...counted, ...other?.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
   );
   const memory = watchMemory(proc.pid);
@@ -197,12 +198,14 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
     writeFileSync(join(opts.trace, `${task.id}.stderr.txt`), clean(stderr));
   }
   clearTimeout(timer);
+  // What the agent printed is left in the workspace for the check: a task about a secret asserts that it is in no event.
+  writeFileSync(join(dir, ".bench-events.jsonl"), stdout);
   const peak = memory.stop();
   const hits = opts.meter ? await opts.meter.take(runId) : [];
 
   const ms = Date.now() - started;
   // What an agent says about itself is read only for ours: another agent is measured from outside.
-  const metrics = opts.agent ? { modelCalls: 0, toolCalls: 0, outTokens: 0, peakContext: 0 } as Metrics : measure(stdout, `${task.prompt}\n${["docs-url.txt", "addresses.txt"].map((f) => { try { return readFileSync(join(dir, f), "utf8"); } catch { return ""; } }).join("\n")}`);
+  const metrics = opts.agent ? { modelCalls: 0, toolCalls: 0, outTokens: 0, peakContext: 0 } as Metrics : measure(stdout, `${prompt}\n${["docs-url.txt", "addresses.txt"].map((f) => { try { return readFileSync(join(dir, f), "utf8"); } catch { return ""; } }).join("\n")}`);
   const after = protectedHashes(dir, task.protect);
   const tampered = JSON.stringify(Object.entries(before).sort()) !== JSON.stringify(Object.entries(after).sort());
   // The check is made also when time ran out: an agent that had done the task and was only waiting for its last answer is told apart.

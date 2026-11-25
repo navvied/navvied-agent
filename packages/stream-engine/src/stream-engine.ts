@@ -5,7 +5,7 @@
  */
 import { StepClock } from "./step-clock.ts";
 import { LineSplitter, RecentIds, type Command, type Effort, type EngineEvent, type ModelInfo, type PermMode, type PromptCommand } from "@navvied/protocol";
-import { ALLOW, ALLOW_ALWAYS, ApprovalBroker, DENY, EDIT, approvalChange, approvalOptions, hardBlock, judge, launch, type AgentEngine, type Rules } from "@navvied/engine";
+import { ALLOW, ALLOW_ALWAYS, ApprovalBroker, DENY, EDIT, approvalChange, approvalOptions, Outside, fromOutsideName, hardBlock, judge, launch, withOrigin, type AgentEngine, type Rules } from "@navvied/engine";
 import { AskServer, type AskReply, type AskedCall } from "./ask-channel.ts";
 import { buildArgv } from "./argv.ts";
 import { Translator } from "./translate.ts";
@@ -82,6 +82,8 @@ export class StreamEngine implements AgentEngine {
   readonly #approvals = new ApprovalBroker();
   /** What the person said "do not ask again" to. */
   readonly #allowed = new Set<string>();
+  /** What this turn of the program has read from outside. */
+  readonly #outside = new Outside();
   readonly #ask = new AskServer((call, gone) => this.#decide(call, gone));
   /** The guard has been seen to start and answer: until then the program is not started. */
   #guardOk = false;
@@ -273,7 +275,7 @@ export class StreamEngine implements AgentEngine {
     const cwd = typeof call.cwd === "string" && call.cwd ? call.cwd : this.#o.cwd;
     const mode = this.#mode;
     const settled: AskReply = mode === "plan" || mode === "bypass" ? { decision: "pass" } : { decision: "allow" };
-    const judged = judge({ mode, tool: { name, readOnly: READ_ONLY.has(asked) }, args, cwd, rules: this.#o.rules, allowed: this.#allowed, knownUrl: () => true });
+    const judged = judge({ mode, tool: { name, readOnly: READ_ONLY.has(asked) }, args, cwd, rules: this.#o.rules, allowed: this.#allowed, knownUrl: () => true, outside: this.#outside });
     if (judged.kind === "stop") return { decision: "deny", message: judged.message };
     if (judged.kind === "go") return settled;
 
@@ -283,7 +285,7 @@ export class StreamEngine implements AgentEngine {
     const change = approvalChange(name, args);
     const stopped = (): void => { this.#approvals.answer(id, DENY); };
     gone.addEventListener("abort", stopped, { once: true });
-    this.#emit({ ev: "approval", id, title: titleOf(name, args), options: approvalOptions(scope.phrase, editable), ...(typeof call.tool_use_id === "string" ? { tool: call.tool_use_id } : {}), ...(change ? { change } : {}), ...(risk ? { risk: risk.reason } : {}) });
+    this.#emit({ ev: "approval", id, title: withOrigin(titleOf(name, args), judged.copied), options: approvalOptions(scope.phrase, editable), ...(typeof call.tool_use_id === "string" ? { tool: call.tool_use_id } : {}), ...(change ? { change } : {}), ...(risk ? { risk: risk.reason } : {}) });
     const given = await answer;
     gone.removeEventListener("abort", stopped);
     if (given.optionId === ALLOW_ALWAYS) { for (const k of scope.keys ?? [scope.key]) this.#allowed.add(k); return settled; }
@@ -331,10 +333,12 @@ export class StreamEngine implements AgentEngine {
   #deliver(e: EngineEvent): void {
     if (this.#starting) { this.#starting = false; this.#emit({ ev: "phase", name: "" }); }
     if (e.ev === "session") this.#sessionId = e.id;
+    if (e.ev === "tool" && e.status !== "running" && fromOutsideName(e.name)) this.#outside.note(typeof e.output === "string" ? e.output : "");
     if (e.ev === "done") {
       if (this.#killTimer) { clearTimeout(this.#killTimer); this.#killTimer = undefined; }
       if (this.#pending.size > 0 && e.stop === "end_turn") return; // more messages are queued: the agent runs them next, so the turn goes on
       this.#dropPending();
+      this.#outside.reset();
       this.#emit(e);
       this.#busy = false;
       this.#settle();

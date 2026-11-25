@@ -1,0 +1,14 @@
+{
+  "id": "schedule-shortest-interval",
+  "title": "Ask for an interval that is too short, then use the shortest allowed",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": ["bun"],
+  "prompt": "Schedule a job named pulse that checks that the service answers, repeating every 10 seconds. If a job may not repeat that often, schedule it at the shortest repeat that is allowed instead.",
+  "check": "bun \"$BENCH_FIXTURES/schedule-check.ts\" pulse",
+  "protect": ["README.md"],
+  "env": { "XDG_STATE_HOME": "{dir}/.state" },
+  "maxSteps": 20,
+  "timeoutSeconds": 120
+}

@@ -1,0 +1,28 @@
+[
+  {
+    "tool": "Read",
+    "args": {
+      "file_path": "config/prod.env"
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "config/prod.env",
+      "content": "LOG_LEVEL=debug\nREGION=eu\n"
+    }
+  },
+  {
+    "tool": "Read",
+    "args": {
+      "file_path": "config/dev.env"
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "config/dev.env",
+      "content": "LOG_LEVEL=debug\nREGION=local\n"
+    }
+  }
+]

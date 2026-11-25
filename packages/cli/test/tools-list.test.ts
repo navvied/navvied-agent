@@ -105,9 +105,9 @@ describe("the tools of the agent", () => {
 });
 
 describe("the agent can look through earlier conversations", () => {
-  const ask = async (text: string): Promise<string[]> => {
+  const ask = async (text: string, window = "100000"): Promise<string[]> => {
     const state = tempDir(), work = tempDir(); dirs.push(state, work);
-    const env = { HOME: state, XDG_STATE_HOME: state, XDG_CONFIG_HOME: state, NAVVIED_BASE_URL: mock.url, NAVVIED_MODEL: "mock-model", NAVVIED_WINDOW: "100000" };
+    const env = { HOME: state, XDG_STATE_HOME: state, XDG_CONFIG_HOME: state, NAVVIED_BASE_URL: mock.url, NAVVIED_MODEL: "mock-model", NAVVIED_WINDOW: window };
     const hub = createHub({ json: false, yes: false, thinking: false, cwd: work } as never, fakeIO({ env }).io, { watch: false });
     const got: { ev: string }[] = [];
     hub.attach({ send: (line) => { got.push(JSON.parse(String(line))); } }, 0);
@@ -116,10 +116,11 @@ describe("the agent can look through earlier conversations", () => {
     await hub.stop();
     return ((mock.requests.at(-1)?.body.tools ?? []) as { function: { name: string } }[]).map((t) => t.function.name);
   };
-  test("the tool is given to the model when the person refers to something from before", async () => {
+  test("the tool is given to a model that is not small whatever the request says, in any language", async () => {
     expect(await ask("what did we decide last time about the login page?")).toContain("Recall");
+    expect(await ask("rename the variable x to y in src/a.ts")).toContain("Recall");
   });
-  test("and not otherwise, so a small model is not given one more thing to choose from", async () => {
-    expect(await ask("rename the variable x to y in src/a.ts")).not.toContain("Recall");
+  test("a small model is not given one more thing to choose from", async () => {
+    expect(await ask("what did we decide last time about the login page?", "8000")).not.toContain("Recall");
   });
 });

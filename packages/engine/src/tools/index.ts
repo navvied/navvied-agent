@@ -11,9 +11,13 @@ import { glob } from "./glob.ts";
 import { grep } from "./grep.ts";
 import { multiEdit } from "./multi-edit.ts";
 import { notebookEdit } from "./notebook.ts";
+import { lookAt, watch } from "./look.ts";
+import { makeImage, makeVideo } from "./make-media.ts";
 import { read } from "./read.ts";
 import { rememberTool } from "./remember.ts";
+import { schedule } from "./schedule.ts";
 import { skill } from "./skill.ts";
+import { speak, transcribe } from "./speech.ts";
 import { skillManage } from "./skill-manage.ts";
 import { todo } from "./todo.ts";
 import { webFetch } from "./web-fetch.ts";
@@ -31,5 +35,5 @@ export const exitPlanMode: Tool = {
   async run() { return "Plan presented."; },
 };
 
-export const defaultTools = (o: { applyPatch?: PatchMode | undefined } = {}): Tool[] => [read, write, edit, multiEdit, notebookEdit, ...(o.applyPatch === "off" ? [] : [applyPatchTool(o.applyPatch ?? "auto")]), bash, bashOutput, bashInput, killShell, glob, grep, webFetch, webSearch, browser, skill, agent, rememberTool, recallTool, skillManage, todo, ask, executeCode];
-export { executeCode, recallTool, skillManage, agent, ask, bash, bashInput, bashOutput, browser, edit, multiEdit, notebookEdit, killShell, glob, grep, read, rememberTool, skill, todo, webFetch, webSearch, write };
+export const defaultTools = (o: { applyPatch?: PatchMode | undefined } = {}): Tool[] => [read, write, edit, multiEdit, notebookEdit, ...(o.applyPatch === "off" ? [] : [applyPatchTool(o.applyPatch ?? "auto")]), bash, bashOutput, bashInput, killShell, glob, grep, webFetch, webSearch, browser, skill, agent, rememberTool, recallTool, skillManage, todo, ask, executeCode, schedule, lookAt, watch, transcribe, speak, makeImage, makeVideo];
+export { lookAt, makeImage, makeVideo, speak, transcribe, watch, schedule, executeCode, recallTool, skillManage, agent, ask, bash, bashInput, bashOutput, browser, edit, multiEdit, notebookEdit, killShell, glob, grep, read, rememberTool, skill, todo, webFetch, webSearch, write };

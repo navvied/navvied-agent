@@ -1,0 +1,24 @@
+{
+  "id": "browser-download",
+  "title": "Download a file into the project",
+  "kind": "web",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun",
+    "browser"
+  ],
+  "prompt": "Open http://127.0.0.1:{port}/reports in the browser, download the report, and write the code in its second line (the value after the comma) into ANSWER.txt. Keep the downloaded file",
+  "check": "bun \"$BENCH_FIXTURES/web-check.ts\" browser-download",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 24,
+  "timeoutSeconds": 600,
+  "setup": "bun \"$BENCH_FIXTURES/start-web.ts\"",
+  "teardown": "bun \"$BENCH_FIXTURES/stop-web.ts\"",
+  "env": {
+    "NAVVIED_ALLOW_PRIVATE_NETWORK": "1"
+  }
+}

@@ -5,7 +5,11 @@ import type { Jobs } from "./jobs.ts";
 import type { MemoryPaths } from "./memory.ts";
 import type { SkillInfo } from "./skills.ts";
 import type { SkillBook } from "./skill-book.ts";
-import type { EngineEvent, PermMode, QuestionItem } from "@navvied/protocol";
+import type { Media } from "./media/media.ts";
+import type { Need } from "./media/types.ts";
+import type { EngineEvent, PermMode, QuestionItem, ScreenOutcome } from "@navvied/protocol";
+import type { Timing } from "./schedule-when.ts";
+import type { PeerAnswer } from "./a2a/client.ts";
 
 export type Role = "system" | "user" | "assistant" | "tool";
 
@@ -29,6 +33,31 @@ export interface Recall {
   read(id: string): { k: string; text: string }[] | undefined;
   /** The conversations most recently worked on. */
   recent(limit: number): { id: string; title: string; updated: number }[];
+}
+/** One job as the Schedule tool shows it. `when` is its timing in words; times are ms since the epoch. */
+export interface ScheduleJob { id: string; name: string; prompt: string; when: string; tz?: string; mode: "plan" | "auto"; enabled: boolean; next?: number; /** How the last run ended; `missed` is a run that never started. */ lastOutcome?: "ok" | "failed" | "missed" | "running"; lastAt?: number }
+/** One run of a job. `due` is set when the run started late, and says when it was due. */
+export interface ScheduleRun { at: number; outcome: "ok" | "failed" | "missed" | "running"; due?: number; note?: string }
+export interface ScheduleInput { name: string; prompt: string; timing: Timing; tz?: string; mode: "plan" | "auto" }
+/**
+ * Where the Schedule tool keeps its jobs: a computer's own list, or a hosted session's cloud jobs. A refusal comes back as one plain sentence,
+ * never thrown.
+ */
+export interface ScheduleBackend {
+  /** Said after a job is made: where and when it runs. */
+  about: string;
+  /** The clock (injected, so tests need no waiting). */
+  now(): number;
+  /** The most jobs it keeps; none when the service decides and says so itself. */
+  maxJobs?: number;
+  /** False in a place that may only look (a job that is running). */
+  canChange: boolean;
+  list(): Promise<ScheduleJob[] | string>;
+  create(input: ScheduleInput): Promise<ScheduleJob | string>;
+  update(id: string, change: Partial<ScheduleInput>): Promise<ScheduleJob | string>;
+  setEnabled(id: string, enabled: boolean): Promise<ScheduleJob | string>;
+  remove(id: string): Promise<true | string>;
+  runs(id: string): Promise<ScheduleRun[] | string>;
 }
 export interface ToolSpec { name: string; description: string; parameters: JsonSchema }
 
@@ -70,13 +99,62 @@ export interface Provider {
 /** The address (up to and including `/v1/web`) and the token of the service that fetches and searches the web for a session. */
 export interface WebProxy { url: string; token: string }
 
+/** One step on a person's screen, as the engine sends it to the helper that owns the screen (the desktop app's host). */
+export interface ComputerCall {
+  action: "capture" | "click" | "type" | "key" | "scroll" | "list" | "wait";
+  app?: string;
+  /** An element number from the last capture. */
+  target?: number;
+  text?: string;
+  keys?: string;
+  /** Pixels, only when the capture had no number for the place. */
+  x?: number;
+  y?: number;
+  /** For `capture`: `ax` (numbered accessibility tree, no image), `som` (screenshot with numbers, plus the tree) or `vision`. The engine never asks for an image of a model that cannot see. */
+  mode?: "ax" | "som" | "vision";
+}
+
+/** The closed reasons a helper refuses; the engine adds `stale_target` of its own. */
+export type ComputerCode = "background_unavailable" | "background_occluded" | "background_uipi_blocked" | "human_has_control" | "input_target_mismatch" | "permission_missing" | "blocked_by_policy";
+
+export interface ComputerResult {
+  /** `unverified`: the input was sent and cannot be proven to have landed. */
+  verdict: "delivered" | "unverified" | "refused";
+  code?: ComputerCode;
+  /** What is missing, for `permission_missing`. */
+  which?: string;
+  /** The exact next step, for a refusal or an unverified input. */
+  next?: string;
+  /** The application the step was about; the engine fills it from the call when the helper does not say. */
+  app?: string;
+  /** For `capture` and `list`: numbered lines such as `12 button "Save"`. */
+  tree?: string;
+  image?: { mime: string; data: string };
+}
+
+/**
+ * What drives the screen. It belongs to the machine that has the screen, and it owns every approval, hard block and indicator: the engine
+ * only sends an action and relays the answer. A call that throws or is cut off has an outcome nobody knows.
+ */
+export interface ComputerHelper {
+  call(c: ComputerCall, signal?: AbortSignal): Promise<ComputerResult>;
+}
+
 export interface ToolContext {
+  /** A tool that frames its own text from outside says so here, so the rest of the turn is judged knowing it was read. */
+  outside?: (text: string) => void;
+  /** The helper that drives this computer's screen (when computer use is on). */
+  computer?: ComputerHelper;
+  /** This result is kept out of the saved conversation, the step's card and the hooks: they get `note` instead, and any picture shown with it is dropped the same way. The model has the full text for the rest of the turn, until a newer one replaces it. */
+  keepOut?: (note: string) => void;
   /** Something a tool keeps for the rest of the conversation (a program it started): made the first time, closed when the conversation ends. */
   keep?: <T extends { close(): void }>(key: string, make: () => T) => T;
   /** What this conversation has read or written of files: the tools that change a file check it. */
   files?: FileState;
   /** Whether the model can see pictures (not set: not known). */
   vision?: boolean;
+  /** What the person gave this conversation: the secrets they typed (and any saved login), and the origins (scheme, host, port) of the sites they named. A secret goes only to a page on one of those origins. */
+  credentials?: () => { secrets: readonly string[]; origins: readonly string[] };
   /** Gives the model a picture with the result of the tool. */
   show?: (part: Part) => void;
   /** What this conversation's commands remember between calls (the folder, the exports). */
@@ -103,6 +181,10 @@ export interface ToolContext {
   search?: { url?: string; /** The keyless search sites to try, in this order (see web-search-backends.ts); the default is all of them. */ order?: string[]; /** Where navvied's own search is (for a computer whose network blocks the public pages), and this computer's account token when it has one. */ navvied?: () => { server: string; token?: string } | undefined };
   /** Where a session with no network of its own reaches the web: WebFetch and WebSearch ask it, with the token, instead of going out. */
   webProxy?: WebProxy;
+  /** Where the Schedule tool keeps jobs. */
+  schedule?: ScheduleBackend;
+  /** What can hear, speak, draw or look at media in this conversation. */
+  media?: Media;
   /** The skills in effect now. */
   skills?: () => SkillInfo[];
   /** Where the agent keeps notes for later. */
@@ -118,22 +200,38 @@ export interface ToolContext {
   /** What a command printed, as it prints (the engine passes it on, a little at a time). */
   live?: (chunk: string) => void;
   /** Facts about how the work ended, for the step's card: the exit code, that the output was cut, that it timed out, or that it went on as a job. */
-  report?: (meta: { code?: number | null; truncated?: boolean; timedOut?: boolean; background?: boolean; cached?: boolean }) => void;
+  report?: (meta: { code?: number | null; truncated?: boolean; timedOut?: boolean; background?: boolean; cached?: boolean; /** How a step on the screen ended, for the card. */ screen?: ScreenOutcome }) => void;
   /** Runs another tool as if the model had called it: the same checks, approvals and secret hiding. For a tool that is a program calling tools. `ok` is false when the call was refused or failed. */
   call?: (name: string, args: Record<string, unknown>) => Promise<{ ok: boolean; text: string }>;
   /** Runs a research task in a helper of its own and returns what it found. */
   helper?: (task: { description: string; prompt: string; agent?: string; background?: boolean }, signal: AbortSignal) => Promise<string>;
+  /** The other agents the person has set up to ask. */
+  peers?: PeerBook;
   /** Asks the person the questions and returns what they answered (or why nobody did), as the model reads it. */
   ask?: (questions: QuestionItem[], signal: AbortSignal) => Promise<string>;
+}
+
+/** The agents this person set up to ask (see a2a/client.ts): their names, and how to ask one. */
+export interface PeerBook {
+  names: string[];
+  ask(name: string, message: string, context: string | undefined, signal: AbortSignal): Promise<PeerAnswer>;
 }
 
 export interface Tool extends ToolSpec {
   /** Offered only when something says it is on (`toolOn`): a tool still being measured is never offered by default. */
   experimental?: true;
+  /** The tool exists only where this is available (a provider of a kind of media); a computer without it is not offered the tool and a call to it is refused. */
+  needs?: Need;
   /** Read-only tools never need approval and are the only ones offered in plan mode. */
   readOnly: boolean;
+  /** Offered in plan mode though it may change things: the judge decides each call (only what it allows there is run). */
+  inPlan?: true;
+  /** Its results are text somebody else wrote (a page, a search, a connected service): the engine frames every result as information, not instructions, and the rest of the turn is judged knowing it was read. */
+  fromOutside?: true;
+  /** Its calls are asked about, even in Auto, once the turn has read text from outside: a tool that starts something for later or sends something away. */
+  askAfterOutside?: true;
   /** Whether to offer this tool now. A small model is easily led astray by tools it does not need, so some are offered only when the conversation calls for them. */
-  offeredWhen?(situation: { small: boolean; userText: string; jobs: number; /** Steps taken so far in this turn. */ steps?: number; /** A conversation, not work on a project. */ chat?: boolean; /** Running commands that can be typed to. */ typable?: number; skills?: number; /** Earlier conversations can be looked through. */ recall?: boolean }): boolean;
+  offeredWhen?(situation: { small: boolean; userText: string; jobs: number; /** Steps taken so far in this turn. */ steps?: number; /** A conversation, not work on a project. */ chat?: boolean; /** Running commands that can be typed to. */ typable?: number; skills?: number; /** Earlier conversations can be looked through. */ recall?: boolean; /** Notes can be kept. */ memory?: boolean; /** Jobs can be scheduled here. */ schedule?: boolean; /** Computer use is on. */ computer?: boolean; /** The turn has shown that a script would pay (see `code-offer.ts`). */ code?: boolean }): boolean;
   /** Puts the arguments a model wrote in other words into the ones this tool has, before they are checked. */
   fixArgs?(args: Record<string, unknown>): Record<string, unknown>;
   title(args: Record<string, unknown>): string;

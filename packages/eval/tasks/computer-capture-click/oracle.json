@@ -1,0 +1,6 @@
+[
+  { "tool": "computer", "args": { "action": "capture", "app": "Preferences" } },
+  { "tool": "computer", "args": { "action": "click", "app": "Preferences", "target": "${result:(\\d+) button \"Export\"}" } },
+  { "tool": "computer", "args": { "action": "capture", "app": "Preferences" } },
+  { "tool": "Write", "args": { "file_path": "ANSWER.txt", "content": "${result:Export code: (\\w+)}\n" } }
+]

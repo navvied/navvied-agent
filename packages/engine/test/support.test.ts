@@ -27,7 +27,7 @@ describe("approval broker", () => {
 describe("permissions", () => {
   const all = defaultTools();
   test("plan offers only read-only tools plus the plan tool; ask and auto offer everything", () => {
-    const running = { small: false, steps: 1, userText: "fix the notebook, open https://example.com in the browser and search the web, research it, remember this, make a skill, and what did we decide last time:\n1. one\n2. two", jobs: 1, typable: 1, skills: 1, recall: true };
+    const running = { small: false, steps: 1, userText: "fix the notebook, open https://example.com in the browser and search the web, research it, remember this, make a skill, schedule it daily, and what did we decide last time, look at pic.png, watch the video, transcribe the recording, read it aloud, draw a picture of it and make a video clip:\n1. one\n2. two", jobs: 1, typable: 1, skills: 1, recall: true, memory: true, schedule: true, computer: true, code: true };
     expect(toolsFor("plan", all).map((t) => t.name)).toEqual(["Read", "Glob", "Grep", "Agent", "AskUserQuestion", "ExitPlanMode"]);
     expect(toolsFor("ask", all, running)).toHaveLength(all.length);
     expect(toolsFor("auto", all, running)).toHaveLength(all.length);

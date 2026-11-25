@@ -16,10 +16,18 @@ export interface Task {
   /** Shell commands run in the workspace before the agent starts and after the check; both see BENCH_SECRET. */
   setup?: string;
   teardown?: string;
-  /** Added to the environment of the agent. `{port}` is the port the setup left in `.bench-port`, for the tasks that start a fixture web. */
+  /** Added to the environment of the agent. `{port}` is the port the setup left in `.bench-port`, for the tasks that start a fixture web. `{dir}` is the workspace, for a task that keeps the agent's state inside it. */
   env?: Record<string, string>;
   /** MCP servers the agent is given for this task: each is a program of the fixtures folder (`fixture`), started by the agent itself from its own configuration, which the harness writes for the run. */
   mcp?: Record<string, { fixture: string }>;
+  /** The stand-ins for speech and picture programs (fixtures/media) the agent is configured with: `stt` hears one fixed sentence, `tts` writes the text it is given into a sound file, `image` writes a picture that says its size. */
+  media?: ("stt" | "tts" | "image")[];
+  /** A program of the fixtures folder that starts the agent in place of the command line, with the same arguments, for a task that gives it something a command line cannot be given from outside (a scripted screen). */
+  runner?: string;
+  /** Hooks the agent is given for this task, by event: each is a program of the fixtures folder (`fixture`), written into the agent's own configuration for the run. */
+  hooks?: Record<string, { matcher?: string; fixture: string }[]>;
+  /** Other agents the agent is given for this task, by the name it asks them by: a path of the fixture agents (`a2a-peer.ts`), which the setup starts and leaves the port of in `.bench-port`. */
+  a2a?: Record<string, string>;
   /** Takes minutes: run only when asked for. */
   slow: boolean;
   prompt: string;
@@ -46,6 +54,9 @@ export interface ScriptedCall { tool: string; args: Record<string, unknown> }
 const isString = (v: unknown): v is string => typeof v === "string" && v.length > 0;
 const isMcp = (v: unknown): v is NonNullable<Task["mcp"]> => !!v && typeof v === "object" && !Array.isArray(v) && Object.values(v).every((e) => !!e && typeof e === "object" && isString((e as { fixture?: unknown }).fixture));
 
+const isHooks = (v: unknown): v is NonNullable<Task["hooks"]> => !!v && typeof v === "object" && !Array.isArray(v) && Object.values(v).every((l) => Array.isArray(l) && l.every((h) => !!h && typeof h === "object" && isString((h as { fixture?: unknown }).fixture)));
+const isPeers = (v: unknown): v is NonNullable<Task["a2a"]> => !!v && typeof v === "object" && !Array.isArray(v) && Object.values(v).every((p) => typeof p === "string" && p.startsWith("/"));
+
 export function loadTask(dir: string): Task {
   const raw = JSON.parse(readFileSync(join(dir, "task.json"), "utf8")) as Record<string, unknown>;
   if (!isString(raw.id) || !isString(raw.title) || !isString(raw.prompt) || !isString(raw.check)) throw new Error(`${dir}/task.json: id, title, prompt and check are required`);
@@ -61,8 +72,12 @@ export function loadTask(dir: string): Task {
     requires: Array.isArray(raw.requires) ? raw.requires.filter(isString) : [],
     ...(isString(raw.setup) ? { setup: raw.setup } : {}),
     ...(isString(raw.teardown) ? { teardown: raw.teardown } : {}),
+    ...(isString(raw.runner) ? { runner: raw.runner } : {}),
     ...(raw.env && typeof raw.env === "object" && !Array.isArray(raw.env) ? { env: Object.fromEntries(Object.entries(raw.env as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string")) } : {}),
     ...(isMcp(raw.mcp) ? { mcp: raw.mcp } : {}),
+    ...(Array.isArray(raw.media) ? { media: raw.media.filter((k): k is "stt" | "tts" | "image" => k === "stt" || k === "tts" || k === "image") } : {}),
+    ...(isHooks(raw.hooks) ? { hooks: raw.hooks } : {}),
+    ...(isPeers(raw.a2a) ? { a2a: raw.a2a } : {}),
     ...(script ? { script } : {}),
     slow: raw.slow === true,
     ...(Array.isArray(raw.answers) ? { answers: raw.answers.filter(isString) } : {}),

@@ -1,0 +1,15 @@
+{
+  "id": "computer-text-only-ax",
+  "title": "A model that cannot see pictures is given the numbered text of the screen only",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": ["bun"],
+  "prompt": "Look at the Ledger app on this computer, with a full picture if you can, and write the balance code it shows into ANSWER.txt.",
+  "check": "bun \"$BENCH_FIXTURES/computer-check.ts\" text-only-ax",
+  "protect": ["README.md"],
+  "maxSteps": 15,
+  "timeoutSeconds": 600,
+  "runner": "computer-run.ts",
+  "env": { "BENCH_COMPUTER": "ledger" }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "media-transcribe-note",
+  "title": "Transcribe a recording",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "sh"
+  ],
+  "media": [
+    "stt"
+  ],
+  "prompt": "meeting.wav is a recording of a meeting. Write the sentence the speaker says into summary.txt.",
+  "check": "grep -q 'launch moves to Thursday' summary.txt",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 300,
+  "setup": "printf RIFF > meeting.wav"
+}

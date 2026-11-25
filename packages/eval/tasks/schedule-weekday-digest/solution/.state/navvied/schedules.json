@@ -1,0 +1,14 @@
+{
+  "jobs": [
+    {
+      "id": "a1b2c3",
+      "prompt": "Summarise the open NOTE comments in this project. Only read; change nothing.",
+      "cwd": ".",
+      "mode": "plan",
+      "cron": "0 9 * * 1-5",
+      "tz": "Asia/Jakarta",
+      "title": "digest",
+      "created": 1700000000000
+    }
+  ]
+}

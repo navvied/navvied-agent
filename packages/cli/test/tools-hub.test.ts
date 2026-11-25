@@ -15,14 +15,14 @@ describe("/tools against a real hub", () => {
     expect(entries.find((e) => e.id === "session-search")!.on).toBe(true);
     expect(t.shown[2]!.items.map((i) => i.label.slice(0, 3))).toEqual(["off", "on ", "on "]);
   });
-  test("files and search are one switch through the hub; the media not built yet are listed as soon", async () => {
+  test("files and search are one switch through the hub; the media with nothing set up are listed as needing it", async () => {
     const c = computer(no);
     const t = scripted(["Work", 0, "Turn it off", undefined, "See, hear & create", undefined, undefined]);
     await toolsScreen(t.kit(c.link));
     const entries = (await report(c)).entries;
     expect(entries.find((e) => e.id === "files")!.on).toBe(false);
     expect(entries.find((e) => e.id === "terminal")!.on).toBe(true);
-    expect(t.shown.find((s) => s.title === "See, hear & create")!.items.every((i) => i.label.endsWith("Soon"))).toBe(true);
+    expect(t.shown.find((s) => s.title === "See, hear & create")!.items.every((i) => i.label.endsWith("Needs setup"))).toBe(true);
   });
   test("Code Execution is listed as experimental and off, and one press switches it on", async () => {
     const c = computer(no);

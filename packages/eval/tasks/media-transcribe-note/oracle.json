@@ -1,0 +1,15 @@
+[
+  {
+    "tool": "Transcribe",
+    "args": {
+      "file_path": "meeting.wav"
+    }
+  },
+  {
+    "tool": "Write",
+    "args": {
+      "file_path": "summary.txt",
+      "content": "${result:Transcript of [^\\n]*\\n([^\\n]+)}\n"
+    }
+  }
+]

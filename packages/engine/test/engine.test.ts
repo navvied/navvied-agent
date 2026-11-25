@@ -73,7 +73,7 @@ describe("a small model", () => {
     expect(names(large)).toEqual(["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "AskUserQuestion"]);
     expect(large.provider.requests[0]!.system).toContain("Work carefully");
     await large.turn(prompt("research the latest docs and remember them, then:\n1. update\n2. test"));
-    expect(large.provider.requests[1]!.tools.map((t) => t.name)).toEqual(["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "Remember", "TodoWrite", "AskUserQuestion"]);
+    expect(large.provider.requests[1]!.tools.map((t) => t.name)).toEqual(["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "TodoWrite", "AskUserQuestion"]);
     large.cleanup();
   });
 

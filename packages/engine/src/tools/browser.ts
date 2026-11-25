@@ -1,246 +1,26 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { killTree, usesProcessGroups } from "../platform.ts";
-import type { Tool } from "../types.ts";
+import { statSync } from "node:fs";
+import { join, relative } from "node:path";
+import type { Tool, ToolContext } from "../types.ts";
 import { isPrivateHost } from "./web-fetch.ts";
-import { refusal } from "./web-guard.ts";
 import { untrusted } from "./untrusted.ts";
-import { clip, num, outputBudget, str } from "./util.ts";
+import { num, place, str } from "./util.ts";
+import { holdsSecret, hideSecrets, originOf, whyNotHere, type Credentials } from "./browser/credentials.ts";
+import { describeReading, describeView, shoot } from "./browser/page.ts";
+import { Session } from "./browser/session.ts";
+import { DialogOpen, KEY_NAMES, RefError, type Tab } from "./browser/tab.ts";
+import { findChrome } from "./browser/launch.ts";
+import type { Ref } from "./browser/ax.ts";
+
+export { findChrome, devToolsEndpoint, openWithRetry } from "./browser/launch.ts";
+export { describeReading } from "./browser/page.ts";
 
 /**
- * A browser the agent can use: open a page, read it, click, type, go back. It drives the Chrome (or Chromium, Edge, Brave) that is
- * already on this computer through its remote-debugging protocol, so nothing is installed and nothing is added to navvied. The page is
- * given back as readable text, with every link and control numbered so the model can say "click 7". The browser runs with a profile of
- * its own that is thrown away, so it has none of the person's logins, history or cookies.
+ * A browser the agent can use. It drives the Chrome (or Chromium, Edge, Brave) that is already on this computer through its remote-debugging
+ * protocol, so nothing is installed. The page is given back as the browser's accessibility tree: what a person sees, with a number on every link
+ * and control. The numbers belong to one reading of one page and expire when the page goes elsewhere. The browser runs with a profile of its own
+ * that is thrown away, so it has none of the person's logins, history or cookies (a copy of the real profile would be one folder given to
+ * `launch` in launch.ts, and nothing else here would change).
  */
-
-const CANDIDATES: Record<string, string[]> = {
-  darwin: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"],
-  win32: ["C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe", "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"],
-  linux: ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge", "brave-browser"],
-};
-
-/** Where a Chromium-based browser is on this computer, or nothing. */
-export function findChrome(env: Record<string, string | undefined> = process.env, platform: string = process.platform, exists: (p: string) => boolean = existsSync, which: (c: string) => string | null = (c) => Bun.which(c)): string | undefined {
-  if (env.NAVVIED_CHROME && exists(env.NAVVIED_CHROME)) return env.NAVVIED_CHROME;
-  for (const c of CANDIDATES[platform] ?? CANDIDATES.linux!) {
-    if (c.includes("/") || c.includes("\\")) { if (exists(c)) return c; } else { const found = which(c); if (found) return found; }
-  }
-  return undefined;
-}
-
-const IDLE_MS = 5 * 60_000;
-const CALL_MS = 30_000;
-
-interface Pending { resolve(v: unknown): void; reject(e: Error): void; timer: ReturnType<typeof setTimeout> }
-
-class StoppedAtStart extends Error {}
-
-/** One browser, one page, spoken to over the DevTools protocol. */
-/**
- * Where the browser listens, once it has said so: its file holds the port on one line and the address on the next. The file appears before
- * it is whole, so a file that holds less is not an answer yet.
- */
-export function devToolsEndpoint(file: string): { port: string; path: string } | undefined {
-  let text: string;
-  try { text = readFileSync(file, "utf8"); } catch { return undefined; }
-  const m = /^(\d+)\r?\n(\/\S+)/.exec(text);
-  return m ? { port: m[1]!, path: m[2]! } : undefined;
-}
-
-/**
- * What a browser says when the network under it changed at the moment it went to a page (a new browser sees this on its first
- * navigation, and so does a person whose Wi-Fi or VPN switches): the page is asked for once more after a pause, and only once. Other
- * errors, and a second failure, are the answer. The pause comes before the page is waited for, so it is not part of the time the page
- * is given to load.
- */
-const RETRIED: Record<string, number> = { "net::ERR_NETWORK_CHANGED": 300, "net::ERR_INTERNET_DISCONNECTED": 1_500 };
-
-export async function openWithRetry(go: () => Promise<string | undefined>, wait: (ms: number) => Promise<unknown> = (ms) => new Promise((r) => setTimeout(r, ms))): Promise<string | undefined> {
-  const first = await go();
-  const pause = first === undefined ? undefined : RETRIED[first];
-  if (pause === undefined) return first;
-  await wait(pause);
-  return go();
-}
-
-/** `NAVVIED_BROWSER_ARGS`: more flags for the browser, as a JSON list of texts (a proxy, a test); anything else is ignored. */
-function extraFlags(): string[] {
-  try {
-    const list: unknown = JSON.parse(process.env.NAVVIED_BROWSER_ARGS ?? "[]");
-    return Array.isArray(list) ? list.filter((f): f is string => typeof f === "string" && f.startsWith("--")) : [];
-  } catch { return []; }
-}
-
-class Session {
-  #socket!: WebSocket;
-  #next = 1;
-  #pending = new Map<number, Pending>();
-  #sessionId = "";
-  #child!: ChildProcess;
-  #dir = "";
-  #idle: ReturnType<typeof setTimeout> | undefined;
-  closed = false;
-  /** Whether this computer may be sent to local and private addresses (the host's choice, set at each call). */
-  allowPrivate = false;
-  /** Why the last request was not let through, for the sentence that tells the person a page could not be opened. */
-  #lastRefusal = "";
-
-  /** Starts the browser. One that stops while starting is started once more: a crash at launch is rare and does not repeat. */
-  static async open(chrome: string): Promise<Session> {
-    try { return await Session.start(chrome); } catch (e) { if (!(e instanceof StoppedAtStart)) throw e; return Session.start(chrome); }
-  }
-
-  static async start(chrome: string): Promise<Session> {
-    const s = new Session();
-    // The long form of the folder: a short 8.3 name (RUNNER~1) in a profile path is one more thing for a browser on Windows to trip over.
-    s.#dir = realpathSync.native(mkdtempSync(join(tmpdir(), "navvied-browser-")));
-    s.#child = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${s.#dir}`, "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync", "--mute-audio", "--hide-scrollbars", "--window-size=1280,900", ...(process.platform === "win32" ? ["--disable-gpu"] : []), ...(process.getuid?.() === 0 || process.env.NAVVIED_BROWSER_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), ...extraFlags(), "about:blank"], { detached: usesProcessGroups(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
-    let said = "", stopped: number | null | undefined;
-    s.#child.stderr?.on("data", (d: Buffer) => { said = (said + d.toString("utf8")).slice(-600); });
-    s.#child.on("exit", (code) => { stopped = code; s.close(); });
-    s.#child.on("error", (e) => { said += e.message; stopped = null; s.close(); });
-    const portFile = join(s.#dir, "DevToolsActivePort");
-    const wait = Number(process.env.NAVVIED_BROWSER_START_MS) || 15_000;
-    const until = Date.now() + wait;
-    let endpoint: { port: string; path: string } | undefined;
-    while (!(endpoint = devToolsEndpoint(portFile))) {
-      if (stopped !== undefined) throw new StoppedAtStart(`the browser stopped while starting (exit ${stopped})${said.trim() ? `: ${said.trim().split("\n").pop()}` : ""}`);
-      if (s.closed || Date.now() > until) {
-        // What was seen, so that a start that never ends can be told from one that never began.
-        const seen = [s.#child.pid === undefined ? "never started" : s.#child.exitCode === null ? "still running" : `exit ${s.#child.exitCode}`, `profile: ${(() => { try { return readdirSync(s.#dir).slice(0, 12).join(", ") || "empty"; } catch { return "gone"; } })()}`, said.trim() ? `said: ${said.trim().split("\n").pop()}` : "said nothing"].join("; ");
-        s.close();
-        throw new Error(`the browser did not start in ${Math.round(wait / 1000)} s (${seen})`);
-      }
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    s.#socket = new WebSocket(`ws://127.0.0.1:${endpoint.port}${endpoint.path}`);
-    await new Promise<void>((resolve, reject) => { s.#socket.onopen = () => resolve(); s.#socket.onerror = () => reject(new Error("could not connect to the browser")); });
-    s.#socket.onmessage = (m) => s.#message(String(m.data));
-    s.#socket.onclose = () => s.close();
-    const target = (await s.#send("Target.createTarget", { url: "about:blank" })) as { targetId: string };
-    const attached = (await s.#send("Target.attachToTarget", { targetId: target.targetId, flatten: true })) as { sessionId: string };
-    s.#sessionId = attached.sessionId;
-    await s.#send("Page.enable");
-    await s.#send("Runtime.enable");
-    // Every request the page makes waits here until it has been looked at: a document, an image, a script's fetch.
-    await s.#send("Fetch.enable", { patterns: [{ urlPattern: "*" }] });
-    s.touch();
-    return s;
-  }
-
-  touch(): void { clearTimeout(this.#idle); this.#idle = setTimeout(() => this.close(), IDLE_MS); this.#idle.unref?.(); }
-
-  #message(text: string): void {
-    let m: { id?: number; method?: string; params?: { requestId?: string; request?: { url?: string } }; result?: unknown; error?: { message?: string } };
-    try { m = JSON.parse(text); } catch { return; }
-    if (m.method === "Fetch.requestPaused" && m.params?.requestId) { void this.#gate(m.params.requestId, m.params.request?.url ?? ""); return; }
-    if (typeof m.id !== "number") return;
-    const p = this.#pending.get(m.id);
-    if (!p) return;
-    this.#pending.delete(m.id);
-    clearTimeout(p.timer);
-    if (m.error) p.reject(new Error(m.error.message ?? "the browser reported an error")); else p.resolve(m.result);
-  }
-
-  /**
-   * A request the page makes is let through, or failed, by the same look as the web tools make of an address: a name is looked up and every
-   * address it has must be public, and a name that cannot be looked up is not let through. It is asked of every request, so a page that
-   * redirects, navigates or loads something from a local or private address cannot reach it. Only addresses of the network are looked at:
-   * what is inside the page (`data:`, `blob:`) goes nowhere, and a file on this computer is never loaded.
-   */
-  async #gate(requestId: string, address: string): Promise<void> {
-    let why: string | undefined;
-    try {
-      const url = new URL(address);
-      why = url.protocol === "file:" ? "files on this computer are not opened." : url.protocol === "http:" || url.protocol === "https:" ? await refusal(url, this.allowPrivate) : undefined;
-    } catch { why = "the address could not be read, so it was not loaded."; }
-    if (why) this.#lastRefusal = why;
-    try { await this.#send(why ? "Fetch.failRequest" : "Fetch.continueRequest", why ? { requestId, errorReason: "AccessDenied" } : { requestId }); } catch { /* the browser is closing */ }
-  }
-
-  #send(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      if (this.closed) { reject(new Error("the browser is closed")); return; }
-      const id = this.#next++;
-      const timer = setTimeout(() => { this.#pending.delete(id); reject(new Error(`${method} took too long`)); }, CALL_MS);
-      this.#pending.set(id, { resolve, reject, timer });
-      this.#socket.send(JSON.stringify({ id, method, params, ...(this.#sessionId ? { sessionId: this.#sessionId } : {}) }));
-    });
-  }
-
-  async eval<T>(expression: string): Promise<T> {
-    this.touch();
-    const r = (await this.#send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true })) as { result?: { value?: T }; exceptionDetails?: { exception?: { description?: string }; text?: string } };
-    if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description?.split("\n")[0] ?? r.exceptionDetails.text ?? "the page script failed");
-    return r.result?.value as T;
-  }
-
-  async navigate(url: string): Promise<void> {
-    this.touch();
-    this.#lastRefusal = "";
-    const error = await openWithRetry(async () => ((await this.#send("Page.navigate", { url })) as { errorText?: string }).errorText);
-    if (error) throw new Error(this.#lastRefusal && /ACCESS_DENIED/.test(error) ? `the page was not opened: ${this.#lastRefusal}` : `the page could not be opened (${error})`);
-    await this.settle();
-  }
-
-  async back(): Promise<boolean> {
-    const h = (await this.#send("Page.getNavigationHistory")) as { currentIndex: number; entries: { id: number }[] };
-    if (h.currentIndex <= 0) return false;
-    await this.#send("Page.navigateToHistoryEntry", { entryId: h.entries[h.currentIndex - 1]!.id });
-    await this.settle();
-    return true;
-  }
-
-  /** Waits for the page to finish loading, and a moment longer for what scripts add at once. */
-  async settle(): Promise<void> {
-    const until = Date.now() + 12_000;
-    await new Promise((r) => setTimeout(r, 250));
-    while (Date.now() < until) {
-      try { if ((await this.eval<string>("document.readyState")) === "complete") break; } catch { /* the page is changing */ }
-      await new Promise((r) => setTimeout(r, 150));
-    }
-    await new Promise((r) => setTimeout(r, 400));
-  }
-
-  close(): void {
-    if (this.closed) return;
-    this.closed = true;
-    clearTimeout(this.#idle);
-    for (const p of this.#pending.values()) { clearTimeout(p.timer); p.reject(new Error("the browser was closed")); }
-    this.#pending.clear();
-    try { this.#socket?.close(); } catch { /* already closed */ }
-    if (this.#child) killTree(this.#child);
-    try { if (this.#dir) rmSync(this.#dir, { recursive: true, force: true }); } catch { /* the folder is removed with the temporary files */ }
-  }
-}
-
-/** Runs in the page: marks what a person could click or fill in with a number, and reads the page as text. */
-const SNAPSHOT = `(() => {
-  const seen = []; let n = 0;
-  const visible = (e) => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none"; };
-  const label = (e) => (e.getAttribute("aria-label") || e.innerText || e.value || e.placeholder || e.title || e.alt || e.name || "").replace(/\\s+/g, " ").trim().slice(0, 80);
-  document.querySelectorAll("[data-nv]").forEach((e) => e.removeAttribute("data-nv"));
-  for (const e of document.querySelectorAll("a[href], button, input:not([type=hidden]), textarea, select, [role=button], [role=link], [onclick], summary")) {
-    if (!visible(e) || n >= 80) continue;
-    n++; e.setAttribute("data-nv", String(n));
-    const tag = e.tagName.toLowerCase();
-    const kind = tag === "a" ? "link" : tag === "select" ? "choice" : tag === "textarea" || (tag === "input" && !["button", "submit", "checkbox", "radio", "reset", "image"].includes(e.type)) ? "field" : (tag === "input" && ["checkbox", "radio"].includes(e.type)) ? e.type : "button";
-    seen.push({ n, kind, label: label(e), href: tag === "a" ? e.getAttribute("href") : undefined, value: kind === "field" ? e.value : kind === "choice" ? e.value : (e.checked !== undefined && (e.type === "checkbox" || e.type === "radio")) ? String(e.checked) : undefined, options: tag === "select" ? [...e.options].slice(0, 12).map((o) => o.text.trim()) : undefined });
-  }
-  return { url: location.href, title: document.title, text: (document.body ? document.body.innerText : "").replace(/\\n{3,}/g, "\\n\\n").trim(), controls: seen };
-})()`;
-
-interface Shot { url: string; title: string; text: string; controls: { n: number; kind: string; label: string; href?: string; value?: string; options?: string[] }[] }
-
-export const describeShot = (s: Shot, window: number | undefined, offset = 0): string => {
-  // The page text takes most of what one result may be, as any tool result does; what is left is for the controls.
-  const most = Math.max(2_000, Math.round(outputBudget(window) * 0.7));
-  const controls = s.controls.map((c) => `[${c.n}] ${c.kind}${c.label ? ` "${c.label}"` : ""}${c.href ? ` -> ${c.href.slice(0, 100)}` : ""}${c.value !== undefined && c.value !== "" ? ` (now: ${c.value.slice(0, 40)})` : ""}${c.options ? ` (options: ${c.options.join(" | ")})` : ""}`).join("\n");
-  return untrusted("browser", clip(`Page: ${s.title || "(no title)"}\nAddress: ${s.url}\n\n${s.text.slice(offset, offset + most)}${s.text.length > offset + most ? `\n[characters ${offset}–${offset + most} of ${s.text.length}; the rest: Browser {"action": "read", "offset": ${offset + most}}]` : ""}\n\n${controls ? `What can be used on this page:\n${controls}` : "Nothing on this page can be clicked or filled in."}`));
-};
 
 let session: Session | undefined;
 process.once("exit", () => session?.close());
@@ -253,28 +33,74 @@ const refused = (url: URL, allowPrivate: boolean): string | undefined => {
   return undefined;
 };
 
+const waits = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const CHALLENGE = `(() => { const q = (s) => document.querySelector(s);
+  if (q('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="challenges.cloudflare.com"], .g-recaptcha, .h-captcha, .cf-turnstile, #cf-challenge-running')) return "captcha";
+  if (q('input[autocomplete="one-time-code"]')) return "code";
+  const t = (document.body ? document.body.innerText : "").slice(0, 4000);
+  return /verification code|one-time (code|password)|authenticator app|two-factor|2-step verification|(6|six)-digit/i.test(t) && q("input:not([type=hidden]):not([type=password])") ? "code" : "";
+})()`;
+const QUESTIONS = {
+  code: { question: "The site asks for a one-time code. Type the code, or say stop." },
+  captcha: { question: "The site shows a check that only a person can pass, so it cannot go on here. What now?", choices: ["Stop here", "Try another way"] },
+};
+
+/** The text of what a tool must hand the model right away: a trusted line of ours, then what the page said inside its frame. */
+const said = (note: string, page?: string): string => (page ? `${note}\n\n${page}` : note);
+
+const dialogNote = (d: NonNullable<Tab["dialog"]>): string =>
+  said(`A ${d.type} dialog is open on the page, and nothing else works until it is answered: Browser {"action": "dialog", "accept": true or false${d.type === "prompt" ? ', "text": the answer' : ""}}.`, untrusted("browser", `${d.message}${d.defaultPrompt ? `\n(default answer: ${d.defaultPrompt})` : ""}`));
+
+async function pageOrigin(tab: Tab): Promise<string | undefined> {
+  const o = originOf(await tab.eval<string>("location.href"));
+  return o;
+}
+
+/** A challenge on the page that only the person can answer is put to them as a question; it is never solved or guessed here. */
+async function challenge(tab: Tab, ctx: ToolContext): Promise<string> {
+  const kind = await tab.eval<"" | "code" | "captcha">(CHALLENGE).catch(() => "" as const);
+  if (!kind) { tab.asked = ""; return ""; }
+  const key = `${tab.url} ${kind}`;
+  if (tab.asked === key) return "";
+  tab.asked = key;
+  const what = kind === "code" ? "a one-time code" : "a check that only a person can pass";
+  if (!ctx.ask) return `\nThis page asks for ${what}. Do not guess it or try to get past it: tell the person, and stop here.`;
+  const answer = await ctx.ask([QUESTIONS[kind]], ctx.signal);
+  return `\nThis page asks for ${what}. The person was asked: ${answer}${kind === "captcha" ? "\nDo not try to solve the check yourself." : ""}`;
+}
+
+const ACTIONS = ["open", "read", "click", "type", "choose", "press", "scroll", "back", "screenshot", "dialog", "tabs", "switch", "new", "close", "wait", "upload", "console", "eval"];
+
 export const browser: Tool = {
   name: "Browser",
   readOnly: false,
-  offeredWhen: ({ userText }) => !!findChrome() && /https?:\/\/|\bbrowse|\bbrowser\b|web ?(site|page)|\bonline\b|\blog ?in\b|\bclick\b|\bsite\b/i.test(userText),
-  description: "Use a web browser: open a page, read it, click, fill in fields, go back. Every link and control on the page is numbered; click or type by that number. The browser has none of the user's logins. Actions: open (url), read, click (ref), type (ref, text, submit), choose (ref, text), scroll (direction up or down), back, close.",
+  offeredWhen: ({ userText }) => !!(findChrome() || process.env.NAVVIED_BROWSER_ENDPOINT) && /https?:\/\/|\bbrowse|\bbrowser\b|web ?(site|page)|\bonline\b|\blog ?in\b|\bsign ?in\b|\bscreenshot\b|\bclick\b|\bsite\b/i.test(userText),
+  description: "Use a real web browser. Read the page as numbered text, then act by number; numbers expire when the page changes. Actions: open (url), read, click, type (ref, text, submit), choose (ref, text), press (text: key), scroll (direction), back, screenshot, dialog (accept, text), tabs, switch/new/close (tab, url), wait (text, selector, seconds), upload (ref, path), console, eval (text). A login the person gave may be typed on the site they named.",
   parameters: {
     type: "object",
     properties: {
-      action: { type: "string", enum: ["open", "read", "click", "type", "choose", "scroll", "back", "close"] },
-      url: { type: "string" }, ref: { type: "number", description: "the number shown for a link or control" },
-      offset: { type: "number", description: "with read: characters of the page already read" }, text: { type: "string" }, submit: { type: "boolean", description: "press Enter after typing" }, direction: { type: "string", enum: ["up", "down"] },
+      action: { type: "string", enum: ACTIONS },
+      url: { type: "string" }, ref: { type: "number", description: "the number on a control" }, text: { type: "string" },
+      offset: { type: "number", description: "with read: characters already read" }, submit: { type: "boolean" }, direction: { type: "string", enum: ["up", "down"] },
+      tab: { type: "number" }, accept: { type: "boolean" }, selector: { type: "string" }, seconds: { type: "number" }, path: { type: "string", description: "file to upload; folder for downloads" },
     },
     required: ["action"],
   },
+  // A small model writes numbers as text ("3"): the tool takes them as numbers.
+  fixArgs: (a) => Object.fromEntries(Object.entries(a).map(([k, v]) => [k, ["ref", "tab", "offset", "seconds"].includes(k) && typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)) ? Number(v) : v])),
   title: (a) => (str(a.action) === "open" ? `Open ${str(a.url)}` : `Browser: ${str(a.action)}${a.ref !== undefined ? ` ${a.ref}` : ""}`),
+
   async run(a, ctx) {
     const action = str(a.action);
-    if (action === "close") { closeBrowser(); return "The browser is closed."; }
+    if (!ACTIONS.includes(action)) return `Error: unknown action "${action}".`;
+    if (action === "close" && a.tab === undefined) { closeBrowser(); return "The browser is closed."; }
     const chrome = findChrome();
-    if (!chrome) return "Error: no browser was found on this computer. Install Chrome, Chromium or Edge, or set NAVVIED_CHROME to its path.";
+    if (!chrome && !process.env.NAVVIED_BROWSER_ENDPOINT) return "Error: no browser was found on this computer. Install Chrome, Chromium or Edge, or set NAVVIED_CHROME to its path.";
+    const cred: Credentials | undefined = ctx.credentials?.();
+    const out = (text: string): string => { const hidden = hideSecrets(text, cred); ctx.outside?.(hidden); return hidden; };
+
     let url: URL | undefined;
-    if (action === "open") {
+    if (action === "open" || (action === "new" && str(a.url))) {
       try { url = new URL(str(a.url)); } catch { return "Error: that is not a valid address."; }
       const no = refused(url, ctx.allowPrivateNetwork);
       if (no) return no;
@@ -283,38 +109,141 @@ export const browser: Tool = {
       if (!session || session.closed) session = await Session.open(chrome);
       const s = session;
       s.allowPrivate = ctx.allowPrivateNetwork;
-      if (action === "open") { await s.navigate(url!.href); }
-      else if (action === "back") { if (!(await s.back())) return "Error: there is no earlier page."; }
-      else if (action === "scroll") { await s.eval(`window.scrollBy(0, ${a.direction === "up" ? "-" : ""}Math.round(innerHeight * 0.85))`); await new Promise((r) => setTimeout(r, 300)); }
-      else if (action === "click" || action === "type" || action === "choose") {
-        const ref = Math.floor(num(a.ref, 0));
-        if (ref < 1) return "Error: say which control with ref (the number shown on the page).";
-        const found = await s.eval<boolean>(`!!document.querySelector('[data-nv="${ref}"]')`);
-        if (!found) return `Error: there is no control ${ref} on this page now. Use read to see the page again.`;
-        if (action === "click") {
-          // A click that leaves the page is followed, and one that must not go to a private address is not allowed to.
-          const target = await s.eval<string | null>(`(() => { const e = document.querySelector('[data-nv="${ref}"]'); return e && e.href ? e.href : null; })()`);
-          if (target) { try { const no = refused(new URL(target), ctx.allowPrivateNetwork); if (no) return no; } catch { /* not an address */ } }
-          await s.eval(`(() => { const e = document.querySelector('[data-nv="${ref}"]'); e.scrollIntoView({ block: "center" }); e.click(); })()`);
-        } else if (action === "type") {
-          const text = JSON.stringify(str(a.text));
-          await s.eval(`(() => { const e = document.querySelector('[data-nv="${ref}"]'); e.scrollIntoView({ block: "center" }); e.focus(); const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(e), "value")?.set; if (set) set.call(e, ${text}); else e.value = ${text}; e.dispatchEvent(new Event("input", { bubbles: true })); e.dispatchEvent(new Event("change", { bubbles: true })); })()`);
-          if (a.submit === true) await s.eval(`(() => { const e = document.querySelector('[data-nv="${ref}"]'); const f = e.form; e.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true })); if (f) { if (f.requestSubmit) f.requestSubmit(); else f.submit(); } })()`);
-        } else {
-          const want = JSON.stringify(str(a.text));
-          const done = await s.eval<boolean>(`(() => { const e = document.querySelector('[data-nv="${ref}"]'); const o = [...e.options].find((x) => x.text.trim().toLowerCase() === ${want}.toLowerCase() || x.value === ${want}); if (!o) return false; e.value = o.value; e.dispatchEvent(new Event("input", { bubbles: true })); e.dispatchEvent(new Event("change", { bubbles: true })); return true; })()`);
-          if (!done) return `Error: control ${ref} has no choice "${str(a.text)}".`;
+      s.touch();
+      let tab = s.current;
+      const folder = place(ctx, str(a.path) && action !== "upload" ? a.path : join(ctx.cwd, "downloads"));
+      const downloadMark = s.downloads.length;
+
+      // A secret the person gave goes to the site they named and nowhere else: not typed, not put in an address, not run in a script.
+      if (cred && ["open", "new", "type", "eval", "wait", "press"].includes(action) && holdsSecret([a.text, a.url, a.selector].map((v) => str(v)).join("\n"), cred)) {
+        const where = url ? originOf(url.href) : await pageOrigin(tab).catch(() => undefined);
+        const why = whyNotHere(where, cred);
+        if (why) return why;
+      }
+
+      if (action === "tabs") return out(said("Tabs:", untrusted("browser", (await s.list()).map((t) => `${t.n}${t.current ? "*" : " "} ${t.title || "(no title)"} - ${t.url}`).join("\n"))));
+      if (action === "switch" || (action === "close" && a.tab !== undefined)) {
+        const n = Math.floor(num(a.tab, 0));
+        const target = s.tabs[n - 1];
+        if (!target) return `Error: there is no tab ${n}. Use tabs to list them.`;
+        if (action === "close") { await s.closeTab(target); return `Tab ${n} is closed.`; }
+        s.current = tab = target;
+        await s.cdp.send("Target.activateTarget", { targetId: target.targetId }).catch(() => undefined);
+      }
+      if (action === "dialog") {
+        if (!tab.dialog) return "There is no dialog open.";
+        const was = tab.dialog;
+        await tab.send("Page.handleJavaScriptDialog", { accept: a.accept !== false, ...(a.text !== undefined ? { promptText: str(a.text) } : {}) });
+        await tab.settle();
+        return out(said(`The ${was.type} dialog was ${a.accept === false ? "dismissed" : "accepted"}.`, describeReading(await tab.read(), ctx.window)));
+      }
+      if (tab.dialog && !["console", "switch", "new"].includes(action)) return out(dialogNote(tab.dialog));
+
+      await s.downloadsTo(folder);
+      let note = "";
+      const numbered = (): Promise<Ref> => tab.ref(Math.floor(num(a.ref, 0)));
+      if (action === "new") { tab = await s.newTab(url?.href); }
+      else if (action === "open") { await tab.navigate(url!.href); }
+      else if (action === "back") { if (!(await tab.back())) return "Error: there is no earlier page."; }
+      else if (action === "scroll") { await tab.eval(`window.scrollBy(0, ${a.direction === "up" ? "-" : ""}Math.round(innerHeight * 0.85))`); await waits(300); }
+      else if (action === "click") {
+        const ref = await numbered();
+        // A link to somewhere that must not be reached is not followed; the browser would be stopped at the request, but the model is told why now.
+        if (ref.href) { try { const no = refused(new URL(ref.href), ctx.allowPrivateNetwork); if (no) return no; } catch { /* not an address */ } }
+        await tab.click(ref);
+        await tab.settle();
+      } else if (action === "type") {
+        const ref = await numbered();
+        const probe = await tab.onElement<{ password: boolean; origin: string }>(ref, "function () { return { password: this.type === 'password', origin: location.origin }; }");
+        // A password field takes text only on a site the person named, whatever the text is.
+        const why = probe.password || holdsSecret(str(a.text), cred) ? whyNotHere(originOf(probe.origin), cred) : undefined;
+        if (why) return why;
+        const done = await tab.onElement<string>(ref, `function (expected, text) {
+          if (location.origin !== expected) return "moved";
+          this.scrollIntoView({ block: "center" }); this.focus();
+          if ("value" in this) { const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(this), "value")?.set; if (set) set.call(this, text); else this.value = text; }
+          else if (this.isContentEditable) { document.execCommand("selectAll"); document.execCommand("insertText", false, text); }
+          else return "not a field";
+          this.dispatchEvent(new Event("input", { bubbles: true })); this.dispatchEvent(new Event("change", { bubbles: true })); return "ok";
+        }`, [probe.origin, str(a.text)]);
+        if (done === "moved") return "Not typed: the page moved to another site while this was being typed.";
+        if (done === "not a field") return `Error: control ${num(a.ref, 0)} cannot be typed into.`;
+        if (a.submit === true) await tab.press("Enter");
+        await tab.settle();
+      } else if (action === "choose") {
+        const ref = await numbered();
+        const done = await tab.onElement<string>(ref, `function (want) { if (!this.options) return "not a list"; const o = [...this.options].find((x) => x.text.trim().toLowerCase() === want.toLowerCase() || x.value === want); if (!o) return "none"; this.value = o.value; this.dispatchEvent(new Event("input", { bubbles: true })); this.dispatchEvent(new Event("change", { bubbles: true })); return "ok"; }`, [str(a.text)]);
+        if (done === "not a list") return `Error: control ${num(a.ref, 0)} is not a list to choose from; click it, then click the choice.`;
+        if (done === "none") return `Error: control ${num(a.ref, 0)} has no choice "${str(a.text)}".`;
+        await tab.settle();
+      } else if (action === "press") {
+        if (a.ref !== undefined) await tab.onElement(await numbered(), "function () { this.focus(); }");
+        if (!(await tab.press(str(a.text)))) return `Error: press needs a key in text: ${KEY_NAMES.join(", ")}.`;
+        await tab.settle();
+      } else if (action === "wait") {
+        const seconds = Math.min(30, Math.max(1, num(a.seconds, 10)));
+        const until = Date.now() + seconds * 1000;
+        const text = str(a.text), selector = str(a.selector);
+        let met = false;
+        if (text || selector) {
+          while (!met && Date.now() < until && !ctx.signal.aborted) {
+            met = await tab.eval<boolean>(`(() => { ${text ? `if (!(document.body ? document.body.innerText : "").toLowerCase().includes(${JSON.stringify(text.toLowerCase())})) return false;` : ""} ${selector ? `try { if (!document.querySelector(${JSON.stringify(selector)})) return false; } catch { return false; }` : ""} return true; })()`);
+            if (!met) await waits(100);
+          }
+        } else met = await tab.idle(500, seconds * 1000);
+        note = met ? "" : `Waited ${seconds} s and it did not happen${text || selector ? ` (${[text && `text "${text}"`, selector && `selector ${selector}`].filter(Boolean).join(", ")})` : ": the page was still loading"}. This is the page now.`;
+        await tab.settle().catch(() => undefined);
+      } else if (action === "upload") {
+        const file = place(ctx, a.path);
+        let size = -1;
+        try { const st = statSync(file); size = st.isFile() ? st.size : -1; } catch { /* not there */ }
+        if (size < 0) return `Error: ${file} is not a file to upload.`;
+        const node = a.ref !== undefined ? (await numbered()).node : tab.chooser;
+        if (node === undefined) return "Error: say which field with ref (a file field), or click the button that opens the file chooser first.";
+        await tab.send("DOM.setFileInputFiles", { files: [file], backendNodeId: node });
+        tab.chooser = undefined;
+        note = `Uploaded ${relative(ctx.cwd, file) || file} (${size} bytes).`;
+        await tab.settle();
+      } else if (action === "screenshot") {
+        let box: { x: number; y: number; width: number; height: number } | undefined;
+        if (a.ref !== undefined) {
+          const q = (await tab.send<{ quads: number[][] }>("DOM.getContentQuads", { backendNodeId: (await numbered()).node })).quads[0];
+          if (q && q.length >= 8) { const xs = [q[0]!, q[2]!, q[4]!, q[6]!], ys = [q[1]!, q[3]!, q[5]!, q[7]!]; box = { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(1, Math.max(...xs) - Math.min(...xs)), height: Math.max(1, Math.max(...ys) - Math.min(...ys)) }; }
         }
-        await s.settle();
-      } else if (action !== "read") return `Error: unknown action "${action}".`;
-      const shot = await s.eval<Shot>(SNAPSHOT);
-      // A page that sent the browser to a private address is not read either.
-      try { const landed = new URL(shot.url); const no = shot.url === "about:blank" ? undefined : refused(landed, ctx.allowPrivateNetwork); if (no) { await s.navigate("about:blank"); return no; } } catch { /* about: pages */ }
-      return describeShot(shot, ctx.window, action === "read" ? Math.max(0, Math.floor(num(a.offset, 0))) : 0);
+        // A picture goes only to a model that can see; any other gets the page in words.
+        if (ctx.vision === true && ctx.show) {
+          const shot = await shoot(tab, box);
+          ctx.show({ type: "image", mime: "image/jpeg", data: shot.data });
+          return `Screenshot of ${tab.url} (${shot.bytes} bytes), shown to you in the next message.`;
+        }
+        return out(said("This model cannot see pictures, so this is the page in words.", await describeView(tab)));
+      } else if (action === "console") {
+        const lines = [...(tab.console.length ? [`Console (${tab.console.length}):`, ...tab.console.slice(-20)] : ["Console: nothing was written."]), ...(tab.failures.length ? [`Failed requests (${tab.failures.length}):`, ...tab.failures.slice(-20)] : ["Failed requests: none."])];
+        return out(untrusted("browser", lines.join("\n")));
+      } else if (action === "eval") {
+        const value = await tab.eval<unknown>(str(a.text));
+        return out(said("Result:", untrusted("browser", typeof value === "string" ? value : (JSON.stringify(value) ?? "undefined"))));
+      } else if (action !== "read" && action !== "switch") return `Error: unknown action "${action}".`;
+
+      const tail: string[] = [];
+      if (s.opened.length) { tail.push(`A new tab opened (tab ${s.tabs.indexOf(s.current) + 1}) and is the current one.`); tab = s.current; s.opened = []; }
+      const reading = action === "read" && num(a.offset, 0) > 0 && tab.reading ? tab.reading : await tab.read();
+      const got = await s.downloaded(downloadMark, 30_000);
+      for (const d of got) tail.push(d.state === "done" ? `Downloaded ${relative(ctx.cwd, d.path!) || d.path} (${d.bytes} bytes).` : d.state === "going" ? `Still downloading ${d.name}.` : `The download of ${d.name} failed${d.note ? `: ${d.note}` : ""}.`);
+      if (tab.chooser !== undefined) tail.push("A file chooser is open: use upload with path.");
+      const asked = ["open", "click", "type", "press", "new", "wait"].includes(action) ? await challenge(tab, ctx) : "";
+      const head = [note, ...tail].filter(Boolean).join("\n");
+      return out(`${head ? `${head}\n\n` : ""}${describeReading(reading, ctx.window, action === "read" ? Math.max(0, Math.floor(num(a.offset, 0))) : 0)}${asked}`);
     } catch (e) {
+      if (e instanceof DialogOpen) return out(dialogNote(e.dialog));
+      if (e instanceof RefError) {
+        // The numbers are given again with the answer, so the next call can use them.
+        const fresh = session && !session.closed ? await session.current.read().then((r) => describeReading(r, ctx.window)).catch(() => "") : "";
+        return out(said(`Error: ${e.message}${fresh ? " These are the numbers now." : ""}`, fresh || undefined));
+      }
       const dead = session?.closed;
       if (dead) session = undefined;
-      return `Error: ${e instanceof Error ? e.message : String(e)}${dead ? " (the browser was closed; open the page again)" : ""}`;
+      return out(`Error: ${e instanceof Error ? e.message : String(e)}${dead ? " (the browser was closed; open the page again)" : ""}`);
     }
   },
 };

@@ -1,0 +1,15 @@
+[
+  {
+    "tool": "Read",
+    "args": {
+      "file_path": "hello.txt"
+    }
+  },
+  {
+    "tool": "Speak",
+    "args": {
+      "text": "${result:\\t([^\\n]+)}",
+      "file_path": "greeting.wav"
+    }
+  }
+]

@@ -44,7 +44,7 @@ describe("a connected program reached over the web", () => {
     client.close();
   });
   test("a wrong token says what to check, and a server that cannot be reached says so", async () => {
-    await expect(McpHttpClient.start("web", { url, headers: { authorization: "Bearer wrong" } })).rejects.toThrow("check the token");
+    await expect(McpHttpClient.start("web", { url, headers: { authorization: "Bearer wrong" } })).rejects.toThrow("did not accept the token");
     await expect(McpHttpClient.start("web", { url: "http://127.0.0.1:1/mcp" })).rejects.toThrow("could not be reached");
     await expect(McpHttpClient.start("web", { url: "ftp://x" })).rejects.toThrow("http");
   });

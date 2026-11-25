@@ -29,6 +29,8 @@ async function gone(name: string): Promise<string> {
   for (let i = 0; i < 60; i++) { left = Bun.spawnSync(["pgrep", "-f", name]).stdout.toString().trim(); if (!left) break; await Bun.sleep(50); }
   return left;
 }
+/** A model that is not small is always offered Remember when notes can be kept: its text and the line that names it (a small model is not offered it, and its budget in engine/test/small-profile.test.ts is unchanged). */
+const REMEMBER_TOOL = 650;
 const pick = (id: string): Task => tasks.find((t) => t.id === id)!;
 
 describe("every task can be solved by an agent run, not only by the validator", () => {
@@ -40,12 +42,18 @@ describe("every task can be solved by an agent run, not only by the validator", 
       // The task that is about a kept note has the note in its system text, by design (about 190 characters).
       // A task about skills is also offered the Skill tool and the list of skills (about 500 characters), and the one that makes a skill the SkillManage tool (about 750).
       const skills = task.id.startsWith("skill-");
-      // The task about a notebook also offers the tool for notebooks (about 400 characters with its place in the list). A web task also offers the two web tools (about 440 characters, and a seventh and eighth tool); the one that says a browser can read what a plain fetch cannot also offers the browser, whose text is the longest.
+      // The task about a notebook also offers the tool for notebooks (about 400 characters with its place in the list). A web task also offers the two web tools (about 440 characters, and a seventh and eighth tool); the one that says a browser can read what a plain fetch cannot also offers the browser, whose text is the longest; the browser tasks offer it with its whole text.
       const web = task.kind === "web";
       // A task that is given a connected program is offered its four tools too (about 800 characters).
       const connected = task.mcp ? 4 : 0;
-      expect(r.prompt!.systemChars + r.prompt!.toolChars, task.id).toBeLessThanOrEqual((task.id === "web-script-page" ? 5400 : skills ? 4900 : 4600) + PATH_ROOM + connected * 250);
-      expect(r.prompt!.tools, task.id).toBeLessThanOrEqual((web ? 10 : 9) + connected);
+      // A task that is given a screen is offered the tool for it (at most 700 characters, its budget).
+      const screen = task.runner === "computer-run.ts" ? 700 : 0;
+      // A task that is given other agents to ask is offered the tool for it (about 340 characters, one tool).
+      const peers = task.a2a ? 1 : 0;
+      // A task about timing also offers the scheduling tool (about 670 characters).
+      const timed = task.id.startsWith("schedule-") ? 700 : 0;
+      expect(r.prompt!.systemChars + r.prompt!.toolChars, task.id).toBeLessThanOrEqual((task.id === "web-script-page" || task.id.startsWith("browser-") ? 5800 : skills ? 4900 : 4600) + REMEMBER_TOOL + PATH_ROOM + connected * 250 + timed + screen + peers * 400);
+      expect(r.prompt!.tools, task.id).toBeLessThanOrEqual((web ? 10 : 9) + 1 + connected + peers);
     }
   }, 240_000);
 });
@@ -71,10 +79,10 @@ describe("what is measured per run", () => {
 });
 
 describe("how heavy the first request is", () => {
-  test("the system prompt and the tool definitions together are at most 4,000 characters, and at most eight tools are offered (the six of the work, the helper tool and the question tool; a long request adds the task list)", async () => {
+  test("the system prompt and the tool definitions together are at most 4,000 characters plus the Remember tool, and at most nine tools are offered (the six of the work, the helper tool and the question tool; a long request adds the task list)", async () => {
     const r = await run(pick("fix-off-by-one"), "oracle");
-    expect(r.prompt!.tools).toBeLessThanOrEqual(8);
-    expect(r.prompt!.systemChars + r.prompt!.toolChars).toBeLessThanOrEqual(4000 + PATH_ROOM);
+    expect(r.prompt!.tools).toBeLessThanOrEqual(9);
+    expect(r.prompt!.systemChars + r.prompt!.toolChars).toBeLessThanOrEqual(4000 + REMEMBER_TOOL + PATH_ROOM);
   }, 60_000);
 });
 

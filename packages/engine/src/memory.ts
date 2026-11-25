@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { EngineEvent } from "@navvied/protocol";
 import { clean, scanText } from "./text-scan.ts";
 
 export const MEMORY_FILE = "memory.md";
@@ -29,6 +30,8 @@ export interface MemoryPaths {
 
 export type Scope = "project" | "user";
 export type Origin = "user" | "self" | "web";
+/** Where a suggested note was taken from: the person's own message, a file, a web page, or the result of a tool. */
+export type NoteSource = "message" | "file" | "web" | "tool";
 
 export interface Entry { id: string; date: string; text: string; origin: Origin; /** The line as it is in the file. */ line: string; /** Whether the line carries its own id (an older line does not). */ marked: boolean }
 
@@ -56,9 +59,13 @@ export function readNotes(file: string | undefined): string {
   try { return existsSync(file) ? readFileSync(file, "utf8") : ""; } catch { return ""; }
 }
 
-export interface Pending { id: string; scope: Scope; action: "add" | "replace" | "forget"; text: string; target?: string; origin: Origin; at: number }
+export interface Pending { id: string; scope: Scope; action: "add" | "replace" | "forget"; text: string; target?: string; origin: Origin; source: NoteSource; /** The message of the conversation it was taken from (1-based). */ n?: number; at: number }
 export type MemoryOp = { action: "add"; scope: Scope; text: string } | { action: "replace"; scope: Scope; target: string; text: string } | { action: "forget"; scope: Scope; target: string };
-export interface MemoryWho { today: string; origin: Origin; /** Keep it for the person to accept instead of applying it. */ stage?: boolean }
+export interface MemoryWho { today: string; origin: Origin; /** Keep it for the person to accept instead of applying it. */ stage?: boolean; source?: NoteSource; n?: number }
+
+/** The most notes put in front of the model for one request, and the most characters they may take. */
+export const NOTES_PER_TURN = 5;
+export const NOTES_BUDGET = 1_500;
 
 const fileOf = (paths: MemoryPaths, scope: Scope): string | undefined => (scope === "user" ? paths.user : paths.project);
 const pendingFile = (file: string): string => file.replace(/\.md$/, "") + ".pending.json";
@@ -131,10 +138,10 @@ export function keep(paths: MemoryPaths, op: MemoryOp, who: MemoryWho): string {
 function stage(file: string, op: MemoryOp, text: string, who: MemoryWho): string {
   try {
     const list = pendingOf(file);
-    list.push({ id: `p${Math.random().toString(36).slice(2, 7)}`, scope: op.scope, action: op.action, text, ...("target" in op ? { target: op.target } : {}), origin: who.origin, at: Date.now() });
+    list.push({ id: `p${Math.random().toString(36).slice(2, 7)}`, scope: op.scope, action: op.action, text, ...("target" in op ? { target: op.target } : {}), origin: who.origin, source: who.source ?? (who.origin === "web" ? "web" : "tool"), ...(who.n ? { n: who.n } : {}), at: Date.now() });
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(pendingFile(file), JSON.stringify(list.slice(-50)));
-    return `Not kept yet: it came from a page on the web, so the person is asked first (${op.action}: ${text || ("target" in op ? op.target : "")}).`;
+    return `Not kept yet: the person is asked first (${op.action}: ${text || ("target" in op ? op.target : "")}).`;
   } catch (e) { return `Error: could not stage the note: ${e instanceof Error ? e.message : String(e)}`; }
 }
 
@@ -144,6 +151,12 @@ function pendingOf(file: string): Pending[] {
 
 /** Everything waiting for the person, in both places. */
 export const pendingNotes = (paths: MemoryPaths): Pending[] => [paths.project, paths.user].flatMap((f) => (f ? pendingOf(f) : []));
+
+/** The list of waiting notes as the protocol says it (`memory.pending`). */
+export const pendingEvent = (paths: MemoryPaths): Extract<EngineEvent, { ev: "memory.pending" }> => {
+  const items = pendingNotes(paths).map(({ id, scope, action, text, target, origin, source, n, at }) => ({ id, scope, action, text, ...(target ? { target } : {}), origin, source: source ?? (origin === "web" ? "web" as const : "tool" as const), ...(n ? { n } : {}), at }));
+  return { ev: "memory.pending", count: items.length, items };
+};
 
 /** The person's answer to one waiting note. Accepting applies it (still marked as from the web); either way it leaves the list. */
 export function resolvePending(paths: MemoryPaths, id: string, accept: boolean, today: string): string {
@@ -160,14 +173,29 @@ export function resolvePending(paths: MemoryPaths, id: string, accept: boolean, 
 }
 
 /** One note as it is put in front of the model: no id, and a mark on what came from the web. A note that fails the scan is not shown. */
-function shown(e: Entry): string {
+const noteText = (e: Entry): string => {
   const found = scanText(e.text);
-  return found.length ? `- ${e.date}: [hidden: ${found[0]}; ask the person to check the notes file]` : `- ${e.date}: ${clean(e.text)}${e.origin === "web" ? " (from a web page)" : ""}`;
+  return found.length ? `[hidden: ${found[0]}; ask the person to check the notes file]` : `${clean(e.text)}${e.origin === "web" ? " (from a web page)" : ""}`;
+};
+const shown = (e: Entry): string => `- ${e.date}: ${noteText(e)}`;
+
+/** The words of a text that can tell one note from another (a one-letter word says nothing). */
+const keywords = (t: string): Set<string> => new Set([...words(t)].filter((w) => w.length >= 2));
+
+/** Every note of both places, as `list` shows them to the model: the id to replace or forget it by, and where it is kept. */
+export function listNotes(paths: MemoryPaths, scope?: Scope): string {
+  const rows = (["user", "project"] as const).filter((s) => !scope || s === scope).flatMap((s) => parseEntries(readNotes(fileOf(paths, s))).map((e) => `- ${e.id} (${s === "user" ? "every project" : "this project"}, ${e.date}): ${noteText(e)}`));
+  return rows.length ? rows.join("\n") : "No notes are kept yet.";
 }
 
-/** The notes as they are put in front of the model at the start of a conversation: the newest that fit. */
-export function memoryText(paths: MemoryPaths): string | undefined {
+/**
+ * The notes as they are put in front of the model. Without a request: the newest that fit, from the start of a conversation.
+ * With the request: at most NOTES_PER_TURN notes in NOTES_BUDGET characters, the ones that share the most words with it (newest first
+ * among equals), so a long list of notes never fills the prompt; the others are one `Remember` call away.
+ */
+export function memoryText(paths: MemoryPaths, request?: string): string | undefined {
   const parts = [["Notes you kept for every project", paths.user], ["Notes you kept for this project", paths.project]] as const;
+  if (request !== undefined) return relevantText(parts, request);
   const blocks = parts.flatMap(([title, file]) => {
     const rows = parseEntries(readNotes(file)).map(shown);
     if (!rows.length) return [];
@@ -177,6 +205,25 @@ export function memoryText(paths: MemoryPaths): string | undefined {
     return [`# ${title}\n${kept.join("\n")}${kept.length < rows.length ? `\n(${rows.length - kept.length} older notes are not shown)` : ""}`];
   });
   return blocks.length ? blocks.join("\n\n") : undefined;
+}
+
+function relevantText(parts: readonly (readonly [string, string | undefined])[], request: string): string | undefined {
+  const asked = keywords(request);
+  const all = parts.flatMap(([title, file]) => parseEntries(readNotes(file)).map((e, at) => ({ title, row: shown(e), score: [...keywords(e.text)].filter((w) => asked.has(w)).length, at })));
+  if (!all.length) return undefined;
+  const chosen: typeof all = [];
+  let used = 0;
+  for (const n of [...all].sort((a, b) => b.score - a.score || b.at - a.at)) {
+    if (chosen.length >= NOTES_PER_TURN || (used + n.row.length > NOTES_BUDGET && chosen.length)) break;
+    chosen.push(n);
+    used += n.row.length + 1;
+  }
+  const blocks = parts.flatMap(([title]) => {
+    const mine = chosen.filter((n) => n.title === title).sort((a, b) => a.at - b.at);
+    return mine.length ? [`# ${title}\n${mine.map((n) => n.row).join("\n")}`] : [];
+  });
+  const left = all.length - chosen.length;
+  return `${blocks.join("\n\n")}${left ? `\n(${left} more notes: Remember with action list shows them)` : ""}`;
 }
 
 export const memoryFolder = (project: string): string => join(project, ".navvied");

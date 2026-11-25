@@ -113,6 +113,10 @@ describe("scheduled tasks through the hub", () => {
     await until(() => ran.length === 1);
     await new Promise((r) => setTimeout(r, 200));
     expect(ran).toEqual(["every minute"]);
+    await until(() => (JSON.parse(readFileSync(file, "utf8")) as { jobs: { runs?: { code?: number }[] }[] }).jobs[0]!.runs?.[0]?.code === 0);
+    const kept = (JSON.parse(readFileSync(file, "utf8")) as { jobs: { runs: { at: number; due?: number }[] }[] }).jobs[0]!.runs;
+    expect(kept).toHaveLength(1);
+    expect(kept[0]!.due).toBeLessThan(Date.now() - 5 * 60_000);
     await hub.stop();
   });
 });

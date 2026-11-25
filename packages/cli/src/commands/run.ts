@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { jsonIn, validateJson } from "@navvied/engine";
 import { EventEncoder, type EngineEvent } from "@navvied/protocol";
 import type { Options } from "../args.ts";
-import { createEngine } from "../create.ts";
+import { createEngine, type EngineExtras } from "../create.ts";
 import type { IO } from "../io.ts";
 import { Renderer } from "../render.ts";
 
@@ -14,7 +14,7 @@ async function readAll(stdin: AsyncIterable<string>): Promise<string> {
   return text;
 }
 
-export async function runCommand(prompt: string | undefined, options: Options, io: IO): Promise<number> {
+export async function runCommand(prompt: string | undefined, options: Options, io: IO, extras: EngineExtras = {}): Promise<number> {
   // The task is the argument, or (when piped) standard input: `echo "fix it" | navvied run`.
   const task = (prompt ?? (io.interactive ? "" : await readAll(io.stdin))).trim();
   if (!task) { io.stderr.write('error: no task given. Usage: navvied run "fix the failing test"\n'); return EXIT.usage; }
@@ -47,7 +47,7 @@ export async function runCommand(prompt: string | undefined, options: Options, i
     }
   };
 
-  created = createEngine(options, io, emit, options.answers ? { attended: () => true } : {});
+  created = createEngine(options, io, emit, { ...(options.answers ? { attended: () => true } : {}), ...extras });
   if (!created.ok) { io.stderr.write(`error: ${created.error}\n`); return EXIT.usage; }
   const { engine } = created.value;
 

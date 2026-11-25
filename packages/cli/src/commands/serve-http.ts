@@ -16,6 +16,7 @@ import { createPairing, type Decision } from "../pairing.ts";
 import { configPath, loadConfig } from "../config.ts";
 import { discover, listModels, saveModel, useModel } from "../model-setup.ts";
 import { createHub, type Hub } from "./hub.ts";
+import { startA2a } from "./a2a.ts";
 import { RelayHost } from "../relay-host.ts";
 import { DEFAULT_SITE } from "./web.ts";
 import { VERSION } from "../help.ts";
@@ -412,6 +413,11 @@ export async function serveHttpCommand(options: Options, io: IO): Promise<number
   const started = await startHttpServer(options, io);
   if (!started.ok) { io.stderr.write(`error: ${started.error}\n`); return EXIT.usage; }
   const { server } = started;
+  // Agent-to-agent calls share this program but not its address or its key: a peer holds a token of its own and never the one above.
+  const cfg = loadConfig(configPath(io.env, options.config), io.env);
+  const a2a = options.a2a || (cfg.ok && cfg.value?.a2a?.serve) ? startA2a(options, io, cfg.ok ? cfg.value?.a2a?.port ?? 8788 : 8788) : undefined;
+  if (a2a && !a2a.ok) io.stderr.write(`error: agent-to-agent calls did not start: ${a2a.error}\n`);
+  if (a2a?.ok) io.stderr.write(`Other agents can ask this computer at ${a2a.server.url}/ in ${a2a.config.mode} mode.\n`);
   if (options.readyLine) io.stderr.write(`navvied-ready ${JSON.stringify({ port: server.port })}\n`);
   else {
     io.stderr.write(`navvied is listening.\n\n  ${server.url}\n\nOpen that address in a browser. The token in it is the key; keep it private.\n`);
@@ -422,6 +428,7 @@ export async function serveHttpCommand(options: Options, io: IO): Promise<number
     const off = io.onInterrupt(() => { off(); resolveStop(); });
     if (options.exitWhenStdinCloses) void (async () => { try { for await (const _ of io.stdin) { /* nothing is expected: only the end matters */ } } catch { /* a broken pipe is an end too */ } off(); resolveStop(); })();
   });
+  if (a2a?.ok) await a2a.server.stop();
   await server.stop();
   return EXIT.ok;
 }

@@ -61,5 +61,6 @@ export function approvalScope(tool: string, args: Record<string, unknown>, cwd: 
   if (tool === "WebFetch" || (tool === "Browser" && text(args.url))) {
     try { const host = new URL(text(args.url)).host; return { key: `web:${host}`, phrase: `pages on ${host}` }; } catch { /* fall through */ }
   }
+  if (tool === "Schedule") return args.mode === "auto" ? { key: "schedule:auto", phrase: "scheduled jobs that may change things" } : { key: "schedule:plan", phrase: "scheduled jobs that only read" };
   return { key: `tool:${tool}`, phrase: tool };
 }

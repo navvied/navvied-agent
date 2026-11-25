@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
-import { keep } from "@navvied/engine";
+import { expandCommand, findCommand, keep } from "@navvied/engine";
 import { PERM_MODES, encodeQr, parseEvent, qrText, type CheckpointInfo, type EngineEvent, type PermMode } from "@navvied/protocol";
 import type { Options } from "../args.ts";
 import { MODE_LABEL, renderBanner } from "../banner.ts";
-import { accountPath, configPath, devicesPath, hostedModelsPath, isConfigured, loadConfig, rememberBashPattern, updateConfig, updateStampPath } from "../config.ts";
+import { customCommands, PluginState, SkillTrust } from "../plugins.ts";
+import { accountPath, configPath, pluginStatePath, skillTrustPath, devicesPath, hostedModelsPath, isConfigured, loadConfig, rememberBashPattern, updateConfig, updateStampPath } from "../config.ts";
 import { DEFAULT_SERVER, readAccount, type Account } from "../account.ts";
 import { refreshHosted } from "../hosted-refresh.ts";
 import { connectThisComputer, disconnectThisComputer, relayUrlFor } from "../computer.ts";
@@ -337,7 +338,12 @@ export async function chatCommand(initial: string | undefined, options: Options,
       case "memory": void manageMemory(); return;
       case "devices": void manageDevices(); return;
       case "login": case "logout": void accountScreen(name === "logout"); return;
-      default: say(`unknown command /${name} — try /help`);
+      default: {
+        const file = configPath(io.env, options.config), cfg = loadConfig(file, io.env);
+        const custom = findCommand(customCommands(new PluginState(pluginStatePath(io.env)), new SkillTrust(skillTrustPath(io.env), cfg.ok && cfg.value?.skills?.trust === "confirm"), file, current?.cwd ?? cwd), name);
+        if (!custom) { say(`unknown command /${name} — try /help`); break; }
+        if (!current) say("add a model first: /providers"); else { send(expandCommand(custom, line.slice(1).trim().replace(/^\S+\s*/, ""))); return; }
+      }
     }
     if (!busy && !quit) marker();
   };

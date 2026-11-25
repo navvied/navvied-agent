@@ -6,30 +6,31 @@
 import { EventEncoder, parseCommand, type Command, type EngineEvent, type HistoryItem, type ScheduleInfo, type SearchHit, type SessionInfo, type SessionKind } from "@navvied/protocol";
 import { historyOf } from "@navvied/engine";
 import type { Options } from "../args.ts";
-import { FileSessionStore, findChrome, SkillBook, forgetCheckpoints, loadSkills, type Recall } from "@navvied/engine";
-import { createEngine, modelInfoOf, resolved, type Created } from "../create.ts";
+import { FileSessionStore, OAuthStore, findChrome, SkillBook, forgetCheckpoints, loadSkills, type Recall } from "@navvied/engine";
+import { createEngine, modelInfoOf, resolved, visionFor, type Created } from "../create.ts";
+import { mediaFor, ROW_NEED } from "../media-setup.ts";
 import { checkTarget, handedOver, otherKind, transcriptOf } from "../handover.ts";
 import { FolderBook, folderId } from "../folders.ts";
-import { ScheduleStore, dueJobs, type Job } from "../schedules.ts";
+import { ScheduleStore, dueAt, nextDue, timingText, type Job } from "../schedules.ts";
 import { runJob } from "../schedule-run.ts";
-import { PluginState, SkillTrust, listPlugins, projectSkillDirs } from "../plugins.ts";
+import { PluginState, SkillTrust, listPlugins, pluginPlaces, projectSkillDirs, readPacks } from "../plugins.ts";
 import { answerMemory, answerSkill, memoryPending, rollbackSkill, skillReview, type Review } from "../review.ts";
 import { memoryPathsFor } from "../memory-ui.ts";
 import { ArtifactBook, scanFolder } from "../artifacts.ts";
-import { nextRun, parseCron } from "../cron.ts";
 import { ToolUsage, type Availability, listEntries, listSets, listTools, resolveRow, switchRow } from "../tools-info.ts";
 import { CATEGORIES, rowOf } from "../tool-table.ts";
 import { TerminalState, listBackends } from "../terminal.ts";
 import { DraftStore } from "../drafts.ts";
 import { checkCredentialFile, findCredentialFile } from "../adc.ts";
 import { accounts } from "../accounts.ts";
+import { mcpSignin } from "../mcp-signin.ts";
 import { localModels } from "../local-models.ts";
 import { readMachine, realProbe, type Probe } from "../machine.ts";
 import { askModels, detectApi, newEndpointId, reportEndpoints, type EndpointRecord } from "../endpoints.ts";
 import { API_STYLES, MODEL_HUB, PROVIDERS, authHeaders } from "../presets.ts";
 import { ONLY_ON_A_COMPUTER, baseOf, entryName, headersOf, listModels, mergeSaved, modelEntryOf, reportOf, type ListedRoute } from "../providers.ts";
 import { refreshHosted } from "../hosted-refresh.ts";
-import { accountPath, hostedModelsPath, chatFilesDir, chatJournalDir, chatSearchIndexPath, chatSessionsDir, configPath, foldersPath, localDir, journalDir, loadConfig, runsInCloud, saveEndpoint, removeModel, saveModel, saveProvider, pluginStatePath, skillLedgerPath, skillTrustPath, terminalStatePath, toolUsagePath, draftsPath, checkpointsDir, scheduledDir, schedulesPath, searchIndexPath, sessionsDir } from "../config.ts";
+import { accountPath, mcpAuthPath, hostedModelsPath, chatFilesDir, chatJournalDir, chatSearchIndexPath, chatSessionsDir, configPath, foldersPath, localDir, journalDir, loadConfig, runsInCloud, saveEndpoint, removeModel, saveModel, saveProvider, pluginStatePath, skillLedgerPath, skillTrustPath, terminalStatePath, toolUsagePath, draftsPath, checkpointsDir, scheduledDir, schedulesPath, searchIndexPath, sessionsDir } from "../config.ts";
 import { SearchIndex } from "../search-index.ts";
 import { DEFAULT_SERVER, readAccount, type Account } from "../account.ts";
 import { deleteConversation, getConversation, listComputers, listConversations, type AccountComputer } from "../account-client.ts";
@@ -364,7 +365,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   const engineFor = (lane: Lane, earlier?: string): ReturnType<typeof createEngine> => {
     const slot: Slot = { lane, bg: false, id: undefined, created: undefined, journal: lane.journal, running: false, asking: false, turn: [], writing: lane.writing };
     lane.slot = slot;
-    return createEngine(lane.options, io, (e) => { if (slot.bg) sayAside(slot, e); else say(lane, e); }, { wake: true, recall: recallFor(lane), attended: () => [...clients].some((c) => c.answers === true), ...(earlier ? { earlier } : {}) });
+    return createEngine(lane.options, io, (e) => { if (slot.bg) sayAside(slot, e); else say(lane, e); }, { wake: true, recall: recallFor(lane), schedulesChanged: () => { tellSchedules(); }, attended: () => [...clients].some((c) => c.answers === true), ...(earlier ? { earlier } : {}) });
   };
 
   const connect = (lane: Lane): Created | undefined => {
@@ -709,20 +710,19 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   const schedules = new ScheduleStore(schedulesPath(io.env));
   const runningJobs = new Set<string>();
   const scheduleItems = (): ScheduleInfo[] => schedules.list().map((j): ScheduleInfo => {
-    const cron = parseCron(j.cron);
-    const next = j.disabled || typeof cron === "string" ? undefined : nextRun(cron, Date.now());
+    const next = nextDue(j, Date.now());
     const kind: SessionKind = j.kind === "chat" ? "chat" : "agent";
-    return { id: j.id, title: j.title ?? (j.prompt.length > 60 ? `${j.prompt.slice(0, 59)}…` : j.prompt), prompt: j.prompt, cron: j.cron, ...(next ? { next } : {}), ...(j.lastRun ? { last: j.lastRun } : {}), ...(j.lastCode !== undefined ? { lastCode: j.lastCode } : {}), enabled: !j.disabled, ...(kind === "agent" ? { folder: { id: folderId(j.cwd), name: basename(j.cwd) || j.cwd } } : {}), kind, mode: j.mode, ...(runningJobs.has(j.id) ? { running: true as const } : {}) };
+    return { id: j.id, title: j.title ?? (j.prompt.length > 60 ? `${j.prompt.slice(0, 59)}…` : j.prompt), prompt: j.prompt, cron: timingText(j), ...(next ? { next } : {}), ...(j.lastRun ? { last: j.lastRun } : {}), ...(j.lastCode !== undefined ? { lastCode: j.lastCode } : {}), enabled: !j.disabled, ...(kind === "agent" ? { folder: { id: folderId(j.cwd), name: basename(j.cwd) || j.cwd } } : {}), kind, mode: j.mode, ...(runningJobs.has(j.id) ? { running: true as const } : {}) };
   });
   const tellSchedules = (): void => { say(main, { ev: "schedules", items: scheduleItems() }); };
-  const startJob = (job: Job): void => {
+  const startJob = (job: Job, due?: number): void => {
     if (runningJobs.has(job.id)) return;
     runningJobs.add(job.id);
-    schedules.markRun(job.id, Date.now());
+    schedules.markRun(job.id, Date.now(), due);
     tellSchedules();
-    void (hubOptions.runner ?? runJob)(job, io.env, scheduledDir(io.env)).then((f) => { schedules.finished(job.id, f.code); }).catch(() => { schedules.finished(job.id, null); }).finally(() => { runningJobs.delete(job.id); tellSchedules(); });
+    void (hubOptions.runner ?? runJob)(job, io.env, scheduledDir(io.env)).then((f) => { schedules.finished(job.id, f.code, f.file); }).catch(() => { schedules.finished(job.id, null); }).finally(() => { runningJobs.delete(job.id); tellSchedules(); });
   };
-  const tickJobs = (): void => { for (const job of dueJobs(schedules.list(), Date.now())) startJob(job); };
+  const tickJobs = (): void => { for (const job of schedules.list()) { const due = dueAt(job, Date.now()); if (due !== undefined) startJob(job, due); } };
   const jobTimer = hubOptions.schedule ? setInterval(tickJobs, 30_000) : undefined;
   jobTimer?.unref?.();
   if (hubOptions.schedule) queueMicrotask(tickJobs);
@@ -771,9 +771,26 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   /** The setups a tool can start with `tool.setup`, by the id of its row. A tool gets one when it gets a way to tell it needs setting up: none has one yet. */
   const toolSetups = new Map<string, (lane: Lane) => void>();
   /** What only this computer can say of a tool: the browser tool waits for a browser to be found. */
-  const toolAvailability: Availability = (row) => (row.id === "browser" && !findChrome(io.env) ? "needs-setup" : undefined);
+  const mediaHere = (): ReturnType<typeof mediaFor> => {
+    const path = configPath(io.env, options.config), file = loadConfig(path, io.env);
+    const value = file.ok ? file.value : null, model = resolved(undefined, value, io.env, path);
+    return mediaFor(io.env, value?.media, { ...(options.config ? { config: options.config } : {}), ...(options.sandboxed ? { sandboxed: true } : {}), ...(value?.webProxy ? { webProxy: value.webProxy } : {}) }, model.ok ? visionFor(value, model.value, io.env, path) : undefined);
+  };
+  /** What the media rows say now: this computer's own engines are looked at every time, the service's list is asked again when it is older than a minute. */
+  let mediaSeen: { media: ReturnType<typeof mediaFor>; at: number } | undefined;
+  const media = (): ReturnType<typeof mediaFor> => {
+    const stale = !mediaSeen || Date.now() - mediaSeen.at > 60_000;
+    if (stale) { mediaSeen = { media: mediaHere(), at: Date.now() }; void mediaSeen.media.refresh().then(() => { for (const l of lanes.values()) tellTools(l); }); }
+    return mediaSeen!.media;
+  };
+  const toolAvailability: Availability = (row) => (row.id === "browser" && !findChrome(io.env) ? "needs-setup" : ROW_NEED[row.id] && !media().has(ROW_NEED[row.id]!) ? "needs-setup" : undefined);
   const tellTools = (lane: Lane): void => { const items = listTools(pluginState, toolUsage); say(lane, { ev: "tools", items, sets: listSets(items), entries: listEntries(pluginState, toolUsage, undefined, toolAvailability, new Set(toolSetups.keys())), categories: CATEGORIES.map((c) => ({ ...c })), backends: listBackends(terminalState, terminalConfig()) }); };
-  const pluginItems = () => { const f = loadConfig(configPath(io.env, options.config), io.env); return listPlugins(pluginState, f.ok ? f.value : null, join(dirname(configPath(io.env, options.config)), "skills"), resolve(main.options.cwd ?? process.cwd())); };
+  const pluginItems = () => {
+    const file = configPath(io.env, options.config), cwd = resolve(main.options.cwd ?? process.cwd()), f = loadConfig(file, io.env);
+    const places = pluginPlaces(file);
+    const trust = new SkillTrust(skillTrustPath(io.env), f.ok && f.value?.skills?.trust === "confirm");
+    return listPlugins(pluginState, f.ok ? f.value : null, join(dirname(file), "skills"), cwd, { packs: readPacks(dirname(file), places.lock, cwd), trust, lock: places.lock });
+  };
   const tellProviders = (): void => {
     const file = loadConfig(configPath(io.env, main.options.config));
     const items = reportOf(PROVIDERS, file.ok ? (file.value?.providers ?? {}) : {});
@@ -797,6 +814,12 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
       label: () => computerName(),
       changed: () => { pushModels(); },
     },
+  });
+  const mcpSignins = mcpSignin({
+    inCloud: () => runsInCloud(main.options, io.env),
+    tell: (e) => say(main, e),
+    servers: () => { const f = loadConfig(configPath(io.env, main.options.config), io.env); return f.ok ? (f.value?.mcp ?? {}) : {}; },
+    store: new OAuthStore(mcpAuthPath(io.env, main.options.config)),
   });
   const local = localModels({
     io,
@@ -823,6 +846,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
       book: new SkillBook({ user: join(dirname(file), "skills"), project: join(cwd, ".navvied", "skills"), ledger: skillLedgerPath(io.env) }),
       trust: new SkillTrust(skillTrustPath(io.env), cfg.ok && cfg.value?.skills?.trust === "confirm"),
       skills: () => loadSkills({ user: join(dirname(file), "skills"), project: projectSkillDirs(cwd) }),
+      packs: () => readPacks(dirname(file), pluginPlaces(file).lock, cwd),
     };
   };
 
@@ -883,6 +907,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
       if (parsed.value.cmd === "providers") { tellProviders(); return; }
       if (local.command(parsed.value)) return;
       if (accountsPage.command(parsed.value)) return;
+      if (mcpSignins.command(parsed.value)) return;
       if (parsed.value.cmd === "endpoints" || parsed.value.cmd === "endpoint.save" || parsed.value.cmd === "endpoint.remove" || parsed.value.cmd === "endpoint.models") {
         const cmd = parsed.value;
         const path = configPath(io.env, main.options.config);

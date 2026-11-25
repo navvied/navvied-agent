@@ -172,6 +172,13 @@ export interface AccountLoginCommand { cmd: "account.login" | "account.login.can
 export interface AccountSigninCommand { cmd: "account.signin"; id: string; device?: boolean }
 export interface AccountSigninCodeCommand { cmd: "account.signin.code"; id: string; code: string }
 export interface AccountSigninIdCommand { cmd: "account.signin.cancel" | "account.signout"; id: string }
+/**
+ * Sign in to a connected program that is reached over the web and asks for it (see `mcp.signin` in the events): `mcp.signin` starts it, `mcp.signin.cancel` stops waiting.
+ * `mcp.prompts` asks for the ready-made requests the connected programs offer; `mcp.prompt` runs one as the person's own request, with its arguments filled in.
+ */
+export interface McpSigninCommand { cmd: "mcp.signin" | "mcp.signin.cancel"; server: string }
+export interface McpPromptsCommand { cmd: "mcp.prompts" }
+export interface McpPromptCommand { cmd: "mcp.prompt"; server: string; name: string; args?: Record<string, string> }
 export interface AccountInstallCommand { cmd: "account.install"; id: string }
 export interface LocalRunCommand { cmd: "local.run"; repo: string; file: string; window?: number }
 export interface LocalStopCommand { cmd: "local.stop" }
@@ -200,7 +207,7 @@ export interface PinCommand { cmd: "pin"; id: string; pinned: boolean }
 export interface RestoreCommand { cmd: "restore"; id: string; preview?: boolean }
 
 /** Every command may say which kind of conversation it is for. */
-export type Command = (ProvidersCommand | LocalRunCommand | LocalStopCommand | LocalFileCommand | LocalModelsCommand | AccountsCommand | AccountSigninCommand | AccountSigninCodeCommand | AccountSigninIdCommand | AccountLoginCommand | AccountInstallCommand | LocalRecommendedCommand | LocalOllamaCommand | LocalOllamaPullCommand | LocalRuntimeCommand | LocalSearchCommand | MachineCommand | EndpointsCommand | EndpointSaveCommand | EndpointRemoveCommand | EndpointModelsCommand | ProviderModelsCommand | ProviderUseCommand | ProviderSaveCommand | ProviderRemoveCommand | PromptCommand | CancelCommand | ApproveCommand | AnswerCommand | CompactCommand | ModelCommand | EffortCommand | LoadCommand | SessionsCommand | SearchCommand | CheckpointsCommand | RestoreCommand | JobStopCommand | NewCommand | RenameCommand | RemoveCommand | PinCommand | ImportCommand | TransferCommand | ForkCommand | ArchiveCommand | MarkCommand | ReceiveCommand | SchedulesCommand | ScheduleAddCommand | ScheduleUpdateCommand | ScheduleRemoveCommand | ScheduleRunCommand | PluginsCommand | PluginToggleCommand | DraftCommand | DraftsCommand | ToolsCommand | ToolToggleCommand | ToolSetupCommand | TerminalUseCommand | ArtifactsCommand | ArtifactReadCommand | MemoryPendingCommand | SkillReviewCommand | SkillRollbackCommand) & { kind?: SessionKind };
+export type Command = (McpSigninCommand | McpPromptsCommand | McpPromptCommand | ProvidersCommand | LocalRunCommand | LocalStopCommand | LocalFileCommand | LocalModelsCommand | AccountsCommand | AccountSigninCommand | AccountSigninCodeCommand | AccountSigninIdCommand | AccountLoginCommand | AccountInstallCommand | LocalRecommendedCommand | LocalOllamaCommand | LocalOllamaPullCommand | LocalRuntimeCommand | LocalSearchCommand | MachineCommand | EndpointsCommand | EndpointSaveCommand | EndpointRemoveCommand | EndpointModelsCommand | ProviderModelsCommand | ProviderUseCommand | ProviderSaveCommand | ProviderRemoveCommand | PromptCommand | CancelCommand | ApproveCommand | AnswerCommand | CompactCommand | ModelCommand | EffortCommand | LoadCommand | SessionsCommand | SearchCommand | CheckpointsCommand | RestoreCommand | JobStopCommand | NewCommand | RenameCommand | RemoveCommand | PinCommand | ImportCommand | TransferCommand | ForkCommand | ArchiveCommand | MarkCommand | ReceiveCommand | SchedulesCommand | ScheduleAddCommand | ScheduleUpdateCommand | ScheduleRemoveCommand | ScheduleRunCommand | PluginsCommand | PluginToggleCommand | DraftCommand | DraftsCommand | ToolsCommand | ToolToggleCommand | ToolSetupCommand | TerminalUseCommand | ArtifactsCommand | ArtifactReadCommand | MemoryPendingCommand | SkillReviewCommand | SkillRollbackCommand) & { kind?: SessionKind };
 /** What this computer is, as far as it could be read: a card or a number that could not be read is not there, never a guess. */
 export interface MachineInfo {
   os: "linux" | "wsl" | "macos" | "windows" | "unknown";
@@ -214,6 +221,8 @@ export interface MachineInfo {
 export interface LocalFile { repo: string; /** The page of the model on the hub: where a licence is read and accepted by the person, never for them. */ page: string; file: string; quant: string; sizeMb: number; parts: number; gated: boolean; /** Whether the chat template of the model handles tools (a model that does not can only talk in the agent): left out when it is not known. */ tools?: boolean; fit?: "gpu" | "ram" | "none"; needMb?: number; gpuLayers?: number; window?: number }
 /** One account as the page shows it: `installed`, `version` and `signedIn` are what the program itself says (`signedIn` only when it is installed); `email` and `plan` only when it says them. */
 export interface AccountInfo { /** `navvied`, or the id of a program of the list the engine keeps. */ id: string; installed?: boolean; version?: string; signedIn?: boolean; email?: string; plan?: string }
+/** A ready-made request a connected program offers, with the arguments it takes. */
+export interface McpPromptInfo { server: string; name: string; description?: string; arguments?: { name: string; description?: string; required?: true }[] }
 export interface EndpointSaved { id: string; name: string; baseUrl: string; api: "chat" | "responses" | "messages" | "ollama"; /** Whether a key is saved: it is never sent back. */ key: boolean; models: EndpointModel[] }
 export interface ProviderSaved { id: string; key: boolean; /** The address the person set instead of the provider's own. */ base?: string; /** A provider that signs in with a credential file of the computer: whether one was found now (its path and contents are never said). */ credential?: boolean; region?: string; fields?: Record<string, string> }
 export type CommandName = Command["cmd"];
@@ -239,7 +248,27 @@ export interface ToolEntry { id: string; category: string; names: string[]; titl
 export interface ToolSetInfo { id: string; title: string; about: string; tools: string[]; enabled: boolean; calls: number }
 /** One place the Bash tool can run commands: `ready` says it can be used now, `hint` says what to do when it cannot. */
 export interface BackendInfo { id: "local" | "docker" | "ssh"; label: string; about: string; ready: boolean; using: boolean; hint?: string }
-export interface PluginInfo { id: string; kind: "skill" | "mcp" | "hook"; name: string; description: string; enabled: boolean; source: "user" | "project" | "config"; fromNext?: true }
+export interface PluginInfo {
+  id: string;
+  kind: "skill" | "mcp" | "hook" | "plugin";
+  name: string;
+  description: string;
+  enabled: boolean;
+  source: "user" | "project" | "config";
+  fromNext?: true;
+  /** A `plugin` only: its version, where it was installed from (a folder, an archive or an address, never with a password), the sha-256 of its files, what it brings, and every command it would run with its source. */
+  version?: string;
+  origin?: string;
+  hash?: string;
+  brings?: { skills: string[]; agents: string[]; commands: string[]; hooks: number; mcp: string[] };
+  runs?: { what: string; command: string; source: string }[];
+  /** A project plugin is not used until the person accepts it (`skill.review`, item `trust:plugin:<name>`); the person's own plugins are always trusted. */
+  trusted?: boolean;
+  /** What a scan of the text it hands to the model found, in words (each names its file); empty or missing when nothing. */
+  findings?: string[];
+  /** Why it cannot be used (damaged, changed since it was installed, not as its manifest says). */
+  problem?: string;
+}
 
 /** A scheduled task as a list shows it. Times are ms since the epoch. */
 export interface ScheduleInfo { id: string; title: string; prompt: string; cron: string; /** When it runs next (none while turned off). */ next?: number; last?: number; /** How the last run ended: 0 is fine. */ lastCode?: number | null; enabled: boolean; folder?: { id: string; name: string }; kind: SessionKind; mode: "plan" | "auto"; running?: true }
@@ -291,6 +320,9 @@ export interface ApprovalOption {
 }
 /** Why a tool did not do its work, when that is not a plain failure. */
 export type ToolOutcome = "denied" | "blocked" | "timeout" | "stopped" | "skipped" | "background" | "redirected";
+
+/** How a step on the screen ended, for a card that says it in words: `code` is a refusal's closed reason (the helper's, or `stale_target` from the engine), `which` what is missing, `app` the application it was about, `next` the exact next step. No capture or picture is ever in it. */
+export interface ScreenOutcome { verdict: "delivered" | "unverified" | "refused"; code?: string; which?: string; app?: string; next?: string }
 
 /** What a turn has used so far (or in all): tokens sent to the model (`in`, every call counted), tokens it wrote (`out`), and how many times the model was called. */
 export interface TurnTokens { in: number; out: number; calls: number }
@@ -357,7 +389,8 @@ type EngineEventBody =
   | { ev: "schedules"; items: ScheduleInfo[] }
   /** The things that extend the agent here (sent when asked and when one is switched). */
   | { ev: "plugins"; items: PluginInfo[] }
-  | { ev: "memory.pending"; items: { id: string; scope: "project" | "user"; action: "add" | "replace" | "forget"; text: string; target?: string; origin: "user" | "self" | "web"; at: number }[] }
+  /** The notes waiting for the person: `count` is how many, and each says where the suggestion came from (`source`: the person's own message, a file, a web page, or a tool's result; `n` the message of the conversation it was taken from, 1-based, when it came from one). */
+  | { ev: "memory.pending"; count: number; items: { id: string; scope: "project" | "user"; action: "add" | "replace" | "forget"; text: string; target?: string; origin: "user" | "self" | "web"; source: "message" | "file" | "web" | "tool"; n?: number; at: number }[] }
   | { ev: "skill.review"; items: { id: string; kind: "change" | "trust"; name: string; summary: string; findings?: string[] }[]; history: { id: string; name: string; action: "create" | "patch" | "delete"; actor: "agent" | "person"; at: number; state: "applied" | "waiting" | "rejected" | "undone" }[] }
   /** The providers of this computer that have something saved (sent when asked and whenever one is saved or removed). Never carries a key: `key` says only that one is saved, and `fields` holds the values of the fields that are not secret. */
   | { ev: "providers"; items: ProviderSaved[] }
@@ -384,6 +417,10 @@ type EngineEventBody =
   | { ev: "account.login"; state: "waiting" | "done" | "denied" | "expired" | "failed" | "stopped"; url?: string; code?: string; expires?: number; email?: string; error?: string }
   /** The sign-in of a program: `waiting` (`url` to open, and for a device sign-in the `code` to enter there), then `done`, `failed` (`error` in words) or `stopped`. `accounts` follows `done`. */
   | { ev: "account.signin"; id: string; state: "waiting" | "done" | "failed" | "stopped"; url?: string; code?: string; error?: string }
+  /** The sign-in of a connected program on the web, by its name in the configuration. `needed`: it asked for one when it was connected. `waiting`: `url` is the page to open, which comes back to this computer by itself (`code` only for a sign-in that shows a code to enter elsewhere). Then `done`, `failed` (`reason` in words) or `stopped`. A conversation started after `done` connects the program by itself. */
+  | { ev: "mcp.signin"; server: string; state: "needed" | "waiting" | "done" | "failed" | "stopped"; url?: string; code?: string; reason?: string }
+  /** The answer to `mcp.prompts`. */
+  | { ev: "mcp.prompts"; items: McpPromptInfo[] }
   /** The installation of a program: `installing`, then `done` or `failed` (`error` in words). */
   | { ev: "account.install"; id: string; state: "installing" | "done" | "failed"; error?: string }
   | { ev: "local.server"; state: "starting" | "running" | "stopped" | "failed"; repo?: string; file?: string; window?: number; layers?: number; error?: string }
@@ -436,7 +473,7 @@ type EngineEventBody =
    * and, when it ends, `startedAt` (when the engine began it, milliseconds since the epoch, by the engine's own clock) and `ms` (how long), `code` (the exit code of a command), `truncated` (the output was cut), `cached` (the answer came from what was read lately, not from a new visit), and `outcome` when it is not a plain failure: `denied`
    * (the person said no), `blocked` (a rule or hook said no), `timeout`, `stopped` (cancelled), `skipped` (never started because the turn was stopped), `background` (it keeps running as a job), `redirected` (never started: the person sent a new message first, and it takes the place of the rest of the step).
    */
-  | { ev: "tool"; id: string; name: string; status: ToolStatus; input?: unknown; output?: string; progress?: number; parent?: string; queued?: true; live?: string; ms?: number; startedAt?: number; code?: number | null; truncated?: true; cached?: true; outcome?: ToolOutcome }
+  | { ev: "tool"; id: string; name: string; status: ToolStatus; input?: unknown; output?: string; progress?: number; parent?: string; queued?: true; live?: string; ms?: number; startedAt?: number; code?: number | null; truncated?: true; cached?: true; screen?: ScreenOutcome; outcome?: ToolOutcome }
   /** The task list. `qid` is the prompt that started the turn it belongs to, `tool` the step (the `tool` event) that wrote it, so a page can show it inside that group. */
   | { ev: "plan"; entries: PlanEntry[]; raw?: string; qid?: string; tool?: string }
   /** Context window use: `ctx` tokens of `win`; `out` = tokens produced by the last model call. */

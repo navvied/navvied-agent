@@ -9,9 +9,9 @@ import type { Tool } from "./types.ts";
  * The tools offered to the model in a mode. Plan mode does not rely on the model behaving: write-capable tools are simply
  * not offered, and a way to present the finished plan is added.
  */
-export function toolsFor(mode: PermMode, all: readonly Tool[], situation: { small: boolean; userText: string; jobs: number; steps?: number; chat?: boolean; typable?: number; skills?: number; recall?: boolean } = { small: false, userText: "", jobs: 0 }): Tool[] {
+export function toolsFor(mode: PermMode, all: readonly Tool[], situation: { small: boolean; userText: string; jobs: number; steps?: number; chat?: boolean; typable?: number; skills?: number; recall?: boolean; memory?: boolean; schedule?: boolean; computer?: boolean; code?: boolean } = { small: false, userText: "", jobs: 0 }): Tool[] {
   const offered = all.filter((t) => t.offeredWhen?.(situation) ?? true);
-  return mode === "plan" ? [...offered.filter((t) => t.readOnly), exitPlanMode] : offered;
+  return mode === "plan" ? [...offered.filter((t) => t.readOnly || t.inPlan), exitPlanMode] : offered;
 }
 
 /** Tools that change files: what the "edits" mode lets through. */
@@ -24,7 +24,9 @@ const FILE_COMMANDS = /^(mkdir|touch|mv|cp|rmdir|ln)$/;
  * `edits` also lets file edits and plain file commands through; `auto` and `bypass` ask for nothing here (risk is judged apart).
  */
 export function needsApproval(mode: PermMode, tool: Pick<Tool, "name" | "readOnly">, args: Record<string, unknown> = {}): boolean {
+  if (tool.name === "Remember" && args.action === "list") return false;
   if (tool.readOnly || mode === "auto" || mode === "bypass" || mode === "plan") return false;
+  if (tool.name === "Schedule" && (args.action === undefined || args.action === "list" || args.action === "runs")) return false;
   if (tool.name === "Bash" && typeof args.command === "string") {
     if (onlyLooks(args.command)) return false;
     if (mode === "edits") { const view = shellView(args.command); if (view.cmds.length && !view.found.length && view.cmds.every((c) => !c.sudo && FILE_COMMANDS.test(programName(c.words[0] ?? "")))) return false; }

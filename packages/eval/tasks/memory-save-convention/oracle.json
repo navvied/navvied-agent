@@ -1,0 +1,16 @@
+[
+  {
+    "tool": "Remember",
+    "args": {
+      "note": "Deploy labels are written zx-build-N, N is the build number",
+      "scope": "project"
+    }
+  },
+  {
+    "tool": "Bash",
+    "args": {
+      "command": "printf 'zx-build-37\\n' > ANSWER.txt",
+      "description": "write the label"
+    }
+  }
+]

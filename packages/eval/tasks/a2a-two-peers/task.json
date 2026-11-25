@@ -1,0 +1,24 @@
+{
+  "id": "a2a-two-peers",
+  "title": "Ask two agents and put both answers together",
+  "kind": "agent",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun"
+  ],
+  "prompt": "Two other agents are set up for you: alpha and beta. Ask each of them for its code, and write both codes into ANSWER.txt, one per line. Do nothing else.",
+  "check": "bun \"$BENCH_FIXTURES/a2a-check.ts\" two-peers",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 600,
+  "setup": "bun \"$BENCH_FIXTURES/start-web.ts\" a2a-peer.ts",
+  "teardown": "bun \"$BENCH_FIXTURES/stop-web.ts\"",
+  "a2a": {
+    "alpha": "/alpha/",
+    "beta": "/beta/"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "id": "memory-list-then-replace",
+  "title": "List the notes, then correct one by its id",
+  "kind": "terminal",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "bun"
+  ],
+  "prompt": "List what is remembered for this project, then correct the note about the test command: it is now `bun test --timeout 30000`. Write the id of the note you corrected into ANSWER.txt, alone on one line. Leave the other notes alone.",
+  "check": "test \"$(tr -d '[:space:]' < ANSWER.txt)\" = \"k3a002\" && bun \"$BENCH_FIXTURES/skills-check.ts\" replaced",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 600
+}

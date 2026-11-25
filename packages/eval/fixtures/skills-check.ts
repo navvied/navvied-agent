@@ -12,6 +12,21 @@ let ok = false;
 switch (what) {
   case "listed": ok = !!skill && skill.modelInvocable && skill.description.startsWith("Prepare the label for a release. Use it whenever") && !skill.description.includes("\n"); break;
   case "notes": ok = parseEntries(readFileSync(".navvied/memory.md", "utf8")).length === 1; break;
+  case "note-added": {
+    const notes = parseEntries(readFileSync(".navvied/memory.md", "utf8"));
+    ok = notes.length === 1 && notes[0]!.text.includes("zx-build-N") && notes[0]!.origin === "self";
+    break;
+  }
+  case "forgotten": {
+    const notes = parseEntries(readFileSync(".navvied/memory.md", "utf8"));
+    ok = notes.length === 2 && notes.some((n) => n.id === "k1a002" && n.text === "Indent with tabs") && notes.some((n) => n.text.includes("beta.example.test")) && !notes.some((n) => n.text.includes("alpha.example.test"));
+    break;
+  }
+  case "replaced": {
+    const notes = parseEntries(readFileSync(".navvied/memory.md", "utf8"));
+    ok = notes.length === 3 && notes.find((n) => n.id === "k3a002")?.text === "Run tests with bun test --timeout 30000" && notes.find((n) => n.id === "k3a001")?.text === "The api lives in src/api" && notes.find((n) => n.id === "k3a003")?.origin === "user";
+    break;
+  }
   case "created": {
     const text = skill ? readSkill(skill) : "";
     ok = !!skill && skill.description.length > 5 && text.includes("reports/weekly.md") && !text.includes("out/weekly.md") && /1\. Collect/.test(text) && /2\. Summarise/.test(text);

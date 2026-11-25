@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkSigner, entryOf, install, unsafeEntry, type Run } from "../src/computer-use/install.ts";
+import { checkSigner, entryOf, install, tarProgram, unsafeEntry, type Run } from "../src/computer-use/install.ts";
 import { PIN, supportOf, type Pin } from "../src/computer-use/pin.ts";
 
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
@@ -96,4 +96,11 @@ describe("signatures, by the system's own check", () => {
     expect(await checkSigner(says("NotSigned", ""), win, "x.exe", "win32")).toBeTruthy();
     expect(await checkSigner(async () => ({ code: 1, out: "garbage", err: "" }), win, "x.exe", "win32")).toBeTruthy();
   });
+});
+
+test("Windows' own tar is named by path; elsewhere the one on the path is used", () => {
+  expect(tarProgram("linux", undefined)).toBe("tar");
+  expect(tarProgram("darwin", "x")).toBe("tar");
+  expect(tarProgram("win32", "D:\\Win")).toMatch(/System32.tar\.exe$/);
+  expect(tarProgram("win32", undefined)).toMatch(/Windows.System32.tar\.exe$/);
 });

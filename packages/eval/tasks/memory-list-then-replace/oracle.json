@@ -1,0 +1,24 @@
+[
+  {
+    "tool": "Remember",
+    "args": {
+      "action": "list",
+      "scope": "project"
+    }
+  },
+  {
+    "tool": "Remember",
+    "args": {
+      "action": "replace",
+      "target": "k3a002",
+      "note": "Run tests with bun test --timeout 30000"
+    }
+  },
+  {
+    "tool": "Bash",
+    "args": {
+      "command": "printf 'k3a002\\n' > ANSWER.txt",
+      "description": "write the id"
+    }
+  }
+]

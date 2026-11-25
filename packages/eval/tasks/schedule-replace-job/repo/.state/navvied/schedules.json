@@ -1,0 +1,6 @@
+{
+  "jobs": [
+    { "id": "aaa111", "prompt": "Back up the notes folder.", "cwd": ".", "mode": "plan", "cron": "0 3 * * *", "title": "old-backup", "created": 1700000000000, "lastRun": 1700000000000 },
+    { "id": "bbb222", "prompt": "Summarise the week.", "cwd": ".", "mode": "plan", "cron": "0 17 * * 5", "title": "keep-me", "created": 1700000000000, "lastRun": 1700000000000 }
+  ]
+}

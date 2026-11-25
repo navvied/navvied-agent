@@ -1,0 +1,20 @@
+{
+  "id": "media-make-banner",
+  "title": "Make a wide picture",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "sh"
+  ],
+  "media": [
+    "image"
+  ],
+  "prompt": "Make a wide picture of a lighthouse at night and save it as banner.png.",
+  "check": "head -c4 banner.png | tail -c3 | grep -q PNG && grep -aq 'W=1024 H=576' banner.png",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 300
+}

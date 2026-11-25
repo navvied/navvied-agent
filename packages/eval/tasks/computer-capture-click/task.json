@@ -1,0 +1,15 @@
+{
+  "id": "computer-capture-click",
+  "title": "Look at an app, click the right button by its number, and look again",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": ["bun"],
+  "prompt": "In the Preferences app on this computer, press the Export button, then write the export code it shows into ANSWER.txt. Do nothing else in the app.",
+  "check": "bun \"$BENCH_FIXTURES/computer-check.ts\" capture-click",
+  "protect": ["README.md"],
+  "maxSteps": 20,
+  "timeoutSeconds": 600,
+  "runner": "computer-run.ts",
+  "env": { "BENCH_COMPUTER": "export" }
+}

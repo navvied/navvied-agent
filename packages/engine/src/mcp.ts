@@ -1,11 +1,12 @@
 /**
- * A client for MCP servers: programs that give the agent more tools. Each one is started as a child process and spoken to in
- * JSON lines over its standard input and output. Its tools join the engine's own, named `mcp__<server>__<tool>`.
+ * A client for MCP servers: programs that give the agent more tools, and also resources (things to read) and prompts (ready-made requests).
+ * A server is either started here as a child process and spoken to in JSON lines over its standard input and output, or reached over the web.
+ * Its tools join the engine's own, named `mcp__<server>__<tool>` (see mcp-tools.ts).
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { killTree, launch, usesProcessGroups } from "./platform.ts";
-import type { Tool } from "./types.ts";
-import { clip } from "./tools/util.ts";
+import { OAuthSession, type OAuthClient, type OAuthStore } from "./mcp-oauth.ts";
+import { plain, type McpContent, type McpResult } from "./mcp-result.ts";
 
 /** A server is either a program started here (`command`) or one reached over the web (`url`, with the headers it wants, such as a token). */
 export interface McpServerConfig {
@@ -15,71 +16,136 @@ export interface McpServerConfig {
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
+  /** For a server on the web that signs in by itself: what it needs when it cannot register navvied on its own. */
+  oauth?: OAuthClient;
 }
 
-interface McpToolInfo {
+export interface McpToolInfo {
   name: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
   annotations?: { readOnlyHint?: boolean };
 }
+export interface McpResource { uri: string; name?: string; description?: string; mimeType?: string; /** `uri` is a template with `{name}` parts to fill. */ template?: true }
+export interface McpPrompt { name: string; description?: string; arguments?: { name: string; description?: string; required?: boolean }[] }
+export interface McpPromptText { description?: string; messages: { role: string; content: McpContent }[] }
+export interface McpCapabilities { resources: boolean; prompts: boolean }
 
 const PROTOCOL = "2025-03-26";
 const HANDSHAKE_MS = 15_000;
 const CALL_MS = 120_000;
-const NAME = /[^A-Za-z0-9_-]/g;
+const MOST_LISTED = 500;
 
-type Pending = { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
+const DOING: Record<string, string> = { initialize: "starting up", "tools/list": "listing its tools", "tools/call": "running a tool", "resources/list": "listing its resources", "resources/templates/list": "listing its resources", "resources/read": "reading a resource", "prompts/list": "listing its prompts", "prompts/get": "getting a prompt" };
+const slow = (method: string, ms: number): string => `did not answer within ${Math.round(ms / 1000)} s while ${DOING[method] ?? method}`;
+
+/** A server on the web wants a sign-in (or a better token than the one in its headers). */
+export class McpAuthError extends Error {
+  constructor(message: string, readonly signin: boolean, readonly challenge: string | null) { super(message); }
+}
 
 /** What the engine needs from a server, however it is reached. */
 export interface McpLike {
   readonly name: string;
+  readonly capabilities: McpCapabilities;
   tools(): Promise<McpToolInfo[]>;
+  /** The raw answer of a tool. Throws when the server could not be asked. */
+  callTool(tool: string, args: Record<string, unknown>, signal: AbortSignal): Promise<McpResult>;
+  /** The text of the answer, a failure as an `Error:` line. */
   call(tool: string, args: Record<string, unknown>, signal: AbortSignal): Promise<string>;
+  resources(): Promise<McpResource[]>;
+  readResource(uri: string, signal: AbortSignal): Promise<McpContent[]>;
+  prompts(): Promise<McpPrompt[]>;
+  getPrompt(name: string, args: Record<string, string>, signal: AbortSignal): Promise<McpPromptText>;
   close(): void;
 }
 
-const resultText = (result: { content?: { type: string; text?: string }[]; isError?: boolean }): string => {
-  const body = (result.content ?? []).map((c) => (c.type === "text" ? c.text ?? "" : `[${c.type} omitted]`)).join("\n").trim();
-  return result.isError ? `Error: ${body || "the tool reported a failure"}` : body || "(no output)";
-};
+/** What every kind of server shares: the handshake, the lists that come in pages, and the calls. A kind says only how a message gets there. */
+abstract class McpBase implements McpLike {
+  capabilities: McpCapabilities = { resources: false, prompts: false };
+
+  constructor(readonly name: string) {}
+
+  protected abstract send(method: string, params: unknown, ms: number, signal?: AbortSignal): Promise<unknown>;
+  protected abstract notify(method: string): Promise<void> | void;
+  abstract close(): void;
+
+  protected async handshake(): Promise<void> {
+    const r = (await this.send("initialize", { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: "navvied", version: "1" } }, HANDSHAKE_MS)) as { capabilities?: { resources?: unknown; prompts?: unknown } } | undefined;
+    this.capabilities = { resources: !!r?.capabilities?.resources, prompts: !!r?.capabilities?.prompts };
+    await this.notify("notifications/initialized");
+  }
+
+  async #list<T>(method: string, key: string): Promise<T[]> {
+    const listed: T[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = (await this.send(method, cursor ? { cursor } : {}, HANDSHAKE_MS)) as Record<string, unknown> | undefined;
+      listed.push(...((page?.[key] as T[] | undefined) ?? []));
+      cursor = page?.nextCursor as string | undefined;
+    } while (cursor && listed.length < MOST_LISTED);
+    return listed;
+  }
+
+  tools(): Promise<McpToolInfo[]> { return this.#list("tools/list", "tools"); }
+
+  async callTool(tool: string, args: Record<string, unknown>, signal: AbortSignal): Promise<McpResult> {
+    return ((await this.send("tools/call", { name: tool, arguments: args }, CALL_MS, signal)) ?? {}) as McpResult;
+  }
+
+  async call(tool: string, args: Record<string, unknown>, signal: AbortSignal): Promise<string> {
+    try { return plain(await this.callTool(tool, args, signal)); }
+    catch (e) { return `Error: ${e instanceof Error ? e.message : String(e)}`; }
+  }
+
+  async resources(): Promise<McpResource[]> {
+    const fixed = await this.#list<McpResource>("resources/list", "resources");
+    // Templates are an extra: a server that has none may answer with an error, which is not a failure to list.
+    const templates = await this.#list<{ uriTemplate: string; name?: string; description?: string; mimeType?: string }>("resources/templates/list", "resourceTemplates").catch(() => []);
+    return [...fixed, ...templates.map((t) => ({ uri: t.uriTemplate, ...(t.name ? { name: t.name } : {}), ...(t.description ? { description: t.description } : {}), ...(t.mimeType ? { mimeType: t.mimeType } : {}), template: true as const }))];
+  }
+
+  async readResource(uri: string, signal: AbortSignal): Promise<McpContent[]> {
+    const r = (await this.send("resources/read", { uri }, CALL_MS, signal)) as { contents?: { uri?: string; text?: string; blob?: string; mimeType?: string }[] } | undefined;
+    return (r?.contents ?? []).map((c) => (c.mimeType?.startsWith("image/") && c.blob ? { type: "image", data: c.blob, mimeType: c.mimeType } : { type: "resource", resource: c }));
+  }
+
+  prompts(): Promise<McpPrompt[]> { return this.#list("prompts/list", "prompts"); }
+
+  async getPrompt(name: string, args: Record<string, string>, signal: AbortSignal): Promise<McpPromptText> {
+    const r = (await this.send("prompts/get", { name, arguments: args }, CALL_MS, signal)) as McpPromptText | undefined;
+    return { ...(r?.description ? { description: r.description } : {}), messages: r?.messages ?? [] };
+  }
+}
+
+const hasAuthorization = (headers: Record<string, string>): boolean => Object.keys(headers).some((k) => k.toLowerCase() === "authorization");
 
 /**
  * A server reached over the web ("streamable HTTP"): every message is a POST, and the answer comes back either as JSON or as an event
- * stream that carries it. The server may give a session id on the first answer, which is sent back from then on.
+ * stream that carries it. The server may give a session id on the first answer, which is sent back from then on. A server that asks for a
+ * sign-in is answered with the token kept for it (see mcp-oauth.ts), renewed once when it is refused.
  */
-export class McpHttpClient implements McpLike {
+export class McpHttpClient extends McpBase {
   #session: string | undefined;
   #next = 1;
   #closed = false;
 
-  private constructor(readonly name: string, private readonly url: string, private readonly headers: Record<string, string>) {}
+  private constructor(name: string, private readonly url: string, private readonly headers: Record<string, string>, private readonly auth?: OAuthSession) { super(name); }
 
-  static async start(name: string, config: McpServerConfig): Promise<McpHttpClient> {
+  static async start(name: string, config: McpServerConfig, store?: OAuthStore): Promise<McpHttpClient> {
     if (!config.url || !/^https?:\/\//.test(config.url)) throw new Error("the address must start with http:// or https://");
-    const client = new McpHttpClient(name, config.url, config.headers ?? {});
-    try {
-      await client.#request("initialize", { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: "navvied", version: "1" } }, HANDSHAKE_MS);
-      await client.#post({ jsonrpc: "2.0", method: "notifications/initialized" }, undefined, HANDSHAKE_MS);
-      return client;
-    } catch (e) { client.close(); throw e; }
+    const headers = config.headers ?? {};
+    const client = new McpHttpClient(name, config.url, headers, store && !hasAuthorization(headers) ? new OAuthSession(config.url, store) : undefined);
+    try { await client.handshake(); return client; } catch (e) { client.close(); throw e; }
   }
 
-  async tools(): Promise<McpToolInfo[]> {
-    const listed: McpToolInfo[] = [];
-    let cursor: string | undefined;
-    do {
-      const page = (await this.#request("tools/list", cursor ? { cursor } : {}, HANDSHAKE_MS)) as { tools?: McpToolInfo[]; nextCursor?: string };
-      listed.push(...(page.tools ?? []));
-      cursor = page.nextCursor;
-    } while (cursor && listed.length < 500);
-    return listed;
+  protected send(method: string, params: unknown, ms: number, signal?: AbortSignal): Promise<unknown> {
+    if (this.#closed) return Promise.reject(new Error("the server is not connected"));
+    const id = this.#next++;
+    return this.#post({ jsonrpc: "2.0", id, method, params }, id, ms, signal);
   }
 
-  async call(tool: string, args: Record<string, unknown>, signal: AbortSignal): Promise<string> {
-    try { return resultText((await this.#request("tools/call", { name: tool, arguments: args }, CALL_MS, signal)) as never); }
-    catch (e) { return `Error: ${signal.aborted ? "[interrupted]" : e instanceof Error ? e.message : String(e)}`; }
-  }
+  protected async notify(method: string): Promise<void> { await this.#post({ jsonrpc: "2.0", method }, undefined, HANDSHAKE_MS); }
 
   close(): void {
     if (this.#closed) return;
@@ -87,27 +153,33 @@ export class McpHttpClient implements McpLike {
     if (this.#session) void fetch(this.url, { method: "DELETE", headers: { ...this.headers, "mcp-session-id": this.#session }, signal: AbortSignal.timeout(3000) }).catch(() => undefined);
   }
 
-  async #request(method: string, params: unknown, ms: number, signal?: AbortSignal): Promise<unknown> {
-    if (this.#closed) throw new Error("the server is not connected");
-    const id = this.#next++;
-    return this.#post({ jsonrpc: "2.0", id, method, params }, id, ms, signal);
-  }
-
-  async #post(message: Record<string, unknown>, id: number | undefined, ms: number, outer?: AbortSignal): Promise<unknown> {
+  async #post(message: Record<string, unknown>, id: number | undefined, ms: number, outer?: AbortSignal, renewed = false): Promise<unknown> {
     const stop = AbortSignal.any([AbortSignal.timeout(ms), ...(outer ? [outer] : [])]);
+    const bearer = await this.auth?.header();
     let res: Response;
     try {
-      res = await fetch(this.url, { method: "POST", signal: stop, body: JSON.stringify(message), headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": PROTOCOL, ...(this.#session ? { "mcp-session-id": this.#session } : {}), ...this.headers } });
-    } catch (e) { throw new Error(outer?.aborted ? "[interrupted]" : stop.aborted ? `${String(message.method)} took longer than ${Math.round(ms / 1000)} s` : `could not be reached: ${e instanceof Error ? e.message : String(e)}`); }
+      res = await fetch(this.url, { method: "POST", signal: stop, body: JSON.stringify(message), headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": PROTOCOL, ...(this.#session ? { "mcp-session-id": this.#session } : {}), ...(bearer ? { authorization: bearer } : {}), ...this.headers } });
+    } catch (e) { throw new Error(outer?.aborted ? "[interrupted]" : stop.aborted ? slow(String(message.method), ms) : `could not be reached: ${e instanceof Error ? e.message : String(e)}`); }
     const session = res.headers.get("mcp-session-id");
     if (session) this.#session = session;
+    if (res.status === 401 && !hasAuthorization(this.headers)) {
+      await res.body?.cancel().catch(() => undefined);
+      if (this.auth && !renewed && await this.auth.renew()) return this.#post(message, id, ms, outer, true);
+      throw new McpAuthError("needs a sign-in", true, res.headers.get("www-authenticate"));
+    }
     if (id === undefined) { await res.body?.cancel().catch(() => undefined); return undefined; }
-    if (!res.ok) throw new Error(`the server answered ${res.status}${res.status === 401 || res.status === 403 ? " (check the token in its headers)" : ""}`);
-    const reply = (res.headers.get("content-type") ?? "").includes("text/event-stream") ? await this.#fromStream(res, id, stop) : (await res.json()) as unknown;
+    if (!res.ok) throw new McpAuthError(res.status === 401 || res.status === 403 ? `the server did not accept the token in its headers (${res.status})` : res.status === 404 ? "the server answered 404: check the address" : res.status >= 500 ? `the server answered ${res.status}: it has a problem of its own` : `the server answered ${res.status}`, false, null);
+    const reply = (res.headers.get("content-type") ?? "").includes("text/event-stream") ? await this.#fromStream(res, id, stop) : await this.#json(res);
     const found = (Array.isArray(reply) ? reply : [reply]).find((m) => (m as { id?: unknown }).id === id) as { result?: unknown; error?: { message?: string } } | undefined;
     if (!found) throw new Error("the server did not answer that request");
     if (found.error) throw new Error(found.error.message ?? "the server reported an error");
     return found.result;
+  }
+
+  async #json(res: Response): Promise<unknown> {
+    const body = await res.text();
+    try { return JSON.parse(body) as unknown; }
+    catch { throw new Error(`the server's answer was not JSON${/^\s*</.test(body) ? " (it is a web page: is the address right?)" : ""}`); }
   }
 
   /** Reads an event stream until the answer to `id` has come. */
@@ -134,23 +206,27 @@ export class McpHttpClient implements McpLike {
   }
 }
 
-export class McpClient implements McpLike {
+type Pending = { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
+
+export class McpClient extends McpBase {
   #child: ChildProcess;
   #next = 1;
   #pending = new Map<number, Pending>();
   #buffer = "";
   #stderr = "";
+  #noise = "";
   #closed = false;
 
-  private constructor(readonly name: string, child: ChildProcess) {
+  private constructor(name: string, child: ChildProcess, command: string) {
+    super(name);
     this.#child = child;
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => this.#read(chunk));
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => { this.#stderr = (this.#stderr + chunk).slice(-2000); });
     child.stdin?.on("error", () => undefined);
-    child.on("error", (e) => this.#fail(new Error(`could not start: ${e.message}`)));
-    child.on("close", (code) => { if (!this.#closed) this.#fail(new Error(`ended unexpectedly (exit ${code})${this.#detail()}`)); });
+    child.on("error", (e: NodeJS.ErrnoException) => this.#fail(new Error(`could not start: ${e.code === "ENOENT" ? `"${command}" was not found on this computer` : e.code === "EACCES" ? `"${command}" is not allowed to run` : e.message}`)));
+    child.on("close", (code) => { if (!this.#closed) this.#fail(new Error(`stopped by itself (exit ${code})${this.#detail()}`)); });
   }
 
   /** Starts the server and completes the handshake, or throws with the reason. */
@@ -158,38 +234,17 @@ export class McpClient implements McpLike {
     if (!config.command) throw new Error("a connected program needs a command or an address");
     const [program, ...args] = launch([config.command, ...(config.args ?? [])]);
     const child = spawn(program!, args, { cwd: config.cwd, env: { ...process.env, ...config.env }, detached: usesProcessGroups(), windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
-    const client = new McpClient(name, child);
+    const client = new McpClient(name, child, config.command);
     started?.(client);
-    try {
-      await client.#request("initialize", { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: "navvied", version: "1" } }, HANDSHAKE_MS);
-      client.#notify("notifications/initialized");
-      return client;
-    } catch (e) { client.close(); throw e; }
+    try { await client.handshake(); return client; } catch (e) { client.close(); throw e; }
   }
 
-  async tools(): Promise<McpToolInfo[]> {
-    const listed: McpToolInfo[] = [];
-    let cursor: string | undefined;
-    do {
-      const page = (await this.#request("tools/list", cursor ? { cursor } : {}, HANDSHAKE_MS)) as { tools?: McpToolInfo[]; nextCursor?: string };
-      listed.push(...(page.tools ?? []));
-      cursor = page.nextCursor;
-    } while (cursor && listed.length < 500);
-    return listed;
-  }
-
-  /** Runs one tool and returns its text. A tool that reports failure is returned as an `Error:` line, as the engine's own tools do. */
-  async call(tool: string, args: Record<string, unknown>, signal: AbortSignal): Promise<string> {
+  /** A call that is stopped tells the server, and leaves it usable. */
+  override async callTool(tool: string, args: Record<string, unknown>, signal: AbortSignal): Promise<McpResult> {
     const id = this.#next;
-    const done = this.#request("tools/call", { name: tool, arguments: args }, CALL_MS);
     const abort = (): void => { this.#notify("notifications/cancelled", { requestId: id, reason: "the user stopped the turn" }); this.#drop(id, new Error("[interrupted]")); };
     signal.addEventListener("abort", abort, { once: true });
-    try {
-      const result = (await done) as { content?: { type: string; text?: string }[]; isError?: boolean };
-      const body = (result.content ?? []).map((c) => (c.type === "text" ? c.text ?? "" : `[${c.type} omitted]`)).join("\n").trim();
-      return result.isError ? `Error: ${body || "the tool reported a failure"}` : body || "(no output)";
-    } catch (e) { return `Error: ${e instanceof Error ? e.message : String(e)}`; }
-    finally { signal.removeEventListener("abort", abort); }
+    try { return await super.callTool(tool, args, signal); } finally { signal.removeEventListener("abort", abort); }
   }
 
   close(): void {
@@ -198,21 +253,27 @@ export class McpClient implements McpLike {
     killTree(this.#child);
   }
 
-  #detail(): string { const last = this.#stderr.trim().split("\n").slice(-2).join(" ").slice(0, 200); return last ? `: ${last}` : ""; }
+  /** The last words the program wrote to its error output, or the text it printed where only JSON belongs. */
+  #detail(): string {
+    const last = this.#stderr.trim().split("\n").slice(-2).join(" ").slice(0, 200);
+    return last ? `: ${last}` : this.#noise ? `; it printed "${this.#noise}", which is not JSON: a tool server may print only JSON messages on its output` : "";
+  }
 
-  #request(method: string, params: unknown, timeoutMs: number): Promise<unknown> {
+  protected send(method: string, params: unknown, ms: number): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (this.#closed) { reject(new Error("the server is not running")); return; }
       const id = this.#next++;
-      const timer = setTimeout(() => this.#drop(id, new Error(`${method} took longer than ${Math.round(timeoutMs / 1000)} s`)), timeoutMs);
+      const timer = setTimeout(() => this.#drop(id, new Error(`${slow(method, ms)}${this.#detail()}`)), ms);
       this.#pending.set(id, { resolve, reject, timer });
-      this.#send({ jsonrpc: "2.0", id, method, params });
+      this.#write({ jsonrpc: "2.0", id, method, params });
     });
   }
 
-  #notify(method: string, params?: unknown): void { this.#send({ jsonrpc: "2.0", method, ...(params ? { params } : {}) }); }
+  protected notify(method: string): void { this.#notify(method); }
 
-  #send(message: unknown): void {
+  #notify(method: string, params?: unknown): void { this.#write({ jsonrpc: "2.0", method, ...(params ? { params } : {}) }); }
+
+  #write(message: unknown): void {
     try { this.#child.stdin?.write(`${JSON.stringify(message)}\n`); } catch { /* the process is gone; its end is handled */ }
   }
 
@@ -233,7 +294,7 @@ export class McpClient implements McpLike {
       this.#buffer = this.#buffer.slice(at + 1);
       if (!line) continue;
       let message: { id?: unknown; result?: unknown; error?: { message?: string } };
-      try { message = JSON.parse(line); } catch { continue; }
+      try { message = JSON.parse(line); } catch { this.#noise ||= line.slice(0, 60); continue; }
       if (typeof message.id !== "number") continue;
       const p = this.#pending.get(message.id);
       if (!p) continue;
@@ -243,52 +304,4 @@ export class McpClient implements McpLike {
     }
     if (this.#buffer.length > 4_000_000) this.#buffer = "";
   }
-}
-
-/** The engine's view of one tool of a server. */
-function toTool(client: McpLike, info: McpToolInfo, small: boolean): Tool {
-  const server = client.name.replace(NAME, "_");
-  const name = `mcp__${server}__${info.name.replace(NAME, "_")}`.slice(0, 64);
-  const schema = info.inputSchema && typeof info.inputSchema === "object" ? info.inputSchema : {};
-  return {
-    name,
-    readOnly: info.annotations?.readOnlyHint === true,
-    description: `${(info.description ?? "").slice(0, 500)} (from the connected program "${client.name}")`.trim(),
-    parameters: { type: "object", ...schema, properties: (schema.properties as Record<string, unknown> | undefined) ?? {} },
-    offeredWhen: ({ small: tight, userText }) => !(small && tight) || userText.toLowerCase().includes(client.name.toLowerCase()) || userText.toLowerCase().includes(info.name.toLowerCase()),
-    title: () => `${client.name}: ${info.name.replace(/[_-]+/g, " ")}`,
-    async run(args, ctx) { return clip(await client.call(info.name, args, ctx.signal)); },
-  };
-}
-
-export interface McpConnection {
-  tools: Tool[];
-  /** Servers that could not be used, with the reason in plain words. */
-  problems: { server: string; reason: string }[];
-  close(): void;
-}
-
-/**
- * Starts every configured server at once. One that fails does not stop the others. When `until` aborts (the engine was closed),
- * every program already started is stopped, also one still being connected: it would otherwise run on with nobody to close it.
- */
-export async function connectMcp(servers: Record<string, McpServerConfig>, small = false, until?: AbortSignal): Promise<McpConnection> {
-  const clients: McpLike[] = [];
-  let over = until?.aborted ?? false;
-  until?.addEventListener("abort", () => { over = true; clients.forEach((c) => c.close()); }, { once: true });
-  const track = (c: McpLike): void => { clients.push(c); if (over) c.close(); };
-  const tools: Tool[] = [];
-  const problems: { server: string; reason: string }[] = [];
-  await Promise.all(Object.entries(servers).map(async ([name, config]) => {
-    try {
-      const client = config.url ? await McpHttpClient.start(name, config) : await McpClient.start(name, config, track);
-      if (config.url) track(client);
-      const seen = new Set<string>();
-      for (const info of await client.tools()) {
-        const tool = toTool(client, info, small);
-        if (!seen.has(tool.name)) { seen.add(tool.name); tools.push(tool); }
-      }
-    } catch (e) { problems.push({ server: name, reason: e instanceof Error ? e.message : String(e) }); }
-  }));
-  return { tools, problems, close: () => clients.forEach((c) => c.close()) };
 }

@@ -13,22 +13,21 @@ const past: Recall = {
 const ctx = (recall?: Recall): ToolContext => ({ cwd: ".", signal: new AbortController().signal, emit: () => undefined, allowPrivateNetwork: false, jobs: new Jobs(() => undefined), ...(recall ? { recall } : {}) });
 
 describe("looking through earlier conversations", () => {
-  test("the words of the request offer it at once; in any other language it is named in the prompt, and a call is run", () => {
+  test("a large model is offered it whenever earlier conversations exist, in any language; a small one has it named, and a call is run", async () => {
     const all = defaultTools();
-    const names = (userText: string, recall: boolean) => toolsFor("auto", all, { small: true, userText, jobs: 0, recall }).map((t) => t.name);
-    expect(names("what did we decide last time about the API?", true)).toContain("Recall");
-    expect(names("fix the failing test in src/a.ts", true)).not.toContain("Recall");
-    expect(names("what did we decide last time?", false)).not.toContain("Recall");
-  });
-  test("in another language it is named (when there are earlier conversations) and a call works", async () => {
-    const r = rig((req) => (req.messages.at(-1)?.role === "tool" ? { text: String(req.messages.at(-1)!.content).slice(0, 60) } : { calls: [{ name: "Recall", args: { query: "tresor" } }] }), { recall: past });
+    const names = (userText: string, recall: boolean, small: boolean) => toolsFor("auto", all, { small, userText, jobs: 0, recall }).map((t) => t.name);
+    expect(names("fix the failing test in src/a.ts", true, false)).toContain("Recall");
+    expect(names("was haben wir gestern beschlossen?", true, false)).toContain("Recall");
+    expect(names("what did we decide last time?", false, false)).not.toContain("Recall");
+    expect(names("what did we decide last time?", true, true)).not.toContain("Recall");
+    const r = rig((req) => (req.messages.at(-1)?.role === "tool" ? { text: String(req.messages.at(-1)!.content).slice(0, 60) } : { calls: [{ name: "Recall", args: { query: "tresor" } }] }), { recall: past, window: 8_000 });
     await r.turn(prompt("was haben wir gestern ueber den Tresor beschlossen?"));
     expect(r.provider.requests[0]!.system).toContain("Recall");
     expect(r.provider.requests[0]!.tools.map((t) => t.name)).not.toContain("Recall");
     expect(r.text()).toContain("Gespraech (id de1");
     expect(r.text()).not.toContain("sk-abcdefgh");
     r.cleanup();
-    const none = rig(() => ({ text: "x" }));
+    const none = rig(() => ({ text: "x" }), { window: 8_000 });
     await none.turn(prompt("was haben wir gestern beschlossen?"));
     expect(none.provider.requests[0]!.system).not.toContain("Recall");
     none.cleanup();

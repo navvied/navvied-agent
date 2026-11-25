@@ -5,34 +5,39 @@
 import { RetryProvider, type RetryOptions } from "./providers/retry.ts";
 import { historyOf } from "./store.ts";
 import { join, resolve } from "node:path";
-import { REFUSED, RecentIds, type ApprovalOption, type Command, type Effort, type EngineEvent, type FileNote, type ModelInfo, type PermMode, type PlanEntry, type QuestionItem, type PromptCommand, type SessionKind, type StopReason, type ToolOutcome, type TurnTokens } from "@navvied/protocol";
+import { REFUSED, RecentIds, type McpPromptInfo, type ApprovalOption, type Command, type Effort, type EngineEvent, type FileNote, type ModelInfo, type PermMode, type PlanEntry, type QuestionItem, type PromptCommand, type SessionKind, type ScreenOutcome, type StopReason, type ToolOutcome, type TurnTokens } from "@navvied/protocol";
 import { ALLOW, ALLOW_ALWAYS, ApprovalBroker, EDIT, approvalOptions } from "./approvals.ts";
 import type { Checkpoint, Checkpoints } from "./checkpoints.ts";
 import type { AgentEngine } from "./contract.ts";
 import { KEEP_TAIL, compactMessages, estimateTokens, shouldCompact } from "./context.ts";
 import { parseLenient } from "./lenient-json.ts";
-import type { Hooks } from "./hooks.ts";
-import type { MemoryPaths } from "./memory.ts";
+import type { Hooks, PreVerdict } from "./hooks.ts";
+import { keep, pendingEvent, type MemoryPaths } from "./memory.ts";
+import { extractByModel, extractByRules } from "./memory-extract.ts";
 import { approvalChange } from "./approval-change.ts";
 import { Jobs } from "./jobs.ts";
 import { DEFAULT_ASK_WAIT_S, MOST_QUESTIONS_PER_TURN, NOBODY_ANSWERS, QuestionBroker, answersText } from "./questions.ts";
 import { isolate } from "./worktree.ts";
 import { jobLines, wakeText } from "./job-note.ts";
 import { childEnv, type EnvPolicy } from "./child-env.ts";
-import { Redactor, registerSecrets } from "./redact.ts";
+import { Redactor, registerSecrets, secretsIn, secretsNow } from "./redact.ts";
+import { originsIn } from "./tools/browser/credentials.ts";
 import { forget, type ShellState } from "./tools/shell-state.ts";
 import { modelSkills, skillsPrompt, type SkillInfo } from "./skills.ts";
 import type { SkillBook } from "./skill-book.ts";
 import { messagesAsText, toolsInPrompt } from "./text-tools.ts";
 import { TextToolCalls, dollarCommand } from "./text-tool-calls.ts";
 import type { Backend } from "./backend.ts";
+import { CodeOffer, type CodeAfter } from "./code-offer.ts";
 import { toolsFor } from "./permissions.ts";
-import { judge } from "./judge.ts";
+import { approvalScope } from "./approval-scope.ts";
+import { judge, type Judgement } from "./judge.ts";
 import { isConfined, profileTools } from "./profiles.ts";
 import { hardBlock, type Rules } from "./rules.ts";
 import { asksAboutProgram, systemPrompt } from "./prompt.ts";
 import { PLAN_TOOL_NAME, defaultTools } from "./tools/index.ts";
 import { EXECUTE_CODE_TOOL } from "./tools/execute-code.ts";
+import { COMPUTER_TOOL, computer } from "./tools/computer.ts";
 import { changedPaths, FILE_WRITERS, mapText, textOf } from "./tools/changed.ts";
 import { FileState } from "./tools/file-state.ts";
 import { SPILL_DIR, outputBudget, withinBudget } from "./tools/util.ts";
@@ -43,9 +48,16 @@ import { PageCache } from "./tools/web-cache.ts";
 import { tmpdir } from "node:os";
 import { AGENT_TOOL_NAME, agentTool } from "./tools/agent.ts";
 import { ASK_TOOL_NAME } from "./tools/ask.ts";
+import { ASK_AGENT_TOOL_NAME, askAgentTool } from "./tools/ask-agent.ts";
 import { STALE_AFTER_STEPS, TODO_TOOL_NAME, parseTodos, staleNote, unfinished } from "./tools/todo.ts";
+import { Outside, withOrigin } from "./taint.ts";
+import { sourceOf, untrusted } from "./tools/untrusted.ts";
 import type { AgentDef } from "./agents.ts";
-import type { Message, ModelReply, Part, Provider, Recall, SessionStore, Tool, ToolCall, ToolContext, WebProxy } from "./types.ts";
+import type { Media } from "./media/media.ts";
+import type { ComputerHelper, Message, ModelReply, Part, PeerBook, Provider, Recall, ScheduleBackend, SessionStore, Tool, ToolCall, ToolContext, WebProxy } from "./types.ts";
+
+/** What the engine asks of the connected programs for a person: their prompts, and the text of one. */
+interface McpPrompts { prompts(): Promise<McpPromptInfo[]>; prompt(server: string, name: string, args: Record<string, string>, signal: AbortSignal): Promise<string> }
 
 /** What a helper needs the person to decide: the fields of an `approval` event, before the engine gives it an id. */
 type ApprovalAsk = { title: string; options: ApprovalOption[]; tool: string; change?: Extract<EngineEvent, { ev: "approval" }>["change"]; risk?: string };
@@ -64,6 +76,8 @@ export interface ModelSwitch {
 
 export interface EngineOptions {
   provider: Provider;
+  /** When the script tool, if switched on, is offered: `auto` (default) as the turn shows it pays, `always` from the first request (for measuring what that costs). `after` sets the limits. */
+  codeOffer?: { mode?: "auto" | "always"; after?: CodeAfter };
   /** How a call to the model that failed is made again (the number of tries, and for a test how the waiting is done). */
   retry?: RetryOptions;
   /** Where the files a person attaches are saved: one folder per session below it (default: a folder of the system's temporary files). */
@@ -83,7 +97,8 @@ export interface EngineOptions {
   secrets?: string[];
   /** What the person may ask about this program (its commands, modes, files): put in the prompt only for a request that asks about it. */
   reference?: string;
-  instructions?: () => string | undefined;
+  /** The standing instructions, asked for at every step with what the person last wrote, so the notes put in front of the model can be the ones that fit it. */
+  instructions?: (request?: { userText: string }) => string | undefined;
   checkpoints?: Checkpoints;
   tools?: Tool[];
   /** Whether the model is offered `apply_patch`: `auto` (default) when its window is not small, `on` always, `off` never. */
@@ -102,7 +117,15 @@ export interface EngineOptions {
   helperLimits?: { parallel?: number; steps?: number; seconds?: number };
   /** The person's earlier conversations, for the Recall tool. */
   recall?: Recall;
+  /** Where the Schedule tool keeps its jobs; without it the tool is not offered. */
+  schedule?: ScheduleBackend;
+  /** What drives this computer's screen: given when computer use is on, and only then is the `computer` tool there. */
+  computer?: ComputerHelper;
   allowPrivateNetwork?: boolean;
+  /** Other agents the person set up: the AskAgent tool exists only when there is one. */
+  peers?: PeerBook;
+  /** Everything this conversation is given comes from outside (an agent that is not the person's): the file tools stay in the folder, and what the agent keeps is marked so from the first step. */
+  outside?: true;
   /** Model calls allowed in one turn before the engine stops (default 60). */
   maxSteps?: number;
   /** Heartbeat interval while working, ms (default 15000; 0 disables). */
@@ -113,6 +136,8 @@ export interface EngineOptions {
   search?: { url?: string };
   /** The service that fetches and searches the web for a session that has no network of its own. */
   webProxy?: WebProxy;
+  /** What can hear, speak, draw or look at media here (see media/media.ts); without it the tools of media are not offered. */
+  media?: Media;
   /** The skills in effect, read again each turn so a new one is seen without a restart. */
   skills?: () => SkillInfo[];
   /** Commands the person runs around what the agent does. */
@@ -123,6 +148,8 @@ export interface EngineOptions {
   rules?: Rules;
   /** Where notes are kept between conversations. */
   memory?: MemoryPaths;
+  /** Notes that fill themselves after a turn that ended well: `rules` (default) proposes what the person stated outright, `model` adds one bounded call through this provider, `off` never. */
+  memoryExtract?: "off" | "rules" | "model";
   /** What a command may not inherit from this program's environment (see child-env.ts). */
   env?: EnvPolicy;
   /** Where background commands keep their output and the record a restart finds them by; without it nothing is taken back after a restart. */
@@ -160,10 +187,7 @@ const ALIASES: Record<string, string> = { ...WEB_ALIASES, bash: "Bash", shell: "
 const squash = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 /** Tools that are named in the prompt, without their definitions, when the request has not brought them in. */
-const EXTRA = new Set(["WebSearch", "WebFetch", "Agent", "Remember", "Recall", "SkillManage", "TodoWrite"]);
-
-/** Tools whose results are text somebody else wrote. */
-const WEB_TOOLS = new Set(["WebSearch", "WebFetch", "Browser"]);
+const EXTRA = new Set(["WebSearch", "WebFetch", "Agent", "Remember", "Recall", "SkillManage", "TodoWrite", "Schedule", "Transcribe", "Speak", "MakeImage", "MakeVideo", "LookAt", "Watch", COMPUTER_TOOL, ASK_AGENT_TOOL_NAME]);
 
 /** A context window this small, or smaller, marks a model that needs a lighter touch. */
 export const SMALL_WINDOW = 40_000;
@@ -180,7 +204,7 @@ const HELPER_SECONDS = 600;
 /** What every helper is told about its answer: the one who asked reads only that. */
 const HELPER_RULE = "Answer with what you found, with file paths and line numbers. No preamble and no list of what you did.";
 /** Tools a helper never has: it cannot ask the person, keep a list of its own or start helpers. */
-const NOT_FOR_HELPERS = new Set([AGENT_TOOL_NAME, ASK_TOOL_NAME, TODO_TOOL_NAME]);
+const NOT_FOR_HELPERS = new Set([AGENT_TOOL_NAME, ASK_TOOL_NAME, TODO_TOOL_NAME, COMPUTER_TOOL, ASK_AGENT_TOOL_NAME]);
 
 const asParts = (q: Queued): string | Part[] => {
   const text = [q.text, q.attached].filter(Boolean).join("\n\n");
@@ -211,11 +235,17 @@ export class Engine implements AgentEngine {
   readonly #o: Required<Pick<EngineOptions, "provider" | "cwd" | "window" | "emit" | "maxSteps" | "allowPrivateNetwork">> & EngineOptions;
   readonly #tools: Tool[];
   /** The tools that are on: what is offered, named or handed to a helper. */
-  get #on(): Tool[] { const on = this.#o.toolOn; return on ? this.#tools.filter((t) => on(t.name)) : this.#tools.filter((t) => !t.experimental); }
+  get #on(): Tool[] {
+    const on = this.#o.toolOn, media = this.#o.media;
+    // A tool of media is on only where something can do its work: a computer with nothing set up is never offered it.
+    return (on ? this.#tools.filter((t) => on(t.name)) : this.#tools.filter((t) => !t.experimental)).filter((t) => !t.needs || media?.has(t.needs));
+  }
   readonly #disposers: (() => void)[] = [];
   /** What tools keep for the conversation (see `ToolContext.keep`). */
   readonly #kept = new Map<string, { close(): void }>();
   #loading: Promise<void>[] = [];
+  /** The connected programs, for the prompts a person may pick. */
+  readonly #connections: McpPrompts[] = [];
   readonly #approvals = new ApprovalBroker();
   readonly #questions = new QuestionBroker();
   /** Questions nobody answered in time, by id: an answer that comes later is told to the model as a message. */
@@ -237,7 +267,8 @@ export class Engine implements AgentEngine {
   #messages: Message[] = [];
   #mode: PermMode = "auto";
   /** Text from the web has come into this turn: what the agent saves from here on is marked as such. */
-  #webSeen = false;
+  readonly #outside = new Outside();
+  readonly #codeOffer: CodeOffer;
   get #kind(): SessionKind { return this.#o.kind ?? "agent"; }
   #effort: Effort | undefined;
   #provider: Provider;
@@ -246,7 +277,11 @@ export class Engine implements AgentEngine {
   /** The files this conversation has read or written, which the tools that change files check. */
   readonly #files = new FileState();
   /** Pictures a tool handed over this step: they reach the model in a message after the results. */
-  #pictures: Part[] = [];
+  #pictures: { part: Part; call: string }[] = [];
+  /** What the saved conversation keeps instead of a result that is for the model only (a capture of the screen). */
+  readonly #keptOut = new Map<Message, string>();
+  /** The note of each such result of the step now running, by the call that made it. */
+  readonly #notes = new Map<string, string>();
   #persona: string | undefined;
   #reference: string | undefined;
   #model: string | undefined;
@@ -261,6 +296,10 @@ export class Engine implements AgentEngine {
   #turnTokens: TurnTokens = { in: 0, out: 0, calls: 0 };
   /** The first message of the session has been through the hooks. */
   #hooked = false;
+  /** How many messages were already looked through for facts worth a note. */
+  #learnedTo = 0;
+  /** The last turn was started by a stop hook asking for another round. */
+  #stopHooked = false;
   #cancelled = false;
   /** Kinds of action the person said not to ask about again, until this engine closes. */
   readonly #allowed = new Set<string>();
@@ -271,6 +310,8 @@ export class Engine implements AgentEngine {
   #wakeTimer: ReturnType<typeof setTimeout> | undefined;
   /** The secrets this conversation has met in files and commands, behind the marks that stand for them. */
   readonly #vault = new Vault();
+  /** Secrets the person typed in their own messages, which of them a tool call has used, and which they were told about. */
+  readonly #typed = new Set<string>();
   readonly #shell: ShellState = {};
   /** Tools the model has called, which stay offered for the rest of the conversation even when the request that brought them is long past. */
   readonly #called = new Set<string>();
@@ -284,6 +325,7 @@ export class Engine implements AgentEngine {
 
   constructor(opts: EngineOptions) {
     this.#o = { maxSteps: 60, allowPrivateNetwork: false, ...opts };
+    this.#codeOffer = new CodeOffer(opts.codeOffer?.after, opts.codeOffer?.mode === "always");
     this.#provider = retrying(opts.provider, opts.retry);
     this.#window = opts.window;
     this.#vision = opts.vision;
@@ -292,7 +334,8 @@ export class Engine implements AgentEngine {
     this.#reference = opts.reference;
     this.#model = opts.switcher?.current;
     this.#efforts = opts.switcher?.efforts ?? opts.efforts;
-    this.#tools = profileTools(opts.kind ?? "agent", opts.tools ?? defaultTools({ applyPatch: opts.applyPatch }), { sandboxed: opts.sandboxed === true }).map((t) => (t.name === AGENT_TOOL_NAME && opts.agents?.length ? agentTool(opts.agents) : t));
+    this.#tools = profileTools(opts.kind ?? "agent", [...(opts.tools ?? defaultTools({ applyPatch: opts.applyPatch })), ...(opts.computer && !opts.tools?.some((t) => t.name === COMPUTER_TOOL) ? [computer] : [])], { sandboxed: opts.sandboxed === true }).map((t) => (t.name === AGENT_TOOL_NAME && opts.agents?.length ? agentTool(opts.agents) : t));
+    if (opts.peers?.names.length && (opts.kind ?? "agent") === "agent") this.#tools.push(askAgentTool(opts.peers.names));
     this.sessionId = opts.sessionId ?? crypto.randomUUID();
     this.#jobs = new Jobs((e) => this.#emit(e), Date.now, { session: this.sessionId, ...(opts.jobsDir ? { dir: opts.jobsDir } : {}), env: () => childEnv(process.env, opts.env), onNews: () => this.#wakeNow(), ...(opts.wake ? { wake: true } : {}) });
     if (opts.sessionId && opts.store) { this.#messages = opts.store.load(opts.sessionId) ?? []; this.#restoreTodos(); }
@@ -322,7 +365,24 @@ export class Engine implements AgentEngine {
       case "sessions": return this.#emit({ ev: "sessions", items: this.#o.store?.list?.() ?? [] });
       case "checkpoints": return this.#listCheckpoints();
       case "restore": return this.#restore(cmd.id, cmd.preview === true);
+      case "mcp.prompts": void this.#mcpPrompts(); return;
+      case "mcp.prompt": void this.#mcpPrompt(cmd); return;
     }
+  }
+
+  async #mcpPrompts(): Promise<void> {
+    await Promise.all(this.#loading.splice(0));
+    this.#emit({ ev: "mcp.prompts", items: (await Promise.all(this.#connections.map((c) => c.prompts().catch(() => [])))).flat() });
+  }
+
+  /** A prompt of a connected program, run as the person's own request. */
+  async #mcpPrompt(cmd: Extract<Command, { cmd: "mcp.prompt" }>): Promise<void> {
+    await Promise.all(this.#loading.splice(0));
+    const offers = await Promise.all(this.#connections.map(async (c) => ((await c.prompts().catch(() => [])).some((p) => p.server === cmd.server && p.name === cmd.name) ? c : undefined)));
+    const from = offers.find((c) => c !== undefined);
+    if (!from) { this.#emit({ ev: "error", msg: `No connected program "${cmd.server}" has a prompt "${cmd.name}".` }); return; }
+    try { this.#prompt({ cmd: "prompt", text: await from.prompt(cmd.server, cmd.name, cmd.args ?? {}, this.#closing.signal) }); }
+    catch (e) { this.#emit({ ev: "error", msg: `The prompt "${cmd.name}" could not be fetched: ${e instanceof Error ? e.message : String(e)}` }); }
   }
 
   /** Add tools after the engine has started, such as those of connected programs. They are offered from the next step. `dispose` runs when the engine closes. */
@@ -332,11 +392,15 @@ export class Engine implements AgentEngine {
   }
 
   /** Tools that are still being connected. The first step of the next turn waits for them, so no turn starts without tools that are about to arrive. Programs that fail are reported as errors, and the rest go on. */
-  loadTools(load: Promise<{ tools: Tool[]; close(): void; problems?: { server: string; reason: string }[] }>): void {
+  loadTools(load: Promise<{ tools: Tool[]; close(): void; problems?: { server: string; reason: string; signin?: true }[] } & Partial<McpPrompts>>): void {
     this.#loading.push(load.then((c) => {
       if (this.#closing.signal.aborted) { attempt(() => c.close()); return; }
       this.addTools(c.tools, () => c.close());
-      for (const p of c.problems ?? []) this.#emit({ ev: "notice", msg: `The connected program "${p.server}" could not be used: ${p.reason}` });
+      if (c.prompts && c.prompt) this.#connections.push({ prompts: c.prompts, prompt: c.prompt });
+      for (const p of c.problems ?? []) {
+        this.#emit({ ev: "notice", msg: `The connected program "${p.server}" could not be used: ${p.reason}` });
+        if (p.signin) this.#emit({ ev: "mcp.signin", server: p.server, state: "needed" });
+      }
     }, () => undefined));
   }
 
@@ -352,6 +416,7 @@ export class Engine implements AgentEngine {
   }
 
   close(): void {
+    if (!this.#closing.signal.aborted && this.#hooked) void this.#o.hooks?.end?.({ reason: "closed" }).then((r) => { for (const note of r.notes) this.#emit({ ev: "notice", msg: note }); }).catch(() => undefined);
     this.#closing.abort();
     clearTimeout(this.#wakeTimer);
     this.#cancel();
@@ -616,10 +681,15 @@ export class Engine implements AgentEngine {
       try { await this.#applyWantedModel(); } catch { /* the model stays as it was */ }
       // That may have taken a while (a long conversation is summarised first), and a prompt sent meanwhile was queued: after a turn that
       // ended well it runs as the next turn. After a cancel or an error it is dropped, and every window is told: the person stopped it, or the turn failed.
-      const rest = stop === "end_turn" ? this.#queue.shift() ?? this.#woken() : undefined;
+      if (stop === "end_turn") await this.#learn();
+      // A stop hook may ask for one more round (never twice in a row: it is told when it already did).
+      const ended = this.#o.hooks ? await this.#o.hooks.stop({ reason: stop, active: this.#stopHooked }).catch((): { notes: string[]; block?: string } => ({ notes: [] })) : undefined;
+      for (const note of ended?.notes ?? []) this.#emit({ ev: "notice", msg: note });
+      const again: Queued | undefined = ended?.block && stop === "end_turn" && !this.#stopHooked && !this.#closing.signal.aborted ? { text: `[A hook asks you to continue]\n${ended.block}`, images: [] } : undefined;
+      this.#stopHooked = again !== undefined;
+      const rest = stop === "end_turn" ? this.#queue.shift() ?? again ?? this.#woken() : undefined;
       if (!rest) { this.#busy = false; this.#dropQueue(); }
       this.#emit({ ev: "done", stop });
-      if (this.#o.hooks) void this.#o.hooks.stop({ reason: stop }).then((r) => { for (const note of r.notes) this.#emit({ ev: "notice", msg: note }); }).catch(() => undefined);
       if (rest) { this.#running = this.#turn(rest); await this.#running; }
     }
   }
@@ -650,13 +720,39 @@ export class Engine implements AgentEngine {
   }
 
   #take(q: Queued, startsTurn = false): void {
-    if (startsTurn) { this.#asked = 0; this.#webSeen = false; this.#turnQid = q.qid; this.#turnTokens = { in: 0, out: 0, calls: 0 }; }
+    for (const v of secretsIn(q.text)) this.#typed.add(v);
+    if (startsTurn) { this.#codeOffer.begin(q.text); this.#asked = 0; this.#outside.reset(); if (this.#o.outside === true) this.#outside.note(""); this.#turnQid = q.qid; this.#turnTokens = { in: 0, out: 0, calls: 0 }; }
     if (startsTurn && this.#kind === "agent") this.#checkpoint = attempt(() => this.#o.checkpoints?.begin(q.text || "Message", [this.#o.cwd, ...this.#written]));
     if (q.qid) {
       this.#emit({ ev: "user", qid: q.qid, text: q.text, ...(q.images.length ? { images: q.images.length } : {}), ...(q.files?.length ? { files: q.files } : {}) });
       this.#emit({ ev: "taken", qid: q.qid });
     }
     this.#messages.push({ role: "user", content: asParts(q) });
+  }
+
+  /**
+   * After a turn that ended well, the person's own words of the turn are looked through for lasting facts (see memory-extract.ts). Each
+   * goes the way a note the agent keeps does: written, marked as the agent's own, or, in `ask` mode, kept for the person to accept.
+   */
+  async #learn(): Promise<void> {
+    const how = this.#o.memoryExtract ?? "rules", paths = this.#o.memory;
+    const from = this.#learnedTo;
+    this.#learnedTo = this.#messages.length;
+    if (how === "off" || !paths || this.#kind === "chat" || this.#mode === "plan") return;
+    const said = this.#messages.flatMap((m, at) => (at < from || m.role !== "user" ? [] : [{ n: at + 1, text: (typeof m.content === "string" ? m.content : (m.content ?? []).map((p) => (p.type === "text" ? p.text : "")).join(" ")).split("\n\n[Added by the user's hook]")[0]! }])).filter((m) => m.text.trim());
+    if (!said.length) return;
+    try {
+      const found = extractByRules(said);
+      if (how === "model") for (const f of await extractByModel((system, user, signal) => this.#provider.complete(system, user, signal), said.map((m) => m.text))) if (!found.some((x) => x.text.toLowerCase() === f.text.toLowerCase())) found.push(f);
+      const today = (this.#o.now?.() ?? new Date()).toISOString().slice(0, 10);
+      let waiting = false;
+      for (const f of found) {
+        const result = keep(paths, { action: "add", scope: f.scope, text: f.text }, { today, origin: "self", stage: this.#mode === "ask", source: "message", n: f.n ?? said.at(-1)!.n });
+        if (result.startsWith("Remembered")) this.#emit({ ev: "notice", msg: `Saved to memory: ${f.text}` });
+        else if (result.startsWith("Not kept yet")) waiting = true;
+      }
+      if (waiting) this.#emit(pendingEvent(paths));
+    } catch { /* a note that fills itself is a convenience: it never ends a turn badly */ }
   }
 
   /** What the person wrote last. */
@@ -672,6 +768,7 @@ export class Engine implements AgentEngine {
 
   async #steps(): Promise<void> {
     if (this.#loading.length) await Promise.all(this.#loading.splice(0));
+    await this.#o.media?.refresh();
     for (let step = 0; step < this.#o.maxSteps; step++) {
       if (this.#cancelled) return;
       if (shouldCompact(this.#lastContext, this.#window)) await this.#compact();
@@ -679,17 +776,17 @@ export class Engine implements AgentEngine {
 
       const small = this.#window <= SMALL_WINDOW;
       const skills = modelSkills(attempt(() => this.#o.skills?.()) ?? []);
-      const offeredNow = toolsFor(this.#mode, this.#on, { small, userText: this.#userText(), jobs: this.#jobs.running, steps: step, chat: this.#kind === "chat", typable: this.#jobs.typable, skills: skills.length, recall: this.#o.recall !== undefined });
+      const offeredNow = toolsFor(this.#mode, this.#on, { small, userText: this.#userText(), jobs: this.#jobs.running, steps: step, chat: this.#kind === "chat", typable: this.#jobs.typable, skills: skills.length, recall: this.#o.recall !== undefined, memory: this.#o.memory !== undefined, schedule: this.#o.schedule !== undefined, computer: this.#o.computer !== undefined, code: this.#codeOffer.offered });
       // A tool the model has used stays offered. Of the others, the ones that are not offered are named in the prompt, and a call to one of
       // them is run, not refused: the words that bring a tool in (the web, a helper) are a guess about the request, and a guess can be wrong.
-      const allowedNow = (t: Tool): boolean => this.#mode !== "plan" || t.readOnly;
+      const allowedNow = (t: Tool): boolean => this.#mode !== "plan" || t.readOnly || t.inPlan === true;
       const tools = [...offeredNow, ...this.#on.filter((t) => this.#called.has(t.name) && allowedNow(t) && !offeredNow.some((o) => o.name === t.name))];
       const news = this.#jobs.news();
       const finished = news.flatMap(jobLines);
       // Named only where they can work: earlier conversations, and skills the agent may change, exist only in some places.
-      const usable = (t: Tool): boolean => (t.name === "Recall" ? this.#o.recall !== undefined : t.name === "SkillManage" ? this.#o.skillBook !== undefined && this.#kind !== "chat" : true);
+      const usable = (t: Tool): boolean => (t.name === "Recall" ? this.#o.recall !== undefined : t.name === "Remember" ? this.#o.memory !== undefined : t.name === "SkillManage" ? this.#o.skillBook !== undefined && this.#kind !== "chat" : t.name === "Schedule" ? this.#o.schedule !== undefined : t.name === COMPUTER_TOOL ? this.#o.computer !== undefined : true);
       const also = this.#on.filter((t) => EXTRA.has(t.name) && usable(t) && allowedNow(t) && !tools.some((o) => o.name === t.name)).map((t) => t.name);
-      const instructions = attempt(() => this.#o.instructions?.());
+      const instructions = attempt(() => this.#o.instructions?.({ userText: this.#lastUserText() }));
       const written = new TextToolCalls(Object.fromEntries(tools.map((t) => [t.name, t.parameters as { properties?: Record<string, { type?: string }> }])), `text${this.#messages.length}_`);
       let thinkingSince: number | undefined;
       const endThought = (): void => { if (thinkingSince !== undefined) { this.#emit({ ev: "thought_end", ms: Date.now() - thinkingSince }); thinkingSince = undefined; } };
@@ -747,7 +844,7 @@ export class Engine implements AgentEngine {
       const together = reply.calls.length > 1 && reply.calls.every((c) => { const t = tools.find((x) => x.name === c.name); return t?.readOnly === true && !writesLater(c); });
       if (together) {
         const outputs = await Promise.all(reply.calls.map((call) => (this.#cancelled ? "[interrupted]" : this.#runTool(call, tools))));
-        reply.calls.forEach((call, i) => this.#messages.push({ role: "tool", toolCallId: call.id, content: this.#toolMessage(outputs[i]!) }));
+        reply.calls.forEach((call, i) => this.#answer(call, outputs[i]!));
       } else {
         // The ones that wait for their turn are shown as waiting; any that never get it (the turn was stopped) are shown as skipped.
         for (const call of reply.calls.slice(1)) { const input = parseLenient(call.arguments); this.#emit({ ev: "tool", id: call.id, name: call.name, status: "running", queued: true, ...(input ? { input } : {}) }); }
@@ -764,10 +861,13 @@ export class Engine implements AgentEngine {
             continue;
           }
           const output = await this.#runTool(call, tools);
-          this.#messages.push({ role: "tool", toolCallId: call.id, content: this.#toolMessage(output) });
+          this.#answer(call, output);
         }
       }
-      if (this.#pictures.length) this.#messages.push({ role: "user", content: [{ type: "text", text: "The picture from the tool result above:" }, ...this.#pictures.splice(0)] });
+      const note = this.#codeOffer.note();
+      const last = this.#messages.at(-1);
+      if (note && last?.role === "tool" && this.#mode !== "plan" && this.#on.some((t) => t.name === EXECUTE_CODE_TOOL)) last.content = `${last.content}\n${note}`;
+      this.#showPictures();
       // A message sent while the agent worked is folded in at this step boundary.
       const steer = this.#cancelled ? undefined : this.#queue.shift();
       if (steer) this.#take(steer);
@@ -784,11 +884,17 @@ export class Engine implements AgentEngine {
     this.#prompt({ cmd: "prompt", text: `You asked, and the person has answered now:\n${answersText(late, answers)}` });
   }
 
+  /** Tells the notification hooks that the agent waits for the person. */
+  #notify(kind: "approval" | "question", message: string): void {
+    void this.#o.hooks?.notify?.({ kind, message }).then((r) => { for (const note of r.notes) this.#emit({ ev: "notice", msg: note }); }).catch(() => undefined);
+  }
+
   /** Asks the person to allow something: through this engine's own window, or, for a helper, through the engine that started it. */
   #approve(ask: ApprovalAsk): Promise<{ optionId: string; input?: string }> {
     if (this.#o.escalate) return this.#o.escalate(ask);
     const { id, answer } = this.#approvals.open();
     this.#emit({ ev: "approval", id, ...ask });
+    this.#notify("approval", ask.title);
     return answer;
   }
 
@@ -799,6 +905,7 @@ export class Engine implements AgentEngine {
     this.#asked++;
     const { id, answer } = this.#questions.open();
     this.#emit({ ev: "question", id, questions, tool });
+    this.#notify("question", questions[0]?.question ?? "The agent has a question");
     const wait = this.#o.askWaitMs ?? DEFAULT_ASK_WAIT_S * 1000;
     const timer = wait > 0 ? setTimeout(() => { this.#expired.set(id, questions); for (const old of [...this.#expired.keys()].slice(0, -20)) this.#expired.delete(old); this.#questions.close(id); }, wait) : undefined;
     const stop = (): void => this.#questions.close(id);
@@ -823,7 +930,38 @@ export class Engine implements AgentEngine {
   }
 
   /** What the model reads of a tool's result: after some steps without touching an unfinished task list, a reminder is added. */
-  #toolMessage(output: string): string {
+  /** The answer of a tool call joins the conversation. A result for the model only replaces the one before it: a capture is stale as soon as the next is taken. */
+  #answer(call: ToolCall, output: string): void {
+    const note = this.#notes.get(call.id);
+    if (note) this.#forgetCaptures();
+    const message: Message = { role: "tool", toolCallId: call.id, content: this.#toolMessage(output, call.name) };
+    this.#messages.push(message);
+    if (note) this.#keptOut.set(message, note);
+  }
+
+  #forgetCaptures(): void {
+    for (const [message, note] of this.#keptOut) {
+      const at = this.#messages.indexOf(message);
+      if (at >= 0) this.#messages[at] = { ...message, content: note };
+    }
+    this.#keptOut.clear();
+  }
+
+  /** The pictures tools gave, as one message after the step's answers; those of a result for the model only are a message of their own. */
+  #showPictures(): void {
+    const all = this.#pictures.splice(0);
+    for (const own of [false, true]) {
+      const group = all.filter((p) => this.#notes.has(p.call) === own);
+      if (!group.length) continue;
+      const message: Message = { role: "user", content: [{ type: "text", text: "The picture from the tool result above:" }, ...group.map((p) => p.part)] };
+      this.#messages.push(message);
+      if (own) this.#keptOut.set(message, [...new Set(group.map((p) => this.#notes.get(p.call)!))].join(" "));
+    }
+    this.#notes.clear();
+  }
+
+  #toolMessage(output: string, tool: string): string {
+    this.#codeOffer.count(tool, output);
     if (this.#sinceTodo < STALE_AFTER_STEPS || !this.#todos.some((e) => e.status !== "completed")) return output;
     const steps = this.#sinceTodo;
     this.#sinceTodo = 0;
@@ -906,6 +1044,7 @@ export class Engine implements AgentEngine {
       ...(this.#o.instructions ? { instructions: this.#o.instructions } : {}),
       ...(this.#o.search ? { search: this.#o.search } : {}),
       ...(this.#o.webProxy ? { webProxy: this.#o.webProxy } : {}),
+      ...(this.#o.media ? { media: this.#o.media } : {}),
       ...(this.#o.skills ? { skills: this.#o.skills } : {}),
       emit: (e) => {
         if (e.ev === "text") answer += e.text;
@@ -931,7 +1070,7 @@ export class Engine implements AgentEngine {
     const exact = offered.find((t) => t.name === wanted) ?? offered.find((t) => squash(t.name) === squash(wanted));
     if (exact) return exact;
     const known = this.#on.find((t) => t.name === wanted) ?? this.#on.find((t) => squash(t.name) === squash(wanted));
-    return known && (this.#mode !== "plan" || known.readOnly) ? known : undefined;
+    return known && (this.#mode !== "plan" || known.readOnly || known.inPlan) ? known : undefined;
   }
 
   /**
@@ -968,15 +1107,37 @@ export class Engine implements AgentEngine {
 
     let args = parseLenient(call.arguments);
     if (!args) return fail(`Error: the arguments for ${call.name} must be a JSON object such as ${exampleArguments(tool.parameters)}. Send them again.`);
+    const flaw = (a: Record<string, unknown>): string | undefined => {
+      const missing = (Array.isArray(tool.parameters.required) ? (tool.parameters.required as string[]) : []).filter((k) => a[k] === undefined);
+      if (missing.length) return `Error: ${tool.name} needs ${missing.join(", ")}: ${exampleArguments(tool.parameters)}. Send the call again with it.`;
+      const bad = FILE_WRITERS.has(tool.name) ? this.#vault.restore(textOf(a)).unknown : [];
+      return bad.length ? `Error: ${bad[0]} is not a value you can write: it stands for a secret you were not shown, or one this conversation does not know any more. To keep a value as it is, write the [hidden:N] mark that Read gave for it; otherwise ask the person for the value.` : undefined;
+    };
     if (tool.fixArgs) args = tool.fixArgs(args);
-    const missing = (Array.isArray(tool.parameters.required) ? (tool.parameters.required as string[]) : []).filter((k) => args![k] === undefined);
-    if (missing.length) return fail(`Error: ${tool.name} needs ${missing.join(", ")}: ${exampleArguments(tool.parameters)}. Send the call again with it.`);
-    const bad = FILE_WRITERS.has(tool.name) ? this.#vault.restore(textOf(args)).unknown : [];
-    if (bad.length) return fail(`Error: ${bad[0]} is not a value you can write: it stands for a secret you were not shown, or one this conversation does not know any more. To keep a value as it is, write the [hidden:N] mark that Read gave for it; otherwise ask the person for the value.`);
+    const problem = flaw(args);
+    if (problem) return fail(problem);
     emit({ ev: "tool", id: call.id, name: tool.name, status: "running", input: this.#shown(args) });
 
+    // Hooks come before the mode is applied: one that changes the input is judged on the changed call, and one can only stop the call or ask about it, never let it past the mode.
+    let hookAsk: string | undefined, hookContext: string | undefined;
+    if (this.#o.hooks) {
+      const before = await this.#o.hooks.pre({ tool: tool.name, input: args }, this.#abort.signal).catch((): PreVerdict => ({ notes: [] }));
+      for (const note of before.notes) this.#emit({ ev: "notice", msg: note });
+      if (before.block) return fail(`Blocked by a hook: ${before.block}`, "blocked");
+      if (before.updatedInput) {
+        const changed = tool.fixArgs ? tool.fixArgs({ ...args, ...before.updatedInput }) : { ...args, ...before.updatedInput };
+        const wrong = flaw(changed);
+        if (wrong) return fail(`Blocked by a hook: it changed the input to something ${tool.name} cannot take. ${wrong}`, "blocked");
+        args = changed;
+        emit({ ev: "tool", id: call.id, name: tool.name, status: "running", input: this.#shown(args) });
+      }
+      hookAsk = before.ask;
+      hookContext = before.context;
+    }
+
     // What a mode means for this call is decided in one place for every engine.
-    const judged = judge({ mode: this.#mode, tool, args, cwd: this.#o.cwd, rules: this.#o.rules, allowed: this.#allowed, knownUrl: (u) => this.#knownUrl(u), readable: this.#readable() });
+    const judgedByMode = judge({ mode: this.#mode, tool, args, cwd: this.#o.cwd, rules: this.#o.rules, allowed: this.#allowed, knownUrl: (u) => this.#knownUrl(u), readable: this.#readable(), outside: this.#outside });
+    const judged: Judgement = hookAsk && judgedByMode.kind === "go" ? { kind: "ask", scope: approvalScope(tool.name, args, this.#o.cwd), strange: false } : judgedByMode;
     if (judged.kind === "stop") return fail(judged.message, "blocked");
     if (judged.kind === "ask") {
       const { scope, risk, strange } = judged;
@@ -985,7 +1146,7 @@ export class Engine implements AgentEngine {
         const change = approvalChange(tool.name, this.#shown(args));
         // A command can be changed by the person before it is allowed.
         const editable = tool.name === "Bash" && typeof args.command === "string" ? this.#vault.hide(args.command).text : undefined;
-        const given = await this.#approve({ title: this.#vault.hide(strange ? `Open an address that was not in your request: ${String(args.url)}` : attempt(() => tool.title(args!)) ?? `Run ${tool.name}`).text, options: approvalOptions(scope.phrase, editable), tool: call.id, ...(change ? { change } : {}), ...(risk ? { risk: risk.reason } : {}) });
+        const given = await this.#approve({ title: this.#vault.hide(withOrigin(strange ? `Open an address that was not in your request: ${String(args.url)}` : attempt(() => tool.title(args!)) ?? `Run ${tool.name}`, judged.copied)).text, options: approvalOptions(scope.phrase, editable), tool: call.id, ...(change ? { change } : {}), ...(risk ? { risk: risk.reason } : hookAsk ? { risk: `A hook asks first: ${hookAsk}` } : {}) });
         if (given.optionId === ALLOW_ALWAYS) for (const k of scope.keys ?? [scope.key]) this.#allowed.add(k);
         else if (given.optionId === EDIT && editable !== undefined && given.input?.trim()) {
           // What the person typed is held to the same limits as anything else, and shown as the step's new input.
@@ -1004,11 +1165,6 @@ export class Engine implements AgentEngine {
         }
       }
     }
-    if (this.#o.hooks) {
-      const before = await this.#o.hooks.pre({ tool: tool.name, input: args }, this.#abort.signal).catch(() => ({ notes: [] as string[], block: undefined }));
-      for (const note of before.notes) this.#emit({ ev: "notice", msg: note });
-      if (before.block) return fail(`Blocked by a hook: ${before.block}`, "blocked");
-    }
     if (this.#abort.signal.aborted) return fail("[interrupted]", "stopped");
     if (!tool.readOnly) this.#beforeWrite(tool.name, args);
     // How long it took is how long it ran, not how long the person took to answer.
@@ -1020,23 +1176,33 @@ export class Engine implements AgentEngine {
     // What a running command prints is made safe as it arrives, before it reaches an event.
     const safe = new Redactor();
     const live = (raw: string): void => { const chunk = safe.push(raw); if (!chunk || sent > LIVE_MOST) return; sent += chunk.length; pending += chunk; timer ??= setTimeout(flush, LIVE_EVERY_MS); };
-    let meta: { code?: number | null; truncated?: boolean; timedOut?: boolean; background?: boolean; cached?: boolean } = {};
+    let meta: { code?: number | null; truncated?: boolean; timedOut?: boolean; background?: boolean; cached?: boolean; screen?: ScreenOutcome } = {};
     let output: string;
     try {
-      output = await tool.run(this.#restored(tool.name, args), { cwd: this.#o.cwd, ...(isConfined(this.#kind) ? { root: this.#o.cwd } : {}), signal: this.#abort.signal, emit: (e) => { if (e.ev === "plan") { this.#todos = e.entries; this.#sinceTodo = 0; } this.#emit(e.ev === "plan" ? { ...e, ...(this.#turnQid ? { qid: this.#turnQid } : {}), tool: call.id } : e); }, ask: (q, s) => this.#askPerson(q, s, call.id), live, report: (m) => { meta = { ...meta, ...m }; }, allowPrivateNetwork: this.#o.allowPrivateNetwork, window: this.#window, shell: this.#shell, jobs: this.#jobs, env: childEnv(process.env, this.#o.env), ...(this.#o.backend ? { backend: this.#o.backend } : {}), ...(this.#o.recall ? { recall: this.#o.recall } : {}), ...(this.#o.search ? { search: this.#o.search } : {}), ...(this.#o.webProxy ? { webProxy: this.#o.webProxy } : {}), ...(this.#o.skills ? { skills: this.#o.skills } : {}), ...(this.#o.memory ? { memory: this.#o.memory } : {}), helper: (task, signal) => this.#delegate(call.id, task, signal), files: this.#files, show: (p) => { this.#pictures.push(p); }, ...(this.#vision !== undefined ? { vision: this.#vision } : {}), mode: this.#mode, ...(this.#webSeen ? { untrusted: true } : {}), ...(this.#o.skillBook ? { skillBook: this.#o.skillBook } : {}), ...(this.#o.skillApproval ? { skillApproval: this.#o.skillApproval } : {}), call: this.#within(call, offered), keep: (key, make) => { let v = this.#kept.get(key); if (!v) { v = make(); this.#kept.set(key, v); } return v as ReturnType<typeof make>; } });
+      output = await tool.run(this.#restored(tool.name, args), { cwd: this.#o.cwd, ...(isConfined(this.#kind) || this.#o.outside ? { root: this.#o.cwd } : {}), signal: this.#abort.signal, emit: (e) => { if (e.ev === "plan") { this.#todos = e.entries; this.#sinceTodo = 0; } this.#emit(e.ev === "plan" ? { ...e, ...(this.#turnQid ? { qid: this.#turnQid } : {}), tool: call.id } : e); }, ask: (q, s) => this.#askPerson(q, s, call.id), live, report: (m) => { meta = { ...meta, ...m }; }, allowPrivateNetwork: this.#o.allowPrivateNetwork, window: this.#window, shell: this.#shell, jobs: this.#jobs, env: childEnv(process.env, this.#o.env), credentials: () => ({ secrets: this.#secrets(), origins: this.#named() }), ...(this.#o.backend ? { backend: this.#o.backend } : {}), ...(this.#o.recall ? { recall: this.#o.recall } : {}), ...(this.#o.peers ? { peers: this.#o.peers } : {}), ...(this.#o.schedule ? { schedule: this.#o.schedule } : {}), ...(this.#o.search ? { search: this.#o.search } : {}), ...(this.#o.computer ? { computer: this.#o.computer } : {}), outside: (text) => this.#outside.note(text), ...(this.#o.media ? { media: this.#o.media } : {}), ...(this.#o.webProxy ? { webProxy: this.#o.webProxy } : {}), ...(this.#o.skills ? { skills: this.#o.skills } : {}), ...(this.#o.memory ? { memory: this.#o.memory } : {}), helper: (task, signal) => this.#delegate(call.id, task, signal), files: this.#files, show: (p) => { this.#pictures.push({ part: p, call: call.id }); }, keepOut: (note) => { this.#notes.set(call.id, note); }, ...(this.#vision !== undefined ? { vision: this.#vision } : {}), mode: this.#mode, ...(this.#outside.seen ? { untrusted: true } : {}), ...(this.#o.skillBook ? { skillBook: this.#o.skillBook } : {}), ...(this.#o.skillApproval ? { skillApproval: this.#o.skillApproval } : {}), call: this.#within(call, offered), keep: (key, make) => { let v = this.#kept.get(key); if (!v) { v = make(); this.#kept.set(key, v); } return v as ReturnType<typeof make>; } });
     } catch (e) { output = `Error: ${e instanceof Error ? e.message : String(e)}`; }
     clearTimeout(timer);
     flush();
     // Whatever a tool gave, no more than the window can spare reaches the model.
     if (tool.name === "Read" || tool.name === "Grep" || FILE_WRITERS.has(tool.name)) output = this.#unseen(output);
+    else if (tool.name === COMPUTER_TOOL) output = this.#vault.hide(output).text;
+    const note = this.#notes.get(call.id);
     if (!nested) output = withinBudget(tool.name, output, this.#window);
-    if (WEB_TOOLS.has(tool.name)) this.#webSeen = true;
+    // Text somebody else wrote is framed here, once, whatever tool brought it; an error is the tool's own words.
+    if (tool.fromOutside) {
+      if (!output.startsWith("Error:")) output = untrusted(sourceOf(tool.name), output);
+      this.#outside.note(output);
+    }
     const stopped = this.#abort.signal.aborted || output.endsWith("[interrupted]");
     const outcome: ToolOutcome | undefined = meta.timedOut ? "timeout" : stopped ? "stopped" : meta.background ? "background" : undefined;
     const failed = output.startsWith("Error:") || outcome === "timeout" || outcome === "stopped";
-    emit({ ev: "tool", id: call.id, name: tool.name, status: failed ? "error" : "done", output, startedAt: t0, ms: Date.now() - t0, ...(meta.code !== undefined ? { code: meta.code } : {}), ...(meta.truncated ? { truncated: true as const } : {}), ...(meta.cached ? { cached: true as const } : {}), ...(outcome ? { outcome } : {}) });
-    if (this.#o.hooks) for (const note of (await this.#o.hooks.post({ tool: tool.name, input: args, output }, this.#abort.signal).catch(() => ({ notes: [] as string[] }))).notes) this.#emit({ ev: "notice", msg: note });
-    return output;
+    emit({ ev: "tool", id: call.id, name: tool.name, status: failed ? "error" : "done", output: note ?? output, startedAt: t0, ms: Date.now() - t0, ...(meta.code !== undefined ? { code: meta.code } : {}), ...(meta.truncated ? { truncated: true as const } : {}), ...(meta.cached ? { cached: true as const } : {}), ...(meta.screen ? { screen: meta.screen } : {}), ...(outcome ? { outcome } : {}) });
+    if (this.#o.hooks) {
+      const after = await this.#o.hooks.post({ tool: tool.name, input: args, output: note ?? output }, this.#abort.signal).catch((): { notes: string[]; context?: string } => ({ notes: [] }));
+      for (const note of after.notes) this.#emit({ ev: "notice", msg: note });
+      hookContext = [hookContext, after.context].filter(Boolean).join("\n") || undefined;
+    }
+    return hookContext ? `${output}\n\n[Added by the user's hook]\n${hookContext}` : output;
   }
 
   async #compact(manual = false, keep: number = KEEP_TAIL): Promise<boolean> {
@@ -1067,10 +1233,21 @@ export class Engine implements AgentEngine {
     }
   }
 
-  #save(): void { try { this.#o.store?.save(this.sessionId, this.#messages); } catch { /* a full disk must not kill the turn */ } }
+  #save(): void { try { this.#o.store?.save(this.sessionId, this.#keptOut.size ? this.#messages.map((m) => { const note = this.#keptOut.get(m); return note === undefined ? m : { ...m, content: note }; }) : this.#messages); } catch { /* a full disk must not kill the turn */ } }
   /** The arguments of a call as a window or a log may show them: every secret in them is a mark. */
   #shown(args: Record<string, unknown>): Record<string, unknown> {
-    return Object.fromEntries(Object.entries(args).map(([k, v]) => [k, typeof v === "string" ? this.#vault.hide(v).text : v]));
+    const secrets = this.#secrets();
+    return Object.fromEntries(Object.entries(args).map(([k, v]) => [k, typeof v === "string" ? this.#vault.hide(v, secrets).text : v]));
+  }
+
+  /** Every secret this conversation knows: the keys of this computer, and what the person typed. */
+  #secrets(): string[] { return [...new Set([...secretsNow(), ...this.#typed])].sort((a, b) => b.length - a.length); }
+
+  /** The sites the person named in their messages (scheme, host, port): a login they gave goes to these and to no other. */
+  #named(): string[] {
+    const found = new Set<string>();
+    for (const m of this.#messages) if (m.role === "user") for (const o of originsIn(typeof m.content === "string" ? m.content : (m.content ?? []).map((p) => (p.type === "text" ? p.text : "")).join(" "))) found.add(o);
+    return [...found];
   }
 
   /** Whether an address came from the person, a search or a page that was read: only those may be fetched without asking. */

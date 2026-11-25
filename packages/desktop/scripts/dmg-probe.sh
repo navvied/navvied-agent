@@ -82,6 +82,22 @@ attempt() {
   done
 }
 
+# Who has a freshly attached image's device open, sampled for three seconds after it appears: the direct look at the holder, which the
+# counts of failures cannot give (a failure that happens one time in twenty needs hundreds of images to be seen).
+#   watch <label>   leaves "<label>: <program> <samples it was seen in>" lines in $work/holders.txt
+watch() {
+  local img="$work/watch-$1.dmg" dev n
+  hdiutil create -size 50m -fs HFS+ -volname w -ov "$img" >/dev/null 2>&1 || { echo "$1: image could not be made" >>"$work/holders.txt"; return; }
+  dev=$(hdiutil attach -nobrowse -noautoopen "$img" | awk '/^\/dev\/disk/ {print $1; exit}')
+  for n in $(seq 1 30); do sudo lsof -nP "$dev" "${dev/disk/rdisk}" 2>/dev/null | awk 'NR > 1 {print $1}' | sort -u; sleep 0.1; done | sort | uniq -c | awk -v l="$1" '{print l ": " $2 " " $1 " of 30"}' >>"$work/holders.txt"
+  echo "$1: sampled $dev" >>"$work/holders.txt"
+  hdiutil detach "$dev" >/dev/null 2>&1 || hdiutil detach -force "$dev" >/dev/null 2>&1
+  rm -f "$img"
+}
+watch_rounds() { local k; for k in 1 2 3 4 5 6; do watch "$1-$k"; done; }
+: >"$work/holders.txt"
+watch_rounds plain
+
 # As the bundler's own script makes it: the folder copied into a new image, which hdiutil attaches and detaches by itself.
 attempt create plain 'hdiutil create -srcfolder "$stage" -volname probe -fs HFS+ -fsargs "-c c=64,a=16,e=16" -format UDRW "$image"'
 # The same, with the volume told in advance that nothing needs to watch it.
@@ -126,7 +142,13 @@ attempt manual plain 'hdiutil create -size 300m -fs HFS+ -volname probe -ov "$im
 # (it is only stopped, never killed, and started again after) and then with its service removed. A call that hangs is ended after two minutes.
 guarded() { perl -e 'alarm shift; exec @ARGV' 120 "$@"; }
 attempt create-daemon-stopped plain 'sudo pkill -STOP -x storagekitd; echo "storage daemon: $(pgrep -x storagekitd | tr "\n" " ")stopped=$(ps -o stat= -p "$(pgrep -x storagekitd | head -n 1)" 2>/dev/null)" >&2; guarded hdiutil create -srcfolder "$stage" -volname probe -fs HFS+ -fsargs "-c c=64,a=16,e=16" -format UDRW "$image"; code=$?; sudo pkill -CONT -x storagekitd; exit $code'
+sudo pkill -STOP -x storagekitd; watch_rounds stopped; sudo pkill -CONT -x storagekitd
 attempt create-daemon-removed plain 'sudo launchctl bootout system/com.apple.storagekitd 2>&1; echo "storage daemon running: $(pgrep -x storagekitd | tr "\n" " ")(csrutil: $(csrutil status 2>&1 | head -n 1))" >&2; guarded hdiutil create -srcfolder "$stage" -volname probe -fs HFS+ -fsargs "-c c=64,a=16,e=16" -format UDRW "$image"'
+
+watch_rounds removed
+{ echo "daemon now: $(pgrep -x storagekitd | tr '\n' ' ')(empty = gone)"; cat "$work/holders.txt"; } >"$work/holders-summary.txt"
+cat "$work/holders-summary.txt"
+annotate notice "disk image probe: who held the device after it appeared" "$work/holders-summary.txt"
 
 {
   echo "way             images  failed  slowest (s)"

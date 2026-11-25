@@ -1,0 +1,23 @@
+{
+  "id": "mcp-resource-version",
+  "title": "The current version, from a resource of a connected program",
+  "kind": "agent",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun"
+  ],
+  "prompt": "The release notes are a resource of the connected program. Read them and write the current version number, and nothing else, to VERSION.txt.",
+  "check": "bun \"$BENCH_FIXTURES/mcp-depth-check.ts\" resource",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 40,
+  "timeoutSeconds": 600,
+  "mcp": {
+    "ops": {
+      "fixture": "mcp-depth.ts"
+    }
+  }
+}

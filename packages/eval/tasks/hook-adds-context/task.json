@@ -1,0 +1,27 @@
+{
+  "id": "hook-adds-context",
+  "title": "A hook adds the release codename to what the notes show",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "bun",
+    "python3"
+  ],
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Read",
+        "fixture": "hook-codename.ts"
+      }
+    ]
+  },
+  "prompt": "Read NOTES.md, then write the release codename into CODENAME.txt, alone on one line.",
+  "check": "test \"$(tr -d '[:space:]' < CODENAME.txt)\" = \"$(python3 -c \"import hashlib,os; print(hashlib.sha1((os.environ['BENCH_SECRET']+'codename').encode()).hexdigest()[:10])\")\"",
+  "protect": [
+    "README.md",
+    "NOTES.md"
+  ],
+  "maxSteps": 15,
+  "timeoutSeconds": 300
+}

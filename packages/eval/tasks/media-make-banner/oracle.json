@@ -1,0 +1,10 @@
+[
+  {
+    "tool": "MakeImage",
+    "args": {
+      "prompt": "a lighthouse at night",
+      "file_path": "banner.png",
+      "size": "wide"
+    }
+  }
+]

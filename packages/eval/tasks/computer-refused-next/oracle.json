@@ -1,0 +1,4 @@
+[
+  { "tool": "computer", "args": { "action": "capture", "app": "Backup" } },
+  { "tool": "Write", "args": { "file_path": "ANSWER.txt", "content": "Could not read the code. ${result:Next: (.*)}\n" } }
+]

@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { defaultTools } from "@navvied/engine";
+import { Media, computer, defaultTools } from "@navvied/engine";
 import { createHub } from "../src/commands/hub.ts";
 import { pluginStatePath } from "../src/config.ts";
 import { PluginState } from "../src/plugins.ts";
+import { ROW_NEED } from "../src/media-setup.ts";
 import { CATEGORIES, TOOL_ROWS, rowOf } from "../src/tool-table.ts";
 import { ToolUsage, listEntries, switchRow, toolSwitch } from "../src/tools-info.ts";
 import { fakeIO, remove, startMockModel, tempDir, until } from "./helpers.ts";
@@ -42,7 +43,10 @@ describe("one switch for each tool a person knows", () => {
     expect(by("files")).toMatchObject({ category: "work", title: "Files & Search", on: true, state: "on", calls: 0 });
     expect(by("terminal")).toMatchObject({ category: "work", on: true, state: "on", names: ["Bash", "BashOutput", "BashInput", "KillShell"] });
     // The tools of these do not exist yet.
-    for (const id of ["vision", "text-to-speech", "video-generation", "video-analysis", "schedule", "computer-use"]) expect(by(id), id).toMatchObject({ on: true, state: "soon" });
+    // Computer use exists, but only where a helper drives the screen: without one the engine has no such tool and the row says it is unavailable here.
+    expect(by("computer-use")).toMatchObject({ on: true, state: "unavailable-here", names: ["computer"] });
+    // The tools of media have a row each, and wait for something to be set up when nothing says they can work.
+    for (const id of Object.keys(ROW_NEED)) expect(rowOf(by(id).names[0]!)!.id, id).toBe(id);
     // The experimental tool is experimental on every computer, whether or not this program has it in its list: the switch says whether it is used.
     expect(by("code")).toMatchObject({ on: false, state: "experimental" });
     for (const e of entries) expect(e.setup, e.id).toBeUndefined();
@@ -96,16 +100,28 @@ describe("one switch for each tool a person knows", () => {
 
 describe("every tool's state on a computer with a browser and nothing switched", () => {
   test("is the state of the approved Tools screen, tool by tool", () => {
-    const states = Object.fromEntries(listEntries(state(), usage(), defaultTools(), () => undefined).map((e) => [e.id, e.state]));
+    const nothing = new Media({ which: () => undefined });
+    const states = Object.fromEntries(listEntries(state(), usage(), defaultTools(), (row) => (ROW_NEED[row.id] && !nothing.has(ROW_NEED[row.id]!) ? "needs-setup" : undefined)).map((e) => [e.id, e.state]));
     expect(states).toEqual({
       files: "on", terminal: "on", code: "experimental",
       "web-search": "on", "web-fetch": "on", browser: "on",
-      ask: "on", todo: "on", helpers: "on", schedule: "soon",
+      ask: "on", todo: "on", helpers: "on", schedule: "on",
       memory: "on", "session-search": "on", skills: "on",
-      vision: "soon", "speech-to-text": "soon", "text-to-speech": "soon", image: "soon", "video-generation": "soon", "video-analysis": "soon",
-      "computer-use": "soon",
+      vision: "needs-setup", "speech-to-text": "needs-setup", "text-to-speech": "needs-setup", image: "needs-setup", "video-generation": "needs-setup", "video-analysis": "needs-setup",
+      "computer-use": "unavailable-here",
     });
     expect(Object.keys(states)).toHaveLength(20);
+  });
+
+  test("computer use is on once the engine has the tool, waits for a permission when the host says so, and is refused by name when switched off", () => {
+    const s = state();
+    const tools = [...defaultTools(), computer];
+    expect(listEntries(s, usage(), tools).find((e) => e.id === "computer-use")).toMatchObject({ on: true, state: "on" });
+    expect(listEntries(s, usage(), tools, (row) => (row.id === "computer-use" ? "needs-setup" : undefined)).find((e) => e.id === "computer-use")).toMatchObject({ state: "needs-setup" });
+    expect(listEntries(s, usage(), tools, (row) => (row.id === "computer-use" ? "unavailable-here" : undefined)).find((e) => e.id === "computer-use")).toMatchObject({ state: "unavailable-here" });
+    switchRow(s, rowOf("computer")!, false);
+    expect(toolSwitch(s)("computer")).toBe(false);
+    expect(listEntries(s, usage(), tools).find((e) => e.id === "computer-use")).toMatchObject({ on: false, state: "off" });
   });
 
   test("the browser waits for a browser to be found, and says so only then", () => {
@@ -130,6 +146,8 @@ describe("the hub switches one tool at a time and reports every tool", () => {
     await until(() => got.some((e) => e.ev === "tools"));
     expect(last().categories).toEqual(CATEGORIES.map((c) => ({ ...c })));
     expect(last().entries.find((e) => e.id === "memory")).toMatchObject({ on: true, state: "on" });
+    // Nothing is set up for media on this computer: its rows say so and cannot be switched on until it is.
+    for (const id of Object.keys(ROW_NEED)) expect(last().entries.find((e) => e.id === id), id).toMatchObject({ on: true, state: "needs-setup" });
     send({ cmd: "tool.toggle", name: "session-search", enabled: false });
     await until(() => last().entries.find((e) => e.id === "session-search")!.on === false || got.some((e) => e.ev === "error"));
     expect(got.filter((e) => e.ev === "error")).toEqual([]);

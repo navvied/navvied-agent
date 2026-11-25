@@ -1,0 +1,24 @@
+{
+  "id": "browser-login",
+  "title": "Sign in with the login the person gave",
+  "kind": "web",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun",
+    "browser"
+  ],
+  "prompt": "Sign in to the shop at http://127.0.0.1:{port}/login with the email ann@example.com. The password is Zx9!kQ7mPw, and when you are in, write the account code that the account page shows into ANSWER.txt",
+  "check": "bun \"$BENCH_FIXTURES/web-check.ts\" browser-login",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 24,
+  "timeoutSeconds": 600,
+  "setup": "bun \"$BENCH_FIXTURES/start-web.ts\"",
+  "teardown": "bun \"$BENCH_FIXTURES/stop-web.ts\"",
+  "env": {
+    "NAVVIED_ALLOW_PRIVATE_NETWORK": "1"
+  }
+}

@@ -3,6 +3,7 @@
  * whose name says it is (KEY, TOKEN, SECRET, PASSWORD, …), the keys of the configuration (registered by the engine), and what a key
  * looks like whatever it is called (sk-…, ghp_…, AKIA…, a private key block, a Bearer token). They become "[hidden]".
  */
+import { LINK_WORDS, PASSWORD_WORDS } from "./password-words.ts";
 
 const HIDDEN = "[hidden]";
 const NAME = /(KEY|TOKEN|SECRET|PASSW(OR)?D|CREDENTIAL|PRIVATE|AUTH)/i;
@@ -51,6 +52,9 @@ export function redact(text: string, secrets: readonly string[] = secretsNow()):
   const r = new Redactor(secrets);
   return r.push(text) + r.end();
 }
+
+/** Whether the text holds a secret: a key of the configuration, the value of a secret variable, or something shaped like a key. */
+export const holdsSecret = (text: string): boolean => redact(text) !== text;
 
 /**
  * A stream of text, made safe as it arrives. A secret that comes in two pieces is still found: what could be the start of one is held
@@ -131,6 +135,23 @@ const MARK = /\[hidden:(\d+)\]/g;
 
 /** A value that is plainly not a secret: an address, a path, a call, an identifier. */
 const ordinary = (v: string): boolean => /:\/\/|^[./~]|[()<>{}[\]$]/.test(v) || /^[a-z_]+$/.test(v);
+
+const escaped = (w: string): string => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "\\s+");
+const longestFirst = (words: readonly string[]): string[] => [...words].sort((x, y) => y.length - x.length);
+/** A value after a word that says it is a password, in any of the languages of `PASSWORD_WORDS`, as a person writes it in a message ("my password is Zx9!kQ7m"). Not a word of the language: it holds a digit, a symbol or both cases. */
+const SPOKEN = new RegExp(`(?<![\\p{L}\\p{N}])(?:${longestFirst(Object.values(PASSWORD_WORDS).flat()).map(escaped).join("|")})\\s*(?:(?:${longestFirst(LINK_WORDS).map(escaped).join("|")})\\s*)?["'\`]?([^\\s"'\`,;]{6,})`, "giu");
+const looksChosen = (v: string): boolean => /[0-9]|[^A-Za-z]/.test(v) || (/[a-z]/.test(v) && /[A-Z]/.test(v));
+
+/** The secrets in a text a person wrote: what a key looks like, what is assigned to a name that says secret, and a password said in words. */
+export function secretsIn(text: string): string[] {
+  const found = new Set<string>();
+  for (const m of text.matchAll(PEM)) found.add(m[0]);
+  for (const m of text.matchAll(SHAPES)) found.add(m[0]);
+  for (const m of text.matchAll(ASSIGNED)) if (!ordinary(m[3]!)) found.add(m[3]!);
+  // A sentence's full stop or a closing bracket after the value is not known to belong to it: the value is taken both ways.
+  for (const m of text.matchAll(SPOKEN)) if (looksChosen(m[1]!)) { found.add(m[1]!); const bare = m[1]!.replace(/[.!?:)\]]+$/, ""); if (bare !== m[1] && looksChosen(bare)) found.add(bare); }
+  return [...found].filter((v) => v.length >= 6);
+}
 
 export interface Hidden { text: string; /** How many values were put out of sight. */ count: number }
 

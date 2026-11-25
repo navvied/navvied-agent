@@ -101,6 +101,24 @@ The agent can search the web with `WebSearch` and read a page with `WebFetch`. B
 
 An address the model made up is asked about (in Ask and Plan modes; refused in Edits; Auto and Bypass go through): only addresses the person wrote, a search returned or a page that was read are fetched without asking, and allowing a site remembers the site for the session. `NAVVIED_ALLOW_PRIVATE_NETWORK=1` lets the agent reach local and private addresses (for a test server of your own).
 
+## Looking at media, speech, pictures and video
+
+Six tools are offered only where something can do their work, so a computer with nothing set up sees none of them and the Tools list says "Needs setup". `LookAt` (a picture or one page of a PDF) and `Watch` (a video: six frames cut out with ffmpeg) ask a model that sees pictures and return words, so a text-only model can use them; the model is the one named in `media.vision.model`, else the conversation's own when it sees pictures. `Transcribe` turns a sound or video file into text, `Speak` reads a text into a sound file, `MakeImage` and `MakeVideo` make a file from a description. Files go in the project; a file that exists is never replaced unless the call says `overwrite`. Text that comes out of a recording or a picture is framed as text from outside, like a web page.
+
+Engines on this computer come first, then the service for a signed-in computer (`/api/media`, only the kinds it lists as free). Name them in `config.json`; nothing is downloaded, and an engine is offered only while its program and every file it names exist:
+
+```json
+"media": {
+  "stt":   { "bin": "/opt/whisper/whisper-cli", "model": "/opt/whisper/ggml-base.bin", "language": "en" },
+  "tts":   { "engine": "piper", "bin": "/opt/piper/piper", "model": "/opt/piper/en_US-lessac.onnx" },
+  "image": { "bin": "/opt/sd/sd", "model": "/opt/sd/model.safetensors" },
+  "vision": { "model": "the name of a model entry that sees pictures" },
+  "ffmpeg": "/usr/bin/ffmpeg", "pdftoppm": "/usr/bin/pdftoppm"
+}
+```
+
+`stt` is whisper.cpp, `tts` is Piper or (with `"engine": "kokoro"` and a `voices` file) Kokoro, `image` is stable-diffusion.cpp. The programs start with this program's environment without any variable that looks like a key. A provider that costs money is never used.
+
 ## Checkpoints
 
 Before each message the agent works on, navvied saves a git snapshot of the repositories involved (the working tree,
@@ -269,6 +287,16 @@ By default the agent runs commands on this computer. `/tools` (or a page's Tools
 
 Besides `PreToolUse`, `PostToolUse` and `Stop`, `hooks` accepts `UserPromptSubmit` (before a message is taken: exit code 2 stops it and what the command wrote on standard error is shown; what it printed on standard output is added to the message as context), `SessionStart` (the same, only for the first message of a session) and `PreCompact` (before older turns are summarised; the input says whether the person asked for it).
 
+## Hooks that answer in JSON
+
+A hook may also answer with JSON on standard output (exit code 0): `{"decision": "block" | "ask" | "allow", "reason": "…", "updatedInput": {…}, "additionalContext": "…"}`. `block` stops the tool (or the message) and tells the model the reason; `ask` makes the person say yes first, whatever the mode; `allow` changes nothing, because a hook can only lower what the mode allows, never raise it; `updatedInput` replaces keys of the tool's input and the changed call is judged by the mode and the rules again; `additionalContext` is added to what the model reads. Exit code 2 still stops with the standard error as the reason and wins over any JSON. The input has `event`, `session`, `cwd`, `tool`, `input` and, after a tool, `output`, and also `hook_event_name`, `session_id`, `tool_name`, `tool_input` and `tool_response` for scripts written for other agents. More events: `SessionEnd` (the conversation closes), `Notification` (the agent waits for you; `matcher` is `approval` or `question`) and, for `Stop`, a `block` asks the agent for one more round with the reason (once; the input says `stop_hook_active`). A `matcher` of `*` is every tool. A hook starts with the environment a command of the agent starts with: without keys and tokens unless listed under `terminal.env`.
+
+## Plugins
+
+A plugin is a folder with `navvied-plugin.json` (`name`, `version`, `description`, and the `skills`, `agents`, `commands` it brings as lists of names, `hooks` as in the configuration, `mcp` as tool servers) and the files: `skills/<name>/SKILL.md`, `agents/<name>.md`, `commands/<name>.md` (a custom slash command; `$ARGUMENTS` and `$1` to `$9` are filled in), and anything its hooks and servers run (`${NAVVIED_PLUGIN_ROOT}` is its folder). What the manifest lists must be exactly what is in the folder.
+
+`navvied plugin install <folder | .tar.gz | git address[#tag]> [fingerprint]` copies it into the plugin folder next to the configuration file and records the sha-256 of its files in `plugins.lock.json`; nothing in it is run, and it stays off. A fingerprint on the command line must match or nothing is installed. `navvied plugin show <name>` lists what it brings and every command it would run, each with its source; `on` and `off` switch it for the next conversation; `remove` deletes it. Its files are checked against the lock every time it is loaded, and a plugin that changed is not used. A plugin in `.navvied/plugins/<name>` of a project is used only after you accept exactly those files (`navvied plugin accept <name>`, or the accept step of the skills review), and a change asks again. Links, paths that leave the folder, more than 2,000 files, files over 5 MB and archives that unpack over 64 MB are refused.
+
 ## Connected programs on the web
 
 Besides a program started on your computer (`"command"`), a connected program (MCP server) can be one on the web, reached over streamable HTTP:
@@ -278,6 +306,28 @@ Besides a program started on your computer (`"command"`), a connected program (M
 ```
 
 Use `url` or `command`, not both. The headers are sent with every message (a token goes here; the file is kept private). Its tools join navvied's own as `mcp__issues__<tool>`, and are held to the same permission rules as any other tool. A server that cannot be reached, or turns the token down, is reported as a note and the rest carry on.
+
+## Other agents (A2A)
+
+navvied speaks the agent-to-agent protocol (A2A, version 0.3.0 on the wire; answers of version 1.0 are read too), both ways. Both are off until you turn them on.
+
+**Asking another agent.** List the agents in the configuration. A token is never written there: name the environment variable or the private file that holds it.
+
+```json
+"a2a": { "peers": { "docs": { "url": "http://127.0.0.1:9900", "tokenEnv": "DOCS_TOKEN", "timeoutSeconds": 120 } } }
+```
+
+With at least one peer, a model with room is offered the tool `AskAgent` (a small model, when the request names agents or the peer). It sends one message and returns the answer inside a frame that says it is another agent's words, not instructions, plus a `context` to go on with. It is asked about in Ask mode and is not offered in Plan mode. It has no row in the tools list; switch it off by its name. What leaves is scrubbed of keys; a redirect from the peer is not followed.
+
+**Being asked.** `navvied serve --a2a` (or `"a2a": { "serve": true }` with `serve --http`) serves the card at `/.well-known/agent-card.json` and the calls `message/send`, `message/stream`, `tasks/get` and `tasks/cancel` on `127.0.0.1:8788` (`--port`, `--host`). Nobody is let in without a token you made:
+
+```
+navvied a2a add docs        # shown once; the file keeps only a hash
+navvied a2a list
+navvied a2a revoke docs
+```
+
+An agent that asks has no authority here. Its words reach the model framed as another agent's, in a conversation of its own (one per peer and `contextId`; another peer cannot name it). The conversation runs in the mode you set for peers, `"a2a": { "mode": "plan" }` by default (`ask`, `edits` or `auto`; nobody is there to allow a step, so `ask` refuses every change). The agent's file tools stay in the folder it was started in, and it has no memory, notes or standing instructions of yours, cannot save memory or make skills, and cannot ask other agents. Limits, each changeable under `"a2a": { "limits": { … } }`: 64 KB a request, 16,000 characters a message, 30 requests a minute and 2 tasks at once per peer (4 in all), 4 conversations per peer (16 in all) of 20 messages, 10 minutes a task, 32,000 characters an answer, 20 wrong tokens an hour per address. Every exchange is written to `a2a-audit.jsonl` in the state folder, without any token.
 
 ## Helpers of your own
 
@@ -314,6 +364,8 @@ navvied schedule run-due         run what is due, once, and exit
 ```
 
 The schedule is five parts: minute, hour, day of the month, month, day of the week (`*`, a number, `a-b`, `a,b`, and steps such as `*/15`; also `@hourly`, `@daily`, `@weekly`, `@monthly`). Each task runs as `navvied run` in the folder where it was added. Without `--mode auto` it can only read and plan; with it, it may change files, held to your permission rules and the hard limits, with nobody to ask. What it said is kept in `scheduled/<id>/` in navvied's state folder.
+
+The model can make and change these tasks itself with the `Schedule` tool, when a request is about timing and the model is not a small one: a task can run once (`in 20 minutes`, `2026-12-01 09:00`), every so often (`every 2h`, never under a minute), daily or weekly (`weekdays at 9:00`), or on five fields, in a time zone you name. A task made that way reads and plans only unless it is made with mode auto, which you are asked about like any other change. A task that came due while nothing ran starts once and its run says when it was due. A hosted session's tasks are the cloud's instead (see `HOSTED.md`). The tool is switched off with the Schedule row of the tools list.
 
 Tasks run while navvied is open (a line says when one finishes), and a task that came due while nothing was running starts once at the next chance. For tasks to run with navvied closed, call `navvied schedule run-due` from the system's own timer every minute: cron (`* * * * * navvied schedule run-due`), launchd or systemd. `/schedule` in the app lists the tasks.
 

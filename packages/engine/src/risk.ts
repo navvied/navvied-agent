@@ -16,7 +16,7 @@ const risk = (key: string, reason: string, phrase: string): Risk => ({ key: `ris
 const narrow = (target: string): boolean => !!target && !isAbsolute(target) && !/^(~|\$|\.{1,2}$|\.\.\/|\*|\.\/\*)/.test(target) && !target.includes("..") && !/^[*.]+$/.test(target);
 
 /** The subcommand of a git command and what follows it, past options such as `-C dir` and `-c name=value`. */
-function gitParts(w: string[]): { sub: string; rest: string[] } {
+export function gitParts(w: string[]): { sub: string; rest: string[] } {
   let i = 1;
   while (i < w.length && w[i]!.startsWith("-")) i += w[i] === "-C" || w[i] === "-c" ? 2 : 1;
   return { sub: w[i] ?? "", rest: w.slice(i + 1) };
@@ -44,8 +44,8 @@ const contained = (t: string, dyn: boolean): boolean => !dyn && narrow(t) && !t.
 
 /** Where a command writes that is the person's setup or the system's own: a folder every program depends on. */
 const SYSTEM = /^\/(etc|boot|usr|bin|sbin|lib|lib64|System|dev\/(sd|nvme|hd|vd|disk|mmcblk)|proc|sys)(\/|\d|$)/;
-const LAST_ONLY = /^(cp|mv|install|ln|sed|chmod|chown|chgrp|truncate)$/;
-const WRITERS = new Set(["tee", "cp", "mv", "install", "ln", "truncate", "touch", "mkdir", "rm", "rmdir", "chmod", "chown", "chgrp", "sed", "dd"]);
+export const LAST_ONLY = /^(cp|mv|install|ln|sed|chmod|chown|chgrp|truncate)$/;
+export const WRITERS = new Set(["tee", "cp", "mv", "install", "ln", "truncate", "touch", "mkdir", "rm", "rmdir", "chmod", "chown", "chgrp", "sed", "dd"]);
 
 /** The system's own folders on Windows, spelt with `/`: whatever runs the command, PowerShell or cmd writes them like this, and so does Git Bash as `/c/Windows`. A file directly on a drive's root is the system's too (only when it is spelt with its drive letter). */
 const WINDOWS_SYSTEM = /^[a-z]:\/(windows|program files|program files \(x86\)|programdata)(\/|$)/i;

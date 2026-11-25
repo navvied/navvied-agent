@@ -1,0 +1,24 @@
+{
+  "id": "browser-confirm",
+  "title": "Answer the dialog a page opens",
+  "kind": "web",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun",
+    "browser"
+  ],
+  "prompt": "Open http://127.0.0.1:{port}/order in the browser and place the order. A dialog asks you to confirm. Write the order code the page then shows into ANSWER.txt",
+  "check": "bun \"$BENCH_FIXTURES/web-check.ts\" browser-confirm",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 24,
+  "timeoutSeconds": 600,
+  "setup": "bun \"$BENCH_FIXTURES/start-web.ts\"",
+  "teardown": "bun \"$BENCH_FIXTURES/stop-web.ts\"",
+  "env": {
+    "NAVVIED_ALLOW_PRIVATE_NETWORK": "1"
+  }
+}

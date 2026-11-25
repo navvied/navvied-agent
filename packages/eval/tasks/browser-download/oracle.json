@@ -1,0 +1,28 @@
+[
+  {
+    "tool": "Bash",
+    "args": {
+      "command": "cat .bench-port"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "open",
+      "url": "http://127.0.0.1:${result:(\\d+)}/reports"
+    }
+  },
+  {
+    "tool": "Browser",
+    "args": {
+      "action": "click",
+      "ref": "${result:\\[(\\d+)\\] link \"Download the report\"}"
+    }
+  },
+  {
+    "tool": "Bash",
+    "args": {
+      "command": "tail -n 1 downloads/report.csv | cut -d, -f2 > ANSWER.txt"
+    }
+  }
+]

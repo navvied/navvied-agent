@@ -2,8 +2,6 @@ import type { Tool } from "../types.ts";
 import { redact } from "../redact.ts";
 import { clip, num, str } from "./util.ts";
 
-const EARLIER = /\b(earlier|before|previous(ly)?|last time|yesterday|past (conversation|session|chat)s?|(other|another|old|older|last) (conversation|session|chat)s?|we (talked|discussed|decided|did)|you (told|said)|remember when|a while ago)\b/i;
-
 const when = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 const WINDOW_CHARS = 6_000;
 const WINDOW_MESSAGES = 12;
@@ -12,8 +10,8 @@ const WHO: Record<string, string> = { user: "User", assistant: "Assistant" };
 export const recallTool: Tool = {
   name: "Recall",
   readOnly: true,
-  // The words bring it in at once; in any other language it is named in the prompt and a call is run.
-  offeredWhen: ({ recall, userText }) => recall === true && EARLIER.test(userText),
+  // Offered to every model but a small one when there are earlier conversations; a small model has it named in its prompt and a call is run.
+  offeredWhen: ({ recall, small }) => recall === true && !small,
   description: "Search the user's earlier conversations. query: matches, with id and message number. id: read that conversation (around: a message number to read near). Nothing: the latest conversations.",
   parameters: { type: "object", properties: { query: { type: "string" }, id: { type: "string" }, around: { type: "number" }, limit: { type: "number" } } },
   fixArgs: (a) => ({ ...a, query: a.query ?? a.q ?? a.search, id: a.id ?? a.session ?? a.conversation, around: a.around ?? a.message }),

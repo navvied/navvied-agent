@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { ASSUMED, estimateRun, estimateTable } from "../src/ab-estimate.ts";
 import { median, summarizeAb, type AbRun } from "../src/ab-report.ts";
 import { main, orderFor, plan } from "../src/ab.ts";
+import { codeTool } from "../src/world.ts";
 import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const state = mkdtempSync(join(tmpdir(), "navvied-ab-test-"));
@@ -116,6 +117,19 @@ async function quietly<T>(work: () => Promise<T>): Promise<T> {
 }
 
 describe("the dry run, through the real program", () => {
+  test("the auto arm switches the code row on, adds no hint and no offer override, and solves with the scripted model", async () => {
+    const out = join(state, "auto.jsonl");
+    expect(await quietly(() => main(["--dry", "--tasks", "mc-triage-logs", "--repeat", "1", "--arms", "base,auto", "--out", out]))).toBe(0);
+    const rows = readFileSync(out, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as AbRun);
+    expect(rows.map((r) => r.arm).sort()).toEqual(["auto", "base"]);
+    expect(rows.every((r) => r.passed)).toBe(true);
+    const world: Record<string, string> = { HOME: state, XDG_STATE_HOME: state, XDG_CONFIG_HOME: state, NAVVIED_CODE_OFFER: "always" };
+    codeTool(world, true, false);
+    expect(world.NAVVIED_CODE_OFFER).toBeUndefined();
+    codeTool(world, true, true);
+    expect(world.NAVVIED_CODE_OFFER).toBe("always");
+  });
+
   test("both arms solve a task with the scripted model; only the code arm runs a script; nothing is spent", async () => {
     const out = join(state, "dry.jsonl");
     const code = await quietly(() => main(["--dry", "--tasks", "mc-triage-logs", "--repeat", "2", "--out", out]));

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EngineEvent } from "@navvied/protocol";
@@ -26,14 +26,18 @@ const states = (events: EngineEvent[]) => events.filter((e) => e.ev === "job").m
 describe("stopping a command", () => {
   test.skipIf(process.platform === "win32")("it is stopped for the person even when something it started got away and keeps its output open", async () => {
     const { events, jobs } = rig();
-    const job = jobs.start(["sh", "-c", "setsid sleep 7.31 & sleep 30"], dir, "escaper");
-    await wait(300);
-    const at = Date.now();
-    jobs.stop(job.id);
-    await until(() => states(events).includes("stopped"), 6000);
-    expect(Date.now() - at).toBeLessThan(5000);
-    expect(jobs.list()[0]).toMatchObject({ status: "stopped" });
-    Bun.spawnSync(["pkill", "-f", "sleep 7.31"]);
+    const pidFile = join(dir, "escaper.pid");
+    // The escaper lives for ten minutes and holds the output open: the job must be reported as stopped without waiting for it, whatever the clock says.
+    const job = jobs.start(["sh", "-c", `setsid sleep 600 & echo $! > "${pidFile}"; sleep 30`], dir, "escaper");
+    await until(() => existsSync(pidFile) && readFileSync(pidFile, "utf8").trim() !== "", 20_000);
+    const escaper = Number(readFileSync(pidFile, "utf8").trim());
+    const alive = (): boolean => { try { process.kill(escaper, 0); return true; } catch { return false; } };
+    try {
+      jobs.stop(job.id);
+      await until(() => states(events).includes("stopped"), 30_000);
+      expect(alive(), "the job was reported stopped while the escaper still held its output").toBe(true);
+      expect(jobs.list()[0]).toMatchObject({ status: "stopped" });
+    } finally { try { process.kill(escaper, "SIGKILL"); } catch { /* gone */ } }
   });
 });
 

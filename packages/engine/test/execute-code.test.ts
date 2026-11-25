@@ -35,7 +35,7 @@ describe("ExecuteCode is offered only when its switch says so", () => {
 
   test("a switch that says on offers it, and one that says off refuses a call to it by name", async () => {
     let on = true;
-    const r = rig((_q, n) => (n === 1 ? script(HEAD + "print(1)") : { text: "ok" }), { toolOn: (name) => name !== "ExecuteCode" || on });
+    const r = rig((_q, n) => (n === 1 ? script(HEAD + "print(1)") : { text: "ok" }), { toolOn: (name) => name !== "ExecuteCode" || on, codeOffer: { mode: "always" } });
     await r.turn(prompt("one"));
     expect(r.provider.requests.at(-1)!.tools.map((t) => t.name)).toContain("ExecuteCode");
     on = false;

@@ -7,7 +7,7 @@ import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.t
 import { main } from "../src/ab.ts";
 import type { AbRun } from "../src/ab-report.ts";
 import { loadTasks, solutionScript, type Task } from "../src/task.ts";
-import { check, FIXTURES, killProcesses, leftovers, mcpConfig, prepare, scriptEnv, shell } from "../src/workspace.ts";
+import { check, FIXTURES, killProcesses, leftovers, agentConfig, prepare, scriptEnv, shell } from "../src/workspace.ts";
 import { world } from "../fixtures/mc2-data.ts";
 import { drive, solver, type Step } from "../fixtures/mc2-solve.ts";
 
@@ -41,8 +41,8 @@ describe("the second-measurement tasks", () => {
 
   test("a task without a connected program gets no configuration; one with it gets a private file that the run removes", () => {
     const plain = loadTasks(join(import.meta.dir, "../tasks"), ["mc-triage-logs"])[0]!;
-    expect(mcpConfig(plain).env).toEqual({});
-    const config = mcpConfig(tasks[0]!);
+    expect(agentConfig(plain).env).toEqual({});
+    const config = agentConfig(tasks[0]!);
     const path = config.env.NAVVIED_CONFIG!;
     try {
       expect(statSync(path).mode & 0o077).toBe(0);

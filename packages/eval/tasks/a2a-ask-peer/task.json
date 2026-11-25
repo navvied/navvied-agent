@@ -1,0 +1,23 @@
+{
+  "id": "a2a-ask-peer",
+  "title": "Ask the one agent that knows a value, and write what it says",
+  "kind": "agent",
+  "level": 2,
+  "lang": "none",
+  "requires": [
+    "bash",
+    "bun"
+  ],
+  "prompt": "Another agent called docs knows the deployment code. Ask it, and write the code it gives into ANSWER.txt. Do nothing else.",
+  "check": "bun \"$BENCH_FIXTURES/a2a-check.ts\" ask-peer",
+  "protect": [
+    "README.md"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 600,
+  "setup": "bun \"$BENCH_FIXTURES/start-web.ts\" a2a-peer.ts",
+  "teardown": "bun \"$BENCH_FIXTURES/stop-web.ts\"",
+  "a2a": {
+    "docs": "/docs/"
+  }
+}

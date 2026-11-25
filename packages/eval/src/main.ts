@@ -76,7 +76,7 @@ export async function main(argv: string[]): Promise<number> {
       const key = keyFile ? readFileSync(resolve(keyFile), "utf8").trim() : option(rest, "upstream-key")[0];
       const window = String(Number(option(rest, "upstream-window")[0] ?? 100000) || 100000);
       const world = home ? agentWorld(home, modelId!, Number(window), key) : {};
-      if (home) codeTool(world, mockName === "code");
+      if (home) codeTool(world, mockName === "code", true);
       const results: TaskResult[] = [];
       let broken = 0;
       try {

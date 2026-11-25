@@ -1,3 +1,4 @@
+import type { Socket, SocketHandler } from "bun";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { redact } from "../redact.ts";
@@ -33,6 +34,8 @@ export const web = {
   attemptMs: 5_000,
   fetch: (input: URL, init: RequestInit, pin: readonly string[] = []): Promise<Response> => (pin.length ? pinned(input, init, pin) : fetch(input, init)),
   addresses: async (host: string): Promise<string[]> => (await lookup(host, { all: true })).map((a) => a.address),
+  /** A raw connection to one of the addresses the guard found public (the browser's proxy dials with it). */
+  dial: <D>(address: string, port: number, socket: SocketHandler<D>, data: D): Promise<Socket<D>> => Bun.connect<D>({ hostname: address, port, socket, data }),
 };
 
 /** A request that goes through a proxy is connected by the proxy, which has its own rules: it cannot be pinned. */

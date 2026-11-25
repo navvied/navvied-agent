@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { selfArgv } from "./create.ts";
-import { dueJobs, type Job, type ScheduleStore } from "./schedules.ts";
+import { UNATTENDED, dueAt, type Job, type ScheduleStore } from "./schedules.ts";
 
 const LONGEST_MS = 30 * 60_000;
 
@@ -14,7 +14,7 @@ export function runJob(job: Job, env: Record<string, string | undefined>, where:
   const args = [...head, "run", job.prompt, "--last", ...(job.kind === "chat" ? ["--kind", "chat"] : ["--mode", job.mode, "--cwd", job.cwd]), ...(job.mode === "auto" && job.kind !== "chat" ? ["--yes"] : [])];
   return new Promise((done) => {
     let text = "";
-    const child = spawn(cmd!, args, { cwd: job.cwd, env: { ...process.env, ...env } as Record<string, string>, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const child = spawn(cmd!, args, { cwd: job.cwd, env: { ...process.env, ...env, [UNATTENDED]: "1" } as Record<string, string>, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     const timer = setTimeout(() => { text += "\n[stopped: it took longer than 30 minutes]"; child.kill(); }, LONGEST_MS);
     const take = (d: Buffer): void => { text = (text + d.toString("utf8")).slice(0, 40_000); };
     child.stdout.on("data", take);
@@ -31,9 +31,9 @@ export function runJob(job: Job, env: Record<string, string | undefined>, where:
   });
 }
 
-/** Starts every task whose time has come, each once, and says when each has finished. */
+/** Starts every task whose time has come, each once, and says when each has finished. A task that was due while nothing ran starts now and is recorded as late. */
 export function startDue(store: ScheduleStore, env: Record<string, string | undefined>, where: string, finished: (f: Finished) => void, now: () => number = Date.now): Promise<Finished[]> {
-  const due = dueJobs(store.list(), now());
-  for (const j of due) store.markRun(j.id, now());
-  return Promise.all(due.map((j) => runJob(j, env, where, now).then((f) => { finished(f); return f; })));
+  const due = store.list().flatMap((j) => { const at = dueAt(j, now()); return at === undefined ? [] : [{ job: j, at }]; });
+  for (const d of due) store.markRun(d.job.id, now(), d.at);
+  return Promise.all(due.map((d) => runJob(d.job, env, where, now).then((f) => { store.finished(d.job.id, f.code, f.file, now()); finished(f); return f; })));
 }

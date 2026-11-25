@@ -18,6 +18,8 @@ const USAGE = rows([
   ['navvied run "<task>"', "do one task, print the result, exit"],
   ["navvied serve --stdio", "run as a protocol server on stdin/stdout"],
   ["navvied serve --http", "serve the agent over a WebSocket. --port and --host set the address, --web <folder> replaces the built-in web page, --ready-line tells a program that starts this one, --exit-when-stdin-closes stops it when that program does."],
+  ["navvied serve --a2a", "let other agents ask this computer, with a token you make (navvied a2a add <name>). Off until started. --port and --host set the address."],
+  ["navvied a2a add|list|revoke", "the tokens of the agents that may ask this computer"],
   ["navvied web", "open the web page, already connected to the agent on this computer (--site <address>)"],
   ["navvied init", "add a model: opens Providers"],
   ["navvied models", "list configured models"],

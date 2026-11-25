@@ -1,13 +1,13 @@
 /**
  * Starts the fixture web in the background and leaves its address in the workspace (the folder this is run from): `.bench-port` and
  * `.bench-pid`. The server runs from the fixtures folder with the workspace only in its environment, so it is not taken for something the
- * agent left running. Bun only, so it is the same on every system.
+ * agent left running. `bun start-web.ts [server.ts]` starts another server of this folder (the agent-to-agent tasks start `a2a-peer.ts`). Bun only, so it is the same on every system.
  */
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 
 const out = process.cwd();
-const child = spawn(process.execPath, ["web-server.ts"], { cwd: import.meta.dir, env: { ...process.env, BENCH_OUT: out }, detached: true, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+const child = spawn(process.execPath, [process.argv[2] ?? "web-server.ts"], { cwd: import.meta.dir, env: { ...process.env, BENCH_OUT: out }, detached: true, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
 writeFileSync(".bench-pid", `${child.pid}\n`);
 
 // The server says "ready <port>" once it listens, and the child ends if it cannot: this waits for one of the two, never for a number of seconds that a loaded machine can exceed.

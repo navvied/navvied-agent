@@ -1,0 +1,21 @@
+{
+  "id": "media-speak-greeting",
+  "title": "Read a text aloud into a sound file",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": [
+    "sh"
+  ],
+  "media": [
+    "tts"
+  ],
+  "prompt": "Read the text of hello.txt aloud and save the sound as greeting.wav.",
+  "check": "head -c4 greeting.wav | grep -q RIFF && grep -qF \"$(cat hello.txt)\" greeting.wav",
+  "protect": [
+    "README.md",
+    "hello.txt"
+  ],
+  "maxSteps": 20,
+  "timeoutSeconds": 300
+}
