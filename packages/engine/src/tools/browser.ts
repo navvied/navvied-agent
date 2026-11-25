@@ -6,6 +6,7 @@ import { untrusted } from "./untrusted.ts";
 import { num, place, str } from "./util.ts";
 import { holdsSecret, hideSecrets, originOf, whyNotHere, type Credentials } from "./browser/credentials.ts";
 import { describeReading, describeView, shoot } from "./browser/page.ts";
+import { shownPath } from "../shown-path.ts";
 import { keepPicture } from "./picture-file.ts";
 import { Session } from "./browser/session.ts";
 import { DialogOpen, KEY_NAMES, RefError, type Point, type Tab } from "./browser/tab.ts";
@@ -126,6 +127,17 @@ export const browser: Tool = {
   // A small model writes numbers as text ("3"): the tool takes them as numbers.
   fixArgs: (a) => Object.fromEntries(Object.entries(a).map(([k, v]) => [k, NUMBERS.includes(k) && typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)) ? Number(v) : v])),
   title: (a) => (str(a.action) === "open" ? `Open ${str(a.url)}` : `Browser: ${str(a.action)}${a.ref !== undefined ? ` ${a.ref}` : ""}`),
+
+  asks(a, where) {
+    if (str(a.action) !== "upload" || !session || session.closed) return undefined;
+    const site = originOf(session.current.url);
+    if (!site) return undefined;
+    try {
+      const file = place(where, a.path);
+      const st = statSync(file);
+      return st.isFile() ? { upload: { path: shownPath(file, where.cwd), bytes: st.size, site } } : undefined;
+    } catch { return undefined; }
+  },
 
   async run(a, ctx) {
     const action = str(a.action);

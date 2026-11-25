@@ -240,6 +240,8 @@ describe.skipIf(!works)("a confined command, for real (bubblewrap)", () => {
 
   const tag = (): string => `${process.pid}${Math.floor(Math.random() * 100000)}`;
   const alive = (t: string): boolean => spawnSync("pgrep", ["-f", `^sleep [34]${t}$`]).status === 0;
+  /** Ends the sleeps this test started (found by their own unique tag), by pid: nothing is ever killed by a name or a pattern. */
+  const endTagged = (t: string): void => { for (const pid of spawnSync("pgrep", ["-f", `^sleep [34]${t}$`], { encoding: "utf8" }).stdout.split("\n").filter(Boolean)) { try { process.kill(Number(pid), "SIGKILL"); } catch { /* already gone */ } } };
 
   test("when the process group is killed everything it started is gone", async () => {
     const t = tag();
@@ -266,7 +268,7 @@ describe.skipIf(!works)("a confined command, for real (bubblewrap)", () => {
     await until(() => alive(detached));
     await wait(300);
     expect(alive(detached)).toBe(true);
-    spawnSync("pkill", ["-f", `sleep 3${detached}`]);
+    endTagged(detached);
     // The parent dies at every moment of bubblewrap's own start (it arms its death signal only once it runs): none of the commands may be left.
     const runs = await Promise.all(Array.from({ length: 15 }, (_, i) => killedAfter(i * 2, i % 5 === 4 ? "interactive" : "foreground")));
     await wait(1500);
@@ -428,6 +430,21 @@ describe.skipIf(!works)("the engine asks to run one command outside the sandbox,
     await r.engine.idle();
     expect(existsSync(file)).toBe(false);
     expect(outputOf(r)).toContain("The person was asked to run it outside the sandbox and said no");
+    r.cleanup();
+  });
+
+  test("a refusal by a host that asked nobody says that nobody could be asked", async () => {
+    const file = join(away, "unasked.txt");
+    const r = rig(call(`echo hi > ${file}`));
+    r.send(prompt("go", { mode: "edits" }));
+    await until(() => cards(r).length === 1);
+    r.send({ cmd: "approve", id: cards(r)[0]!.id, optionId: "allow" });
+    await until(() => cards(r).length === 2);
+    r.send({ cmd: "approve", id: cards(r)[1]!.id, optionId: "deny", unasked: true });
+    await r.engine.idle();
+    expect(existsSync(file)).toBe(false);
+    expect(outputOf(r)).toContain("Nobody could be asked to run it outside the sandbox, so it was refused");
+    expect(outputOf(r)).not.toContain("said no");
     r.cleanup();
   });
 

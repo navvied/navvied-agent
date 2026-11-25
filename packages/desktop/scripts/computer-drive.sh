@@ -10,14 +10,15 @@ case "$(uname -s)" in
     # The accessibility bus, started first and asked for by the toolkit, or a window shows only its frame to the driver.
     export GTK_MODULES=gail:atk-bridge NO_AT_BRIDGE=0 GTK_A11Y=atspi
     /usr/libexec/at-spi-bus-launcher --launch-immediately & sleep 2
-    dbus-send --session --print-reply --dest=org.a11y.Bus /org/a11y/bus org.freedesktop.DBus.Properties.Set string:org.a11y.Status string:IsEnabled variant:boolean:true >/dev/null 2>&1
-    { echo "accessibility bus: $(dbus-send --session --print-reply --dest=org.a11y.Bus /org/a11y/bus org.a11y.Bus.GetAddress 2>&1 | tail -1)"; pgrep -a 'at-spi|dbus' | head -5; } >"$report.a11y" 2>&1
+    { echo "IsEnabled set: $(dbus-send --session --print-reply --dest=org.a11y.Bus /org/a11y/bus org.freedesktop.DBus.Properties.Set string:org.a11y.Status string:IsEnabled variant:boolean:true 2>&1 | tail -1)"; } >"$report.a11y" 2>&1
+    { echo "accessibility bus: $(dbus-send --session --print-reply --dest=org.a11y.Bus /org/a11y/bus org.a11y.Bus.GetAddress 2>&1 | tail -1)"; pgrep -a 'at-spi|dbus' | head -5; } >>"$report.a11y" 2>&1
     python3 "$here/packages/cli/test/fixtures/gtk-target.py" & app=$!; needle=navvied-target ;;
   Darwin) open -a TextEdit; app=; needle=TextEdit ;;
   # The program must not hold the output of this script open, or whatever reads it waits for the program to end.
   *)      cmd //c start "" notepad >/dev/null 2>&1 </dev/null; app=; needle=notepad ;;
 esac
 sleep 6
+if [ "$(uname -s)" = Linux ]; then python3 -c "import gi; gi.require_version('Atspi','2.0'); from gi.repository import Atspi; d=Atspi.get_desktop(0); print('programs on the accessibility bus:', [d.get_child_at_index(i).get_name() for i in range(d.get_child_count())])" >>"$report.a11y" 2>&1; fi
 bun "$here/packages/cli/src/computer-use/check.ts" --report "$report" --app "$needle"; code=$?
 bun "$here/packages/cli/src/computer-use/drive.ts" --report "$report.drive" --app "$needle"; drove=$?; cat "$report.drive" >>"$report" 2>/dev/null; [ $code = 0 ] && code=$drove
 [ -n "$app" ] && kill "$app" 2>/dev/null

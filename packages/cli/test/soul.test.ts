@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { SLASH_COMMANDS } from "../src/slash.ts";
-import { PERSON_ONLY, soulFor } from "../src/soul.ts";
+import type { CommandInfo } from "../src/complete.ts";
+import { leanSoul, referenceFor, soulFor } from "../src/soul.ts";
 
 const words = (s: string): number => s.split(/\s+/).length;
 
@@ -12,12 +13,16 @@ describe("what every brain is told about navvied", () => {
     expect(text).toContain("not your name");
     expect(text).not.toContain("standing instructions for this work");
   });
-  test("it knows the real commands, so it can answer how to switch the model", () => {
-    const text = soulFor({ label: "x" });
-    for (const c of SLASH_COMMANDS.filter((c) => !PERSON_ONLY.has(c.name))) expect(text).toContain(`/${c.name}`);
-    expect(text).toContain("/model (choose or switch the model)");
-    expect(text).toContain("Shift+Tab");
-    expect(text).toContain("NAVVIED.md");
+  test("it never names a slash command: they are the person's, and adding one changes nothing it is told", () => {
+    const brains = [{ label: "x" }, { label: "x", small: true }, { label: "x", tools: ["Read"] }, { label: "x", program: true }];
+    const texts = (): string[] => brains.flatMap((b) => [soulFor(b), leanSoul(b), referenceFor(b) ?? ""]);
+    const before = texts();
+    for (const t of before) { for (const c of SLASH_COMMANDS) expect(t).not.toContain(`/${c.name}`); expect(t).not.toMatch(/(^|\s)\/[a-z]{3,}\b/); }
+    expect(soulFor({ label: "x" })).toContain("Shift+Tab");
+    expect(soulFor({ label: "x" })).toContain("NAVVIED.md");
+    const list = SLASH_COMMANDS as CommandInfo[];
+    list.push({ name: "zzcommand", desc: "A new command for the person" });
+    try { expect(texts()).toEqual(before); } finally { list.pop(); }
   });
   test("it lists the engine's own tools, and none when a program brings its own", () => {
     expect(soulFor({ label: "x", tools: ["Read", "Write"] })).toContain("Your tools: Read, Write.");
@@ -33,9 +38,6 @@ describe("what every brain is told about navvied", () => {
   test("a small model gets a short version", () => {
     const small = soulFor({ label: "a small model", small: true });
     expect(words(small)).toBeLessThan(130);
-    const named = [...small.matchAll(/\/([a-z]+)/g)].map((m) => m[1]!);
-    for (const name of named) expect(SLASH_COMMANDS.map((c) => c.name)).toContain(name);
-    expect(named).toEqual(expect.arrayContaining(["model", "checkpoints", "restore", "clear"]));
     expect(small).not.toContain("How navvied works");
   });
   test("it carries the user's standing instructions, shortened when very long", () => {

@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { closest, fold, isDense, wordsOf } from "@navvied/engine";
+import { closest, fold, hideInItems, hideSecrets, isDense, wordsOf } from "@navvied/engine";
 import type { HistoryItem, SearchHit } from "@navvied/protocol";
 
 /** The words of a search as a query the index understands: every word must be there, the last one may be only a start. Nothing a person types can break it. */
@@ -55,13 +55,15 @@ export class SearchIndex {
    * when the last message already indexed is still the same, only the messages after it are added; anything else (an edit, a branch,
    * a shorter history) writes the conversation again. Tool names are not text and are left out.
    */
-  put(id: string, title: string, updated: number, items: readonly HistoryItem[]): number {
+  put(id: string, title: string, updated: number, typed: readonly HistoryItem[]): number {
+    // What the person typed as a secret is never in the index, whoever asks for it to be put there.
+    const items = hideInItems(typed);
     const write = this.#db.transaction((): number => {
       const had = this.#db.query("SELECT count, tail FROM sessions WHERE id = ?").get(id) as { count: number; tail: string } | null;
       const same = !!had && had.count > 0 && had.count <= items.length && stamp(items[had.count - 1]!) === had.tail;
       if (!same) this.#clear(id);
       const from = same ? had!.count : 0;
-      this.#db.query("INSERT INTO sessions (id, title, updated, count, tail) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated = excluded.updated, count = excluded.count, tail = excluded.tail").run(id, title, updated, items.length, items.length ? stamp(items.at(-1)!) : "");
+      this.#db.query("INSERT INTO sessions (id, title, updated, count, tail) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated = excluded.updated, count = excluded.count, tail = excluded.tail").run(id, hideSecrets(title), updated, items.length, items.length ? stamp(items.at(-1)!) : "");
       const add = this.#db.query("INSERT INTO turns (session, n, text) VALUES (?, ?, ?)");
       const addLetters = this.#db.query("INSERT INTO grams (session, n, text) VALUES (?, ?, ?)");
       let written = 0;

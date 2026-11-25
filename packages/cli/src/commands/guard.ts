@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { Rules, hardBlock, hasRules, parseRules, type RuleSet } from "@navvied/engine";
+import { Rules, hardBlock, hasRules, homeFrom, nativePaths, parseRules, type RuleSet } from "@navvied/engine";
 import { ASK_ADDRESS, askEngine } from "@navvied/stream-engine";
 import type { Options } from "../args.ts";
 import { configPath, loadConfig } from "../config.ts";
@@ -38,7 +38,8 @@ export async function guardCommand(options: Options, io: IO): Promise<number> {
   if (!name) return 0;
   const cwd = resolve(typeof call.cwd === "string" && call.cwd ? call.cwd : options.cwd ?? process.cwd());
 
-  const forbidden = hardBlock(name, input, cwd);
+  const paths = { ...nativePaths, home: homeFrom(io.env) };
+  const forbidden = hardBlock(name, input, cwd, paths);
   if (forbidden) { io.stderr.write(`Blocked: ${forbidden}. navvied never does this.\n`); return 2; }
 
   const file = loadConfig(configPath(io.env, options.config), io.env);
@@ -47,7 +48,7 @@ export async function guardCommand(options: Options, io: IO): Promise<number> {
   try { project = parseRules(JSON.parse(readFileSync(join(cwd, ".navvied", "permissions.json"), "utf8"))); } catch { /* none */ }
   const set: RuleSet = { allow: own?.allow ?? [], ask: [...(own?.ask ?? []), ...project.ask], deny: [...(own?.deny ?? []), ...project.deny] };
   if (!hasRules(set)) return 0;
-  const verdict = new Rules(set, cwd).check(name, input);
+  const verdict = new Rules(set, cwd, paths).check(name, input);
   if (verdict.kind === "deny") { io.stderr.write(`Blocked by the permission rule ${verdict.rule}. Do not try again; tell the user what you wanted to do.\n`); return 2; }
   if (verdict.kind === "ask") { io.stderr.write(`The permission rule ${verdict.rule} says this needs the user's approval, and it cannot be asked here. Tell the user what you wanted to do.\n`); return 2; }
   return 0;

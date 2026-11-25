@@ -28,7 +28,7 @@ describe("a command that nobody can type to", () => {
     const started = Date.now();
     const out = await bash.run({ command: "sleep 20 & echo after" }, ctx({ jobs }));
     expect(out).toContain("after");
-    expect(out).toContain("in the background");
+    expect(out).toContain("still runs as job1");
     expect(jobs.list().filter((j) => j.status === "running")).toHaveLength(1);
     expect(Date.now() - started).toBeLessThan(20_000);
     jobs.close();

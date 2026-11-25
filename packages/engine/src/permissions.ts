@@ -5,14 +5,20 @@ import { FILE_WRITERS } from "./tools/changed.ts";
 import { exitPlanMode } from "./tools/index.ts";
 import type { Tool } from "./types.ts";
 
+/** What the situation of a conversation says about which tools are worth their place in the list. */
+export type Situation = Parameters<NonNullable<Tool["offeredWhen"]>>[0];
+
+/** The tools the situation brings in, in any mode. */
+export const offeredIn = (all: readonly Tool[], situation: Situation): Tool[] => all.filter((t) => t.offeredWhen?.(situation) ?? true);
+
 /**
- * The tools offered to the model in a mode. Plan mode does not rely on the model behaving: write-capable tools are simply
+ * What a mode lets through of tools already offered. Plan mode does not rely on the model behaving: write-capable tools are simply
  * not offered, and a way to present the finished plan is added.
  */
-export function toolsFor(mode: PermMode, all: readonly Tool[], situation: { small: boolean; userText: string; jobs: number; steps?: number; chat?: boolean; typable?: number; skills?: number; recall?: boolean; memory?: boolean; schedule?: boolean; computer?: boolean; code?: boolean } = { small: false, userText: "", jobs: 0 }): Tool[] {
-  const offered = all.filter((t) => t.offeredWhen?.(situation) ?? true);
-  return mode === "plan" ? [...offered.filter((t) => t.readOnly || t.inPlan), exitPlanMode] : offered;
-}
+export const inMode = (mode: PermMode, offered: readonly Tool[]): Tool[] => (mode === "plan" ? [...offered.filter((t) => t.readOnly || t.inPlan), exitPlanMode] : [...offered]);
+
+/** The tools offered to the model in a mode. */
+export const toolsFor = (mode: PermMode, all: readonly Tool[], situation: Situation = { small: false, userText: "", jobs: 0 }): Tool[] => inMode(mode, offeredIn(all, situation));
 
 /** Tools that change files: what the "edits" mode lets through. */
 const EDITS = FILE_WRITERS;

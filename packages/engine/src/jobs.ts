@@ -3,7 +3,7 @@ import { closeSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, r
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EngineEvent } from "@navvied/protocol";
-import { inTerminal, killTree, processStart, usesProcessGroups } from "./platform.ts";
+import { groupAlive, inTerminal, killTree, processStart, usesProcessGroups } from "./platform.ts";
 import { sweep, track } from "./orphans.ts";
 import { spawnPty } from "./pty.ts";
 import { releaseChild, withGuardStdio } from "./sandbox/handshake.ts";
@@ -128,6 +128,36 @@ export class Jobs {
     return this.#announce(job);
   }
 
+  /**
+   * Takes over what a command left running when its shell ended (`server &`, `( worker & )`): the shell is gone, and the job lasts as long as any program of its group does, so
+   * what the script started is listed, can be read and is stopped with it. `code` is how the shell ended; `printed` is what was shown of the output so far.
+   */
+  adoptLeft(child: ChildProcess, code: number | null, title: string, printed: string): JobView {
+    const job = this.#make(`job${this.#next++}`, title, false, printed, true);
+    const pid = child.pid;
+    const to = (signal: NodeJS.Signals): void => { try { process.kill(-pid!, signal); } catch { /* already gone */ } };
+    job.proc = { pid, quit: () => to("SIGTERM"), kill: () => to("SIGKILL") };
+    const collect = (d: Buffer): void => this.#feed(job, d.toString("utf8"));
+    child.stdout?.on("data", collect);
+    child.stderr?.on("data", collect);
+    job.gone = this.#over(job, pid, code);
+    return this.#announce(job);
+  }
+
+  /** The job's shell has ended with `code`: the job is over when the last program of its group is, and at once when none is left. */
+  #over(job: Job, pid: number | undefined, code: number | null): Promise<void> {
+    if (!groupAlive(pid)) { this.#end(job, code); return Promise.resolve(); }
+    return new Promise<void>((resolve) => {
+      const watch = setInterval(() => {
+        if (!job.ended && groupAlive(pid)) return;
+        clearInterval(watch);
+        this.#end(job, code);
+        resolve();
+      }, PUMP_MS);
+      watch.unref?.();
+    });
+  }
+
   #make(id: string, title: string, interactive: boolean, printed: string, shown: boolean, notify?: string): Job {
     const safe = new Redactor();
     const first = printed ? safe.push(printed) + safe.end() : "";
@@ -179,7 +209,7 @@ export class Jobs {
     child.stderr?.on("data", collect);
     child.on("error", (e) => { this.#feed(job, `Error: ${e.message}\n`); this.#end(job, null); });
     // A job with an output file is over when the program exits; one with pipes, when the pipes close (what it left behind may still print).
-    child.on(job.fd !== undefined ? "exit" : "close", (code) => this.#end(job, code));
+    child.on(job.fd !== undefined ? "exit" : "close", (code) => { void this.#over(job, child.pid, code); });
   }
 
   /**

@@ -121,7 +121,7 @@ function roundsFor(task: Task, behaviour: Behaviour, leaves: string, results: re
   delete files["apply.sh"];
   const steps: Step[] = Object.entries(files).flatMap(([file_path, content]) => [...reads(task, [file_path]), { tool: "Write", args: { file_path, content } }]);
   if (script !== undefined) steps.push({ tool: "Bash", args: { command: script, description: "apply the solution" } });
-  if (behaviour === "leave") steps.push({ tool: "Bash", args: { command: `(${leaves} >/dev/null 2>&1 &)`, description: "leave something running" } });
+  if (behaviour === "leave") steps.push({ tool: "Bash", args: { command: `setsid ${leaves} >/dev/null 2>&1 &`, description: "leave something running" } });
   const plan = planned ? task.oracle?.plan : undefined;
   return [...openingFor(task, planned), ...steps.flatMap((step, i): Round[] => (plan && i > 0 && i < plan.length ? [[listAt(plan, i)], [step]] : [[step]])), ...(plan ? [[listAt(plan, plan.length)]] : [])];
 }

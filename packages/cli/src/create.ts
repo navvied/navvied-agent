@@ -2,7 +2,7 @@ import { leanSoul, referenceFor, soulFor, type Brain } from "./soul.ts";
 import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { secretNames, ChatCompletionsProvider, SkillBook, type ComputerHelper, type MediaShelf, type ToolContext, loadAgents, Rules, hasRules, parseRules, type RuleSet, commandHooks, memoryText, noteTexts, connectMcp, OAuthStore, loadSkills, projectDirs, type ModelSwitch, Checkpoints, Engine, FileSessionStore, MessagesApiProvider, OllamaProvider, ResponsesApiProvider, defaultTools, instructionFiles, loadInstructions, agentDirs, type AgentEngine, type ChatCompletionsConfig, type Credentials, type Provider, FallbackProvider, type FallbackLink, type RetryOptions } from "@navvied/engine";
+import { secretNames, ChatCompletionsProvider, type SkillInfo, SkillBook, type ComputerHelper, type MediaShelf, type ToolContext, loadAgents, Rules, hasRules, homeFrom, nativePaths, parseRules, type RuleSet, commandHooks, memoryText, noteTexts, connectMcp, OAuthStore, loadSkills, projectDirs, type ModelSwitch, Checkpoints, Engine, FileSessionStore, MessagesApiProvider, OllamaProvider, ResponsesApiProvider, defaultTools, instructionFiles, loadInstructions, agentDirs, type AgentEngine, type ChatCompletionsConfig, type Credentials, type Provider, FallbackProvider, type FallbackLink, type RetryOptions } from "@navvied/engine";
 import { randomUUID } from "node:crypto";
 import { CodexEngine, StreamEngine } from "@navvied/stream-engine";
 import type { Effort, EngineEvent, ModelInfo, Result } from "@navvied/protocol";
@@ -26,7 +26,7 @@ import { credentialsFor } from "./logins.ts";
 import { mediaFor } from "./media-setup.ts";
 import { localVision } from "./media-vision.ts";
 import { peerBook } from "./a2a-peers.ts";
-import { PluginState, SkillTrust, activeHooks, activePacks, activeSkills, mcpId, packServers, pluginPlaces, projectSkillDirs, readPacks, withPackHooks } from "./plugins.ts";
+import { PluginState, SkillTrust, heldSkillsNote, activeHooks, activePacks, activeSkills, mcpId, packServers, pluginPlaces, projectSkillDirs, readPacks, withPackHooks } from "./plugins.ts";
 
 /** `where` says in plain words how the model is reached, for the welcome screen. */
 /** Search: the person's own server when there is one; otherwise the keyless ladder, whose last public rung is navvied's own search, asked with this computer's account when it has one. Not in a session that reaches the web through the service. */
@@ -51,7 +51,7 @@ export function visionFor(file: ConfigFile | null, model: ResolvedModel, env: Re
   return model.vision === true && model.provider ? serviceOf(model.name, model, file, env, path) : undefined;
 }
 
-export interface Created { engine: AgentEngine; /** The name of the model in the configuration. */ entry: string; modelName: string; where: string; cwd: string; tools?: string[]; notes: string[]; /** The model is reached through a program the person is signed in to, which keeps its own sessions. */ program?: true }
+export interface Created { engine: AgentEngine; /** The name of the model in the configuration. */ entry: string; modelName: string; where: string; cwd: string; tools?: string[]; notes: string[]; /** What was held back among the project skills and why, in words; nothing when all are in use. */ heldSkills?: () => string | undefined; /** The model is reached through a program the person is signed in to, which keeps its own sessions. */ program?: true }
 
 /** What signs the requests of a model that has no key: the saved sign-in of a program account, or a credential file's access token. */
 const credentialsOf = (m: { signIn?: { provider: string; file?: string }; adc?: { file: string; tokenUri: string; scope: string } }, env: Record<string, string | undefined>): Credentials | undefined =>
@@ -77,11 +77,11 @@ const providerFor = (api: "chat" | "messages" | "responses" | "ollama" | undefin
  * The permission rules for a project: the person's own (allow, ask, deny) plus, when the project has a `.navvied/permissions.json`,
  * the ones it can only make stricter (ask, deny). A project can never allow anything: it is not the person's own word.
  */
-function rulesFor(own: RuleSet | undefined, cwd: string): Rules | undefined {
+function rulesFor(own: RuleSet | undefined, cwd: string, env: Record<string, string | undefined>): Rules | undefined {
   let project: RuleSet = { allow: [], ask: [], deny: [] };
   try { project = parseRules(JSON.parse(readFileSync(join(cwd, ".navvied", "permissions.json"), "utf8"))); } catch { /* none, or not readable */ }
   const set: RuleSet = { allow: own?.allow ?? [], ask: [...(own?.ask ?? []), ...project.ask], deny: [...(own?.deny ?? []), ...project.deny] };
-  return hasRules(set) ? new Rules(set, cwd) : undefined;
+  return hasRules(set) ? new Rules(set, cwd, { ...nativePaths, home: homeFrom(env) }) : undefined;
 }
 
 /** The script that is this program when it runs from source: the one it was started with, or (under a test runner, which is started with its own) the one next to this file. */
@@ -209,7 +209,7 @@ export function createEngine(options: Options, io: IO, say: (e: EngineEvent) => 
   const { cli, provider } = model.value;
   const shown = file.value?.models[model.value.name]?.display?.name;
   const brain: Brain = { label: cli ? (cli.adapter === "codex" ? "the model of the user's ChatGPT plan" : "the model of the program the user is signed in to") : `"${shown ?? provider?.model ?? model.value.name}"`, ...(cli ? { program: true, ownTools: TOOL_NAMES() } : { tools: TOOL_NAMES(), small: model.value.small }), ...(kind === "chat" ? { chat: true } : {}) };
-  const program = cli && { ...common, ...(rulesFor(file.value?.permissions, cwd) ? { rules: rulesFor(file.value?.permissions, cwd)! } : {}), entry: { id: model.value.name, name: shown ?? model.value.name }, persona: `${soulFor(brain, loadInstructions(cwd, dirname(path), memoryText(memory), INSTRUCTION_FILE_NAMES))}${extras.earlier ? `\n\n${extras.earlier}` : ""}`, ...(options.session ? { sessionId: options.session } : {}), guard: guardCommandFor(path, cwd), command: cli.command, args: cli.args, env: cli.env, ...(cli.model ? { model: cli.model } : {}), ...(cli.models?.length ? { models: cli.models.map((m) => ({ id: m.id, name: m.name, ...(m.badge ? { badge: m.badge } : {}), ...(m.blurb ? { blurb: m.blurb } : {}) })) } : {}), ...(model.value.efforts ? { efforts: model.value.efforts } : {}) };
+  const program = cli && { ...common, ...(rulesFor(file.value?.permissions, cwd, io.env) ? { rules: rulesFor(file.value?.permissions, cwd, io.env)! } : {}), entry: { id: model.value.name, name: shown ?? model.value.name }, persona: `${soulFor(brain, loadInstructions(cwd, dirname(path), memoryText(memory), INSTRUCTION_FILE_NAMES))}${extras.earlier ? `\n\n${extras.earlier}` : ""}`, ...(options.session ? { sessionId: options.session } : {}), guard: guardCommandFor(path, cwd), command: cli.command, args: cli.args, env: cli.env, ...(cli.model ? { model: cli.model } : {}), ...(cli.models?.length ? { models: cli.models.map((m) => ({ id: m.id, name: m.name, ...(m.badge ? { badge: m.badge } : {}), ...(m.blurb ? { blurb: m.blurb } : {}) })) } : {}), ...(model.value.efforts ? { efforts: model.value.efforts } : {}) };
   // What a command the model runs and a hook may inherit: the same, less every secret.
   const scrub = { drop: secretNames(io.env), keep: [...(file.value?.terminal?.env ?? []), ...(io.env.NAVVIED_TERMINAL_ENV?.split(",").map((n) => n.trim()).filter(Boolean) ?? [])] };
   const pluginState = new PluginState(pluginStatePath(io.env));
@@ -218,6 +218,7 @@ export function createEngine(options: Options, io: IO, say: (e: EngineEvent) => 
   const live = kind === "chat" || cli ? [] : activePacks(pluginState, skillTrust, readPacks(dirname(path), places.lock, cwd));
   const hookConfig = withPackHooks(activeHooks(pluginState, file.value?.hooks), live);
   const switcher = cli ? undefined : switcherFor(file.value, model.value.name, io.env, path, model.value.window, model.value.efforts);
+  const skillsNow = (): SkillInfo[] => activeSkills(pluginState, { user: join(dirname(path), "skills"), project: projectSkillDirs(cwd), plugins: live.map((p) => join(p.dir, "skills")) }, skillTrust);
   const engine: AgentEngine = cli
     ? cli.adapter === "codex" ? new CodexEngine(program!) : new StreamEngine(program!)
     : new Engine({
@@ -256,9 +257,10 @@ export function createEngine(options: Options, io: IO, say: (e: EngineEvent) => 
         // A chat has no project: no helpers, no rules or hooks written for projects, no skills, no project instructions, no checkpoints, no outside tool servers.
         ...(kind === "chat" ? {} : {
           agents: loadAgents([...live.map((p) => join(p.dir, "agents")), ...agentDirs(io.env.HOME ?? io.env.USERPROFILE ?? homedir(), dirname(path), projectDirs(cwd))]),
-          ...(rulesFor(file.value?.permissions, cwd) ? { rules: rulesFor(file.value?.permissions, cwd)! } : {}),
+          ...(rulesFor(file.value?.permissions, cwd, io.env) ? { rules: rulesFor(file.value?.permissions, cwd, io.env)! } : {}),
+        home: homeFrom(io.env),
           ...(hookConfig ? { hooks: commandHooks(hookConfig, cwd, () => sessionId, scrub) } : {}),
-          skills: () => activeSkills(pluginState, { user: join(dirname(path), "skills"), project: projectSkillDirs(cwd), plugins: live.map((p) => join(p.dir, "skills")) }, skillTrust),
+          skills: skillsNow,
           skillBook: new SkillBook({ user: join(dirname(path), "skills"), project: join(cwd, ".navvied", "skills"), ledger: skillLedgerPath(io.env) }, Date.now, (s) => skillTrust.answer(s, true)),
           skillApproval: () => file.value?.skills?.approval ?? "auto",
         }),
@@ -279,5 +281,5 @@ export function createEngine(options: Options, io: IO, say: (e: EngineEvent) => 
     engine.loadTools(connectMcp(servers, model.value.small, engine.closing, { window: model.value.window, store: new OAuthStore(mcpAuthPath(io.env, options.config)), host: engine.mcpHost }));
   }
   const notes = instructionFiles(cwd, dirname(path), INSTRUCTION_FILE_NAMES);
-  return { ok: true, value: { engine, entry: model.value.name, modelName: shown || provider?.model || cli?.model || model.value.name, where: describeModel(cli, provider?.baseUrl), cwd, ...(cli ? { program: true as const } : { tools: defaultTools().map((t) => t.name) }), notes } };
+  return { ok: true, value: { engine, entry: model.value.name, modelName: shown || provider?.model || cli?.model || model.value.name, where: describeModel(cli, provider?.baseUrl), cwd, ...(kind === "chat" || cli ? {} : { heldSkills: () => heldSkillsNote(skillsNow(), skillTrust) }), ...(cli ? { program: true as const } : { tools: defaultTools().map((t) => t.name) }), notes } };
 }

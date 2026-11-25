@@ -50,7 +50,8 @@ export { checkOutdated, diffPlugins, isRemote, updatePlugin, type OutdatedRow, t
 export { scanCommand, forbidden as forbiddenCommand } from "./command-scan.ts";
 export { unzipTo, isZip } from "./zip-unpack.ts";
 export { agentDirs, loadAgents, parseAgent, type AgentDef } from "./agents.ts";
-export { Rules, hardBlock, hasRules, parseRules, splitCommand, type RuleSet, type Verdict } from "./rules.ts";
+export { Rules, hardBlock, hasRules, nativePaths, parseRules, splitCommand, type RuleSet, type Verdict } from "./rules.ts";
+export { homeFrom } from "./where.ts";
 export { commandHooks, parseAnswer, HOOK_EVENTS, type HookCommand, type HookConfig, type HookEvent, type Hooks, type HookSaid, type PreVerdict } from "./hooks.ts";
 export { EmbeddingError, dot, embed, forEmbedding, fuse, EMBED_BATCH, type EmbeddingConfig } from "./embeddings.ts";
 export { alike, closest, distance, fold, isDense, terms, wordsOf } from "./text-match.ts";
@@ -72,4 +73,4 @@ export { askAgentTool, ASK_AGENT_TOOL_NAME } from "./tools/ask-agent.ts";
 export { askPeer, PeerError, type PeerAnswer, type PeerTarget } from "./a2a/client.ts";
 export { CARD_PATH, CARD_PATH_LEGACY, ERR as A2A_ERR, FINAL_STATES, PROTOCOL_VERSION as A2A_VERSION, agentCard, newId, now as a2aNow, readTask, rpcError, rpcResult, stateOf, textMessage, textOf, type AgentCard, type Skill, type Task as A2ATask, type TaskState } from "./a2a/wire.ts";
 export { untrusted, scrub } from "./tools/untrusted.ts";
-export { redact, secretsNow } from "./redact.ts";
+export { hideInItems, hideSecrets, redact, secretsIn, secretsNow } from "./redact.ts";

@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Tool, ToolContext } from "../types.ts";
-import { wantsManyChanges } from "./edit-text.ts";
 import { wrote } from "./file-state.ts";
 import { decode, encode, forModel, writeAtomic, type Layout } from "./text-file.ts";
 import { place, str } from "./util.ts";
@@ -176,7 +175,7 @@ export const applyPatchTool = (mode: PatchMode): Tool => ({
   readOnly: false,
   description: 'Change several files at once, all or none. patch: "*** Begin Patch", then per file "*** Add File: p" (+lines), "*** Delete File: p" or "*** Update File: p" ("*** Move to: q"; "@@ line to find"; lines starting with space, - or +), "*** End Patch".',
   parameters: { type: "object", properties: { patch: { type: "string" } }, required: ["patch"] },
-  offeredWhen: (s) => mode === "on" || (mode === "auto" && wantsManyChanges(s)),
+  offeredWhen: (s) => mode === "on" || (mode === "auto" && !s.small),
   fixArgs: (a) => (typeof a.input === "string" && a.patch === undefined ? { patch: a.input } : a),
   title: () => "Apply a patch",
   async run(a, ctx) { return applyPatch(ctx, str(a.patch)); },

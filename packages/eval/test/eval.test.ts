@@ -258,7 +258,7 @@ describe("running a task end to end", () => {
   test.skipIf(process.platform !== "linux")("a run that leaves a process behind is not solved, and the process is stopped", async () => {
     behaviour = "shell";
     const sleeping = uniqueSleep();
-    command = `touch done; (${sleeping} >/dev/null 2>&1 &); true`;
+    command = `touch done; setsid ${sleeping} >/dev/null 2>&1 & true`;
     const r = await run(pickMade(made({ check: "test -f done" }, { "README.md": "x" }, { "apply.sh": "true\n" })));
     expect(r).toMatchObject({ passed: false, reason: "left a process running" });
     expect(await gone(sleeping)).toBe("");

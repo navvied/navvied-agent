@@ -104,9 +104,9 @@ export class Outside implements Seen {
 export const fromOutsideName = (name: string): boolean => name === "WebFetch" || name === "WebSearch" || name.startsWith("mcp__");
 
 /** The words of a card for a call that holds text read from a web page. */
-export const withOrigin = (title: string, copied: boolean | undefined): string => (copied ? `This contains text from a web page: ${title}` : title);
+export const withOrigin = (title: string, copied: boolean | undefined): string => (copied ? `From a web page: ${title}` : title);
 
-const risk = (key: string, what: string, phrase: string): Risk => ({ key: `outside:${key}`, reason: `Text from the web or a connected service was read this turn, and now ${what}.`, phrase });
+const risk = (key: string, what: string, phrase: string): Risk => ({ key: `outside:${key}`, reason: `Web text was read this turn, and now ${what}.`, phrase });
 
 /** Programs that send what they are given to another computer, whatever the arguments. */
 const SENDERS = /^(scp|sftp|ssh|ftp|tftp|nc|ncat|netcat|socat|telnet|mail|mailx|sendmail|msmtp|mutt)$/;

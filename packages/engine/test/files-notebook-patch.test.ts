@@ -162,9 +162,8 @@ describe("apply_patch", () => {
   test("the argument another program calls input is understood; it is offered by the switch in the configuration", () => {
     expect(patch.fixArgs!({ input: "x" })).toEqual({ patch: "x" });
     const s = { userText: "", jobs: 0 };
-    expect(tool("apply_patch", "auto").offeredWhen!({ ...s, small: true, steps: 2 })).toBe(false);
-    expect(tool("apply_patch", "auto").offeredWhen!({ ...s, small: false, steps: 0 })).toBe(false);
-    expect(tool("apply_patch", "auto").offeredWhen!({ ...s, small: false, steps: 2 })).toBe(true);
+    expect(tool("apply_patch", "auto").offeredWhen!({ ...s, small: true })).toBe(false);
+    expect(tool("apply_patch", "auto").offeredWhen!({ ...s, small: false })).toBe(true);
     expect(tool("apply_patch", "on").offeredWhen!({ ...s, small: true })).toBe(true);
     expect(() => tool("apply_patch", "off")).toThrow(/no tool/);
   });

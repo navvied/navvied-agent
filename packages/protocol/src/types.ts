@@ -59,6 +59,8 @@ export interface FileNote {
 export interface PromptCommand {
   cmd: "prompt";
   text: string;
+  /** Set only by the program's own A2A server for a message that came from another agent; a command read from a window never has it (it is dropped). */
+  from?: PromptFrom;
   /** Client-chosen id (a UUID). The engine confirms it with a `taken` event; re-sending a known qid is a no-op. */
   qid?: string;
   images?: ImageInput[];
@@ -69,9 +71,12 @@ export interface PromptCommand {
   /** Paths the session has worked in so far — lets the host snapshot those repositories before the turn. */
   paths?: string[];
 }
+/** Who a turn came from when it is not the person: the other agent (`agent`, its own label for itself, at most 64 characters) and the name this computer gave it when making its token (`name`, never the token). A screen shows "<name> is asking". */
+export interface PromptFrom { agent: string; name: string }
 export interface CancelCommand { cmd: "cancel" }
 /** `input` goes with the option that is `editable`: the person changed the command before allowing it. */
-export interface ApproveCommand { cmd: "approve"; id: string; optionId: string; input?: string }
+/** `unasked`: no person was asked; the host refused for itself (a run with nobody to ask), and the model is told so. */
+export interface ApproveCommand { cmd: "approve"; id: string; optionId: string; input?: string; unasked?: boolean }
 /** The person's answer to a `question`: for each question, the choices picked and the person's own words, in the order of the questions. An empty list means that question was skipped. */
 export interface AnswerCommand { cmd: "answer"; id: string; answers: string[][] }
 export interface CompactCommand { cmd: "compact" }
@@ -342,7 +347,7 @@ export interface ScheduleRunInfo { at: number; outcome: "fine" | "failed" | "sto
 export interface SearchHit { id: string; title: string; snippet: string; updated: number; where?: "cloud"; project?: string }
 
 /** One step of a loaded conversation: what the person said, what the model answered, or the name of a tool it used. */
-export interface HistoryItem { k: "user" | "assistant" | "tool"; text: string; /** Only on what the person said, and only when it was said in this program: the id the message was sent with, so a window that has the message already (its own bubble, or the live event) recognises it. */ qid?: string }
+export interface HistoryItem { k: "user" | "assistant" | "tool"; text: string; /** On what another agent asked (see `user`). */ from?: PromptFrom; /** Only on what the person said, and only when it was said in this program: the id the message was sent with, so a window that has the message already (its own bubble, or the live event) recognises it. */ qid?: string }
 
 /** One model a person can switch to. A page shows `name`, never a real model id. */
 export interface ModelInfo {
@@ -390,6 +395,8 @@ export interface ScreenOutcome { verdict: "delivered" | "unverified" | "refused"
 
 /** What a consent to use the screen is about: the application, what it is for (`capture`: look at its window; `input`: click, type or press keys in it; `foreground`: bring it in front of the person), and the lines of what the agent is about to do there (each an action as the model wrote it, such as `click 12` or `type: Hello`; secrets hidden, each at most 200 characters, at most 8). The options of the `approval` are the usual three; "do not ask again" holds for this application only. */
 export interface ScreenAsk { app: string; about: "capture" | "input" | "foreground"; lines: string[] }
+/** What a consent to upload a file with the Browser tool is about: `path` as the person should read it (relative to the project, or `~/` from the home folder, otherwise absolute; secrets hidden), its size in bytes, and the site (origin, such as `https://example.com`) of the page it goes to. */
+export interface UploadAsk { path: string; bytes: number; site: string }
 /** The two grants an operating system asks for before a program may use the screen. `not-needed`: this system has no such grant. */
 export type ComputerPermissionId = "accessibility" | "screen-recording";
 export interface ComputerPermission { id: ComputerPermissionId; state: "granted" | "missing" | "not-needed" }
@@ -560,7 +567,7 @@ type EngineEventBody =
   | { ev: "endpoint.models"; /** The way the server is spoken: the one asked for, or the one found when it was `auto`. */ api: "chat" | "responses" | "messages" | "ollama"; items: { id: string; window?: number }[] }
   | { ev: "provider.models"; id: string; models: string[]; /** Models the provider lists that this program cannot reach (a protocol it does not speak), each with the reason. */ skipped?: { id: string; reason: string }[] }
   /** A message was received and is waiting its turn (the agent is busy, or still starting): every window shows it as waiting, not only the one that sent it. It is followed by `user` and `taken` when the agent takes it. */
-  | { ev: "queued"; qid: string; text: string; images?: number; files?: FileNote[] }
+  | { ev: "queued"; qid: string; text: string; images?: number; files?: FileNote[]; from?: PromptFrom }
   /** Waiting messages that were thrown away without being taken (the person stopped the agent, or it failed): windows take them off the screen. */
   | { ev: "dropped"; qids: string[] }
   | { ev: "tools"; items: ToolInfo[]; sets: ToolSetInfo[]; /** Every tool with its own switch, in the order of its category. */ entries: ToolEntry[]; /** The categories, in the order to show them. */ categories: ToolCategory[]; backends: BackendInfo[]; /** How commands are confined on this computer (absent from a host that does not say). */ sandbox?: SandboxInfo }
@@ -592,7 +599,7 @@ type EngineEventBody =
   /** The outcome of `restore`. A restore saves the current state first as `undoId`, so it can be undone. */
   | { ev: "restore"; id: string; preview: boolean; changes: RestoreEntry[]; undoId?: string }
   /** The text of a prompt the engine accepted, sent once just before its `taken`, so any window can show it. `images` is only a count. */
-  | { ev: "user"; qid: string; text: string; images?: number; files?: FileNote[] }
+  | { ev: "user"; qid: string; text: string; images?: number; files?: FileNote[]; /** Present when the message is another agent's (A2A), not the person's. */ from?: PromptFrom }
   /** The engine started working on prompt `qid` (or took it in mid-turn). */
   | { ev: "taken"; qid: string }
   | { ev: "text"; text: string }
@@ -610,7 +617,7 @@ type EngineEventBody =
   /** Context window use: `ctx` tokens of `win`; `out` = tokens produced by the last model call. */
   | { ev: "usage"; ctx: number; win: number; out: number; turn?: TurnTokens }
   /** `tool` is the id of the step (the `tool` event) this question is about, so a page can put the buttons on that step. */
-  | { ev: "approval"; id: string; title: string; options: ApprovalOption[]; change?: ApprovalChange; tool?: string; /** Why this is asked even in a mode that mostly does not ask (it cannot be undone), in plain words. */ risk?: string; /** Present when the question is a consent to use one application on the screen. */ screen?: ScreenAsk }
+  | { ev: "approval"; id: string; title: string; options: ApprovalOption[]; change?: ApprovalChange; tool?: string; /** Why this is asked even in a mode that mostly does not ask (it cannot be undone), in plain words. */ risk?: string; /** Present when the question is a consent to use one application on the screen. */ screen?: ScreenAsk; /** Present when the question is to upload a file with the Browser tool. */ upload?: UploadAsk }
   /** The agent asks the person one to four questions and waits (only when `caps.questions` is set). Answered with the `answer` command; `tool` is the step that asked. */
   | { ev: "question"; id: string; questions: QuestionItem[]; tool?: string }
   /** Plan mode finished: the plan was streamed as `text`; the user may approve it. */

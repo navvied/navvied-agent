@@ -5,8 +5,8 @@
 import { RetryProvider, type RetryOptions } from "./providers/retry.ts";
 import { historyOf } from "./store.ts";
 import { dirname, join, relative, resolve } from "node:path";
-import { REFUSED, RecentIds, type McpPromptInfo, type ApprovalOption, type Command, type Effort, type EngineEvent, type FileNote, type ModelInfo, type PermMode, type PictureInfo, type PlanEntry, type QuestionItem, type PromptCommand, type SessionKind, type ScreenAsk, type ScreenOutcome, type StopReason, type ToolOutcome, type TurnTokens } from "@navvied/protocol";
-import { ALLOW, ALLOW_ALWAYS, ApprovalBroker, EDIT, approvalOptions } from "./approvals.ts";
+import { REFUSED, RecentIds, type McpPromptInfo, type ApprovalOption, type Command, type Effort, type EngineEvent, type FileNote, type ModelInfo, type PermMode, type PictureInfo, type PlanEntry, type QuestionItem, type PromptCommand, type SessionKind, type ScreenAsk, type UploadAsk, type PromptFrom, type ScreenOutcome, type StopReason, type ToolOutcome, type TurnTokens } from "@navvied/protocol";
+import { ALLOW, ALLOW_ALWAYS, ApprovalBroker, EDIT, approvalOptions, type ApprovalAnswer } from "./approvals.ts";
 import type { Checkpoint, Checkpoints } from "./checkpoints.ts";
 import type { AgentEngine } from "./contract.ts";
 import { KEEP_TAIL, compactMessages, estimateTokens, shouldCompact } from "./context.ts";
@@ -25,7 +25,7 @@ import { Sampler } from "./mcp-sampling.ts";
 import { Elicitor } from "./mcp-elicit.ts";
 import { jobLines, wakeText } from "./job-note.ts";
 import { childEnv, type EnvPolicy } from "./child-env.ts";
-import { Redactor, registerSecrets, secretsIn, secretsNow } from "./redact.ts";
+import { Redactor, hideSecrets, registerSecrets, secretsIn, secretsNow } from "./redact.ts";
 import { originsIn } from "./tools/browser/credentials.ts";
 import { forget, type ShellState } from "./tools/shell-state.ts";
 import { modelSkills, skillsPrompt, type SkillInfo } from "./skills.ts";
@@ -34,12 +34,13 @@ import { messagesAsText, toolsInPrompt } from "./text-tools.ts";
 import { TextToolCalls, dollarCommand } from "./text-tool-calls.ts";
 import type { Backend } from "./backend.ts";
 import { CodeOffer, type CodeAfter } from "./code-offer.ts";
-import { toolsFor } from "./permissions.ts";
+import { inMode, offeredIn } from "./permissions.ts";
 import { approvalScope } from "./approval-scope.ts";
 import { judge, type Judgement } from "./judge.ts";
 import { DEFAULT_SETTING, Sandbox, type Denial, type Setting } from "./sandbox/index.ts";
 import { isConfined, profileTools } from "./profiles.ts";
-import { hardBlock, type Rules } from "./rules.ts";
+import { hardBlock, nativePaths, type Paths, type Rules } from "./rules.ts";
+import { homeFrom } from "./where.ts";
 import { asksAboutProgram, systemPrompt } from "./prompt.ts";
 import { PLAN_TOOL_NAME, defaultTools } from "./tools/index.ts";
 import { EXECUTE_CODE_TOOL } from "./tools/execute-code.ts";
@@ -66,7 +67,7 @@ import type { ComputerHelper, Message, ModelReply, Part, PeerBook, Provider, Rec
 interface McpPrompts { prompts(): Promise<McpPromptInfo[]>; prompt(server: string, name: string, args: Record<string, string>, signal: AbortSignal): Promise<string> }
 
 /** What a helper needs the person to decide: the fields of an `approval` event, before the engine gives it an id. */
-type ApprovalAsk = { title: string; options: ApprovalOption[]; tool: string; screen?: ScreenAsk; change?: Extract<EngineEvent, { ev: "approval" }>["change"]; risk?: string };
+type ApprovalAsk = { title: string; options: ApprovalOption[]; tool: string; screen?: ScreenAsk; upload?: UploadAsk; change?: Extract<EngineEvent, { ev: "approval" }>["change"]; risk?: string };
 
 /** What the engine needs to let a person switch models in the middle of a conversation. */
 export interface ModelSwitch {
@@ -118,7 +119,7 @@ export interface EngineOptions {
   /** Nobody can be asked (a helper): what would be asked about is refused instead, unless `escalate` hands it to someone who can answer. */
   noQuestions?: boolean;
   /** A helper's way to the person: the question is asked by the engine that started the helper. */
-  escalate?: (question: ApprovalAsk) => Promise<{ optionId: string; input?: string }>;
+  escalate?: (question: ApprovalAsk) => Promise<ApprovalAnswer>;
   /** Whether a person is looking at this conversation right now (a window or a terminal is attached). Without it nobody is: a question is not waited for. */
   attended?: () => boolean;
   /** How long a question waits for the person, in milliseconds (default: ten minutes with a window attached, no wait without). */
@@ -166,6 +167,8 @@ export interface EngineOptions {
   memoryExtract?: "off" | "rules" | "model";
   /** What a command may not inherit from this program's environment (see child-env.ts). */
   env?: EnvPolicy;
+  /** What `~` stands for (default: `HOME` of this process's environment). */
+  home?: string;
   /** Where background commands keep their output and the record a restart finds them by; without it nothing is taken back after a restart. */
   jobsDir?: string;
   /** A command that ended, or printed what it was asked to watch for, starts a turn by itself when the conversation is idle (the host that shows the conversation says so). */
@@ -188,7 +191,7 @@ export interface EngineOptions {
 }
 
 /** `attached` is what the model is told about the files, `parts` the pictures and PDFs that go with it, `files` what the person's window is told. */
-interface Queued { qid?: string; text: string; images: NonNullable<PromptCommand["images"]>; attached?: string; parts?: Part[]; files?: FileNote[] }
+interface Queued { qid?: string; text: string; images: NonNullable<PromptCommand["images"]>; attached?: string; parts?: Part[]; files?: FileNote[]; from?: PromptFrom }
 
 /** `{"path": "...", "limit": 0}`: what a call to a tool looks like, from its parameter schema. */
 function exampleArguments(schema: Record<string, unknown>): string {
@@ -362,8 +365,12 @@ export class Engine implements AgentEngine {
   #hidden = new WeakMap<Message, Message>();
   #hiddenFor = "";
   readonly #shell: ShellState = {};
-  /** Tools the model has called, which stay offered for the rest of the conversation even when the request that brought them is long past. */
-  readonly #called = new Set<string>();
+  /** What `~` is for every tool, rule and risk of this conversation: the home of the environment the engine was given. */
+  readonly #paths: Paths;
+  /** What the person had written when the first request of the conversation went out: the words that bring a tool in are read from this once, so the list does not change with every message. */
+  #opening: string | undefined;
+  /** The tools offered so far in this conversation. A tool is added only by a need that is plain (a program connected, a command running, a tool switched on), never taken out, so the list the model gets, and the prompt's prefix with it, stays as it was. */
+  readonly #offered = new Set<string>();
   readonly #closing = new AbortController();
   #abort = new AbortController();
   #lastContext = 0;
@@ -373,6 +380,7 @@ export class Engine implements AgentEngine {
   #heartbeat: ReturnType<typeof setInterval> | undefined;
 
   constructor(opts: EngineOptions) {
+    this.#paths = { ...nativePaths, home: opts.home ?? homeFrom() };
     this.#o = { maxSteps: 60, allowPrivateNetwork: false, ...opts };
     this.#computer = this.#askComputer();
     this.#codeOffer = new CodeOffer(opts.codeOffer?.after, opts.codeOffer?.mode === "always");
@@ -404,7 +412,7 @@ export class Engine implements AgentEngine {
     if (opts.peers?.names.length && (opts.kind ?? "agent") === "agent") this.#tools.push(askAgentTool(opts.peers.names));
     this.sessionId = opts.sessionId ?? crypto.randomUUID();
     this.#jobs = new Jobs((e) => this.#emit(e), Date.now, { session: this.sessionId, ...(opts.jobsDir ? { dir: opts.jobsDir } : {}), env: () => childEnv(process.env, opts.env), onNews: () => this.#wakeNow(), ...(opts.wake ? { wake: true } : {}) });
-    this.#sandbox = new Sandbox({ setting: () => ({ ...DEFAULT_SETTING, ...opts.confinement?.setting?.() }), extra: () => [this.#attachmentDir(), ...(opts.jobsDir ? [opts.jobsDir] : [])], ...(opts.confinement?.hide ? { hide: opts.confinement.hide } : {}), ...(opts.sandboxed ? { nested: true } : {}) });
+    this.#sandbox = new Sandbox({ home: this.#paths.home!, setting: () => ({ ...DEFAULT_SETTING, ...opts.confinement?.setting?.() }), extra: () => [this.#attachmentDir(), ...(opts.jobsDir ? [opts.jobsDir] : [])], ...(opts.confinement?.hide ? { hide: opts.confinement.hide } : {}), ...(opts.sandboxed ? { nested: true } : {}) });
     if (opts.sessionId && opts.store) { this.#messages = opts.store.load(opts.sessionId) ?? []; this.#restoreTodos(); }
     const every = opts.heartbeatMs ?? 15_000;
     if (every > 0) {
@@ -423,7 +431,7 @@ export class Engine implements AgentEngine {
       case "prompt": return this.#prompt(cmd);
       case "cancel": return this.#cancel();
       case "job.stop": if (!this.#jobs.stop(cmd.id)) this.#background.get(cmd.id)?.abort(); return;
-      case "approve": this.#approvals.answer(cmd.id, cmd.optionId, cmd.input); return;
+      case "approve": this.#approvals.answer(cmd.id, cmd.optionId, cmd.input, cmd.unasked); return;
       case "answer": return this.#answered(cmd.id, cmd.answers);
       case "compact": return this.#compactCommand();
       case "model": return this.#useModel(cmd.id);
@@ -529,6 +537,7 @@ export class Engine implements AgentEngine {
     this.#cancel();
     for (const c of this.#background.values()) c.abort();
     this.#jobs.close();
+    this.#sandbox.close();
     forget(this.#shell);
     for (const dispose of this.#disposers.splice(0)) attempt(dispose);
     for (const kept of this.#kept.values()) attempt(() => kept.close());
@@ -541,9 +550,9 @@ export class Engine implements AgentEngine {
     this.#wakes = 0;
     if (cmd.mode && this.#kind === "agent") this.#mode = cmd.mode;
     if (cmd.effort) this.#effort = cmd.effort;
-    const item: Queued = { text: cmd.text, images: cmd.images ?? [], ...(cmd.qid ? { qid: cmd.qid } : {}) };
+    const item: Queued = { text: cmd.text, images: cmd.images ?? [], ...(cmd.qid ? { qid: cmd.qid } : {}), ...(cmd.from ? { from: cmd.from } : {}) };
     this.#attach(item, cmd);
-    if (this.#busy) { this.#queue.push(item); if (item.qid) this.#emit({ ev: "queued", qid: item.qid, text: item.text, ...(item.images.length ? { images: item.images.length } : {}), ...(item.files?.length ? { files: item.files } : {}) }); return; }
+    if (this.#busy) { this.#queue.push(item); if (item.qid) this.#emit({ ev: "queued", qid: item.qid, text: item.text, ...(item.images.length ? { images: item.images.length } : {}), ...(item.files?.length ? { files: item.files } : {}), ...(item.from ? { from: item.from } : {}) }); return; }
     this.#busy = true;
     this.#running = this.#turn(item);
   }
@@ -747,6 +756,7 @@ export class Engine implements AgentEngine {
     const saved = this.#o.store?.load(id);
     if (!saved) { this.#emit({ ev: "error", msg: "That session was not found." }); return; }
     this.#messages = saved;
+    this.#opening = undefined; this.#offered.clear();
     this.#restoreTodos();
     this.sessionId = id;
     this.#emit({ ev: "loaded", id, items: historyOf(saved) });
@@ -837,7 +847,7 @@ export class Engine implements AgentEngine {
     if (startsTurn) { this.#codeOffer.begin(q.text); this.#asked = 0; this.#mcpAnswers.newTurn(); this.#outside.reset(); this.#outside.say(q.text); if (this.#o.outside === true) this.#outside.note(""); this.#turnQid = q.qid; this.#turnTokens = { in: 0, out: 0, calls: 0 }; }
     if (startsTurn && this.#kind === "agent") this.#checkpoint = attempt(() => this.#o.checkpoints?.begin(q.text || "Message", [this.#o.cwd, ...this.#written]));
     if (q.qid) {
-      this.#emit({ ev: "user", qid: q.qid, text: q.text, ...(q.images.length ? { images: q.images.length } : {}), ...(q.files?.length ? { files: q.files } : {}) });
+      this.#emit({ ev: "user", qid: q.qid, text: q.text, ...(q.images.length ? { images: q.images.length } : {}), ...(q.files?.length ? { files: q.files } : {}), ...(q.from ? { from: q.from } : {}) });
       this.#emit({ ev: "taken", qid: q.qid });
     }
     this.#messages.push({ role: "user", content: asParts(q) });
@@ -900,11 +910,12 @@ export class Engine implements AgentEngine {
 
       const small = this.#small;
       const skills = modelSkills(attempt(() => this.#o.skills?.()) ?? []);
-      const offeredNow = toolsFor(this.#mode, this.#on, { small, userText: this.#userText(), jobs: this.#jobs.running, steps: step, chat: this.#kind === "chat", typable: this.#jobs.typable, skills: skills.length, recall: (this.#o.recall?.recent(1).length ?? 0) > 0, memory: this.#o.memory !== undefined, schedule: this.#o.schedule !== undefined, computer: this.#computer !== undefined, code: this.#codeOffer.offered });
-      // A tool the model has used stays offered. Of the others, the ones that are not offered are named in the prompt, and a call to one of
-      // them is run, not refused: the words that bring a tool in (the web, a helper) are a guess about the request, and a guess can be wrong.
+      this.#opening ??= this.#userText();
+      for (const t of offeredIn(this.#on, { small, userText: this.#opening, jobs: this.#jobs.running, chat: this.#kind === "chat", typable: this.#jobs.typable, skills: skills.length, recall: (this.#o.recall?.recent(1).length ?? 0) > 0, memory: this.#o.memory !== undefined, schedule: this.#o.schedule !== undefined, computer: this.#computer !== undefined, code: this.#codeOffer.offered })) this.#offered.add(t.name);
+      // The ones that are not offered are named in the prompt, and a call to one of them is run, not refused: the words that bring a tool
+      // in (the web, a helper) are a guess about the request, and a guess can be wrong.
       const allowedNow = (t: Tool): boolean => this.#mode !== "plan" || t.readOnly || t.inPlan === true;
-      const tools = [...offeredNow, ...this.#on.filter((t) => this.#called.has(t.name) && allowedNow(t) && !offeredNow.some((o) => o.name === t.name))];
+      const tools = inMode(this.#mode, this.#on.filter((t) => this.#offered.has(t.name)));
       const news = this.#jobs.news();
       const finished = news.flatMap(jobLines);
       // Named only where they can work: earlier conversations, and skills the agent may change, exist only in some places.
@@ -1015,7 +1026,7 @@ export class Engine implements AgentEngine {
   }
 
   /** Asks the person to allow something: through this engine's own window, or, for a helper, through the engine that started it. */
-  #approve(ask: ApprovalAsk): Promise<{ optionId: string; input?: string }> {
+  #approve(ask: ApprovalAsk): Promise<ApprovalAnswer> {
     if (this.#o.escalate) return this.#o.escalate(ask);
     const { id, answer } = this.#approvals.open();
     this.#emit({ ev: "approval", id, ...ask });
@@ -1133,7 +1144,7 @@ export class Engine implements AgentEngine {
   }
 
   /** Asks the person for a helper, one question at a time, so two helpers never put two questions on the same screen. */
-  #relayApproval(ask: ApprovalAsk, parent: string): Promise<{ optionId: string; input?: string }> {
+  #relayApproval(ask: ApprovalAsk, parent: string): Promise<ApprovalAnswer> {
     const asked = this.#relay.then(() => this.#approve({ ...ask, title: `A helper asks: ${ask.title}`, tool: `${parent}.${ask.tool}` }));
     this.#relay = asked.catch(() => undefined);
     return asked;
@@ -1179,6 +1190,7 @@ export class Engine implements AgentEngine {
     let late = false;
     const timer = setTimeout(() => { late = true; own.abort(); }, (limits.seconds ?? HELPER_SECONDS) * 1000);
     const helper = new Engine({
+      home: this.#paths.home!,
       provider: this.#provider, cwd: copy?.dir ?? this.#o.cwd, window: this.#window, small: this.#small, heartbeatMs: 0, maxSteps: limits.steps ?? HELPER_STEPS,
       allowPrivateNetwork: this.#o.allowPrivateNetwork, noQuestions: true,
       ...(this.#o.noQuestions ? {} : { escalate: (ask: ApprovalAsk) => this.#relayApproval(ask, parent) }),
@@ -1245,7 +1257,6 @@ export class Engine implements AgentEngine {
     };
     const fail = (message: string, outcome?: ToolOutcome): string => { emit({ ev: "tool", id: call.id, name: call.name, status: "error", output: message, startedAt: t0, ms: Date.now() - t0, ...(outcome ? { outcome } : {}) }); return message; };
     const tool = this.#toolFor(call.name, offered);
-    if (tool) this.#called.add(tool.name);
     const off = tool ? undefined : this.#tools.find((t) => !this.#on.includes(t) && (t.name === call.name || squash(t.name) === squash(call.name)));
     if (off) return fail(`Error: the tool ${off.name} is turned off by the person. Do not look for a way around it: say what you could not do.`);
     if (!tool) return fail(`Error: there is no tool "${call.name}". Use one of: ${offered.map((t) => t.name).join(", ")}${this.#mode === "plan" ? " (plan mode only allows reading)" : ""}.${offered.some((t) => t.name === "Bash") ? ' To run a command: Bash {"command": "ls -la"}' : ""}`);
@@ -1282,7 +1293,7 @@ export class Engine implements AgentEngine {
     }
 
     // What a mode means for this call is decided in one place for every engine.
-    const judgedByMode = judge({ mode: this.#mode, tool, args, cwd: this.#o.cwd, rules: this.#o.rules, allowed: this.#allowed, knownUrl: (u) => this.#knownUrl(u), readable: this.#readable(), outside: this.#outside, secrets: () => this.#secrets() });
+    const judgedByMode = judge({ mode: this.#mode, tool, args, cwd: this.#o.cwd, paths: this.#paths, rules: this.#o.rules, allowed: this.#allowed, knownUrl: (u) => this.#knownUrl(u), readable: this.#readable(), outside: this.#outside, secrets: () => this.#secrets(), held: () => this.#held() });
     const judged: Judgement = hookAsk && judgedByMode.kind === "go" ? { kind: "ask", scope: approvalScope(tool.name, args, this.#o.cwd), strange: false } : judgedByMode;
     if (judged.kind === "stop") return fail(judged.message, "blocked");
     if (judged.kind === "ask") {
@@ -1290,16 +1301,18 @@ export class Engine implements AgentEngine {
       if (this.#o.noQuestions && !this.#o.escalate) return fail(`Blocked: this needs the person's say-so${risk ? ` (${risk.reason})` : ""}, and a helper cannot ask. Do not try again; say what you wanted to do.`, "blocked");
       {
         const change = approvalChange(tool.name, this.#shown(args));
+        const asked = attempt(() => tool.asks?.(args!, { cwd: this.#o.cwd, ...(isConfined(this.#kind) || this.#o.outside ? { root: this.#o.cwd } : {}) }))?.upload;
+        const upload = asked ? { ...asked, path: this.#vault.hide(asked.path).text } : undefined;
         // A command can be changed by the person before it is allowed.
         const editable = tool.name === "Bash" && typeof args.command === "string" ? this.#vault.hide(args.command).text : undefined;
-        const given = await this.#approve({ title: this.#vault.hide(withOrigin(strange ? `Open an address that was not in your request: ${String(args.url)}` : attempt(() => tool.title(args!)) ?? `Run ${tool.name}`, judged.copied)).text, options: approvalOptions(scope.phrase, editable), tool: call.id, ...(change ? { change } : {}), ...(risk ? { risk: risk.reason } : hookAsk ? { risk: `A hook asks first: ${hookAsk}` } : {}) });
+        const given = await this.#approve({ title: this.#vault.hide(withOrigin(strange ? `Open an address that was not in your request: ${String(args.url)}` : attempt(() => tool.title(args!)) ?? `Run ${tool.name}`, judged.copied)).text, options: approvalOptions(scope.phrase, editable), tool: call.id, ...(upload ? { upload } : {}), ...(change ? { change } : {}), ...(risk ? { risk: risk.reason } : hookAsk ? { risk: `A hook asks first: ${hookAsk}` } : {}) });
         if (given.optionId === ALLOW_ALWAYS) for (const k of scope.keys ?? [scope.key]) this.#allowed.add(k);
         else if (given.optionId === EDIT && editable !== undefined && given.input?.trim()) {
           // What the person typed is held to the same limits as anything else, and shown as the step's new input.
           const typed = this.#vault.restore(given.input.trim());
           if (typed.unknown.length) return fail(`Not run: ${typed.unknown.join(", ")} stands for a secret that is not known any more. Read the file again for its mark, or give the value.`, "blocked");
           args = { ...args, command: typed.text };
-          const again = hardBlock(tool.name, args, this.#o.cwd);
+          const again = hardBlock(tool.name, args, this.#o.cwd, this.#paths);
           if (again) return fail(`Blocked: ${again}. navvied never does this.`, "blocked");
           const rule = this.#o.rules?.check(tool.name, args);
           if (rule?.kind === "deny") return fail(`Blocked by the permission rule ${rule.rule}.`, "blocked");
@@ -1307,7 +1320,7 @@ export class Engine implements AgentEngine {
         } else if (given.optionId !== ALLOW && given.optionId !== EDIT) {
           // A no may carry what the person wants instead: the model is told in their words (a secret they typed stays hidden), not only that it was refused.
           const said = given.input?.trim();
-          return fail(said ? `Not run. The person said: ${this.#vault.hide(said).text}` : "The user denied this action.", "denied");
+          return fail(said ? `Not run. The person said: ${this.#vault.hide(said).text}` : given.unasked ? "Not run: nobody could be asked, so it was refused." : "The user denied this action.", "denied");
         }
       }
     }
@@ -1326,7 +1339,7 @@ export class Engine implements AgentEngine {
     let output: string;
     try {
       this.#outside.record(tool.name, args, this.#o.cwd);
-      const execute = (unconfined?: true): Promise<string> => tool.run(this.#restored(tool.name, args), { cwd: this.#o.cwd, ...(isConfined(this.#kind) || this.#o.outside ? { root: this.#o.cwd } : {}), signal: this.#abort.signal, emit: (e) => { if (e.ev === "plan") { this.#todos = e.entries; this.#sinceTodo = 0; } this.#emit(e.ev === "plan" ? { ...e, ...(this.#turnQid ? { qid: this.#turnQid } : {}), tool: call.id } : e.ev === "browser" ? { ...e, tool: call.id } : e); }, ask: (q, s) => this.#askPerson(q, s, call.id), live, report: (m) => { meta = { ...meta, ...m }; }, allowPrivateNetwork: this.#o.allowPrivateNetwork, window: this.#window, shell: this.#shell, jobs: this.#jobs, env: childEnv(process.env, this.#o.env), credentials: () => ({ secrets: this.#secrets(), origins: this.#named() }), ...(this.#o.backend ? { backend: this.#o.backend } : {}), ...(this.#o.recall ? { recall: this.#o.recall } : {}), ...(this.#o.peers ? { peers: this.#o.peers } : {}), ...(this.#o.schedule ? { schedule: this.#o.schedule } : {}), ...(this.#o.search ? { search: this.#o.search } : {}), ...(this.#o.toolFolder ? { folder: this.#o.toolFolder } : {}), ...(this.#computer ? { computer: this.#computer, consent: (ask: ScreenAsk) => this.#consent(ask, call.id) } : {}), outside: (text) => this.#outside.note(text), ...(this.#o.media ? { media: this.#o.media } : {}), ...(this.#o.webProxy ? { webProxy: this.#o.webProxy } : {}), ...(this.#o.skills ? { skills: this.#o.skills } : {}), ...(this.#o.memory ? { memory: this.#o.memory } : {}), helper: (task, signal) => this.#delegate(call.id, task, signal), files: this.#files, show: (p) => { this.#pictures.push({ part: p, call: call.id }); }, keepOut: (note, kind) => { this.#notes.set(call.id, note); this.#kinds.set(call.id, kind ?? ""); }, ...(this.#vision !== undefined ? { vision: this.#vision } : {}), mode: this.#mode, ...(this.#outside.seen ? { untrusted: true } : {}), ...(this.#o.skillBook ? { skillBook: this.#o.skillBook } : {}), ...(this.#o.skillApproval ? { skillApproval: this.#o.skillApproval } : {}), call: this.#within(call, offered), keep: (key, make) => { let v = this.#kept.get(key); if (!v) { v = make(); this.#kept.set(key, v); } return v as ReturnType<typeof make>; }, sandbox: this.#sandbox, ...(unconfined ? { unconfined } : {}) });
+      const execute = (unconfined?: true): Promise<string> => tool.run(this.#restored(tool.name, args), { cwd: this.#o.cwd, home: this.#paths.home!, ...(isConfined(this.#kind) || this.#o.outside ? { root: this.#o.cwd } : {}), signal: this.#abort.signal, emit: (e) => { if (e.ev === "plan") { this.#todos = e.entries; this.#sinceTodo = 0; } this.#emit(e.ev === "plan" ? { ...e, ...(this.#turnQid ? { qid: this.#turnQid } : {}), tool: call.id } : e.ev === "browser" ? { ...e, tool: call.id } : e); }, ask: (q, s) => this.#askPerson(q, s, call.id), live, report: (m) => { meta = { ...meta, ...m }; }, allowPrivateNetwork: this.#o.allowPrivateNetwork, window: this.#window, shell: this.#shell, jobs: this.#jobs, env: childEnv(process.env, this.#o.env), credentials: () => ({ secrets: this.#secrets(), origins: this.#named() }), ...(this.#o.backend ? { backend: this.#o.backend } : {}), ...(this.#o.recall ? { recall: this.#o.recall } : {}), ...(this.#o.peers ? { peers: this.#o.peers } : {}), ...(this.#o.schedule ? { schedule: this.#o.schedule } : {}), ...(this.#o.search ? { search: this.#o.search } : {}), ...(this.#o.toolFolder ? { folder: this.#o.toolFolder } : {}), ...(this.#computer ? { computer: this.#computer, consent: (ask: ScreenAsk) => this.#consent(ask, call.id) } : {}), outside: (text) => this.#outside.note(text), ...(this.#o.media ? { media: this.#o.media } : {}), ...(this.#o.webProxy ? { webProxy: this.#o.webProxy } : {}), ...(this.#o.skills ? { skills: this.#o.skills } : {}), ...(this.#o.memory ? { memory: this.#o.memory } : {}), helper: (task, signal) => this.#delegate(call.id, task, signal), files: this.#files, show: (p) => { this.#pictures.push({ part: p, call: call.id }); }, keepOut: (note, kind) => { this.#notes.set(call.id, note); this.#kinds.set(call.id, kind ?? ""); }, ...(this.#vision !== undefined ? { vision: this.#vision } : {}), mode: this.#mode, ...(this.#outside.seen ? { untrusted: true } : {}), ...(this.#o.skillBook ? { skillBook: this.#o.skillBook } : {}), ...(this.#o.skillApproval ? { skillApproval: this.#o.skillApproval } : {}), call: this.#within(call, offered), keep: (key, make) => { let v = this.#kept.get(key); if (!v) { v = make(); this.#kept.set(key, v); } return v as ReturnType<typeof make>; }, sandbox: this.#sandbox, ...(unconfined ? { unconfined } : {}) });
       output = await execute();
       if (meta.denied && tool.name === "Bash") { const { denied, ...rest } = meta; meta = rest; output = await this.#afterSandbox(call.id, args, denied, output, execute); }
     } catch (e) { output = `Error: ${e instanceof Error ? e.message : String(e)}`; }
@@ -1369,7 +1382,7 @@ export class Engine implements AgentEngine {
     this.#emit({ ev: "phase", name: "compacting" });
     if (this.#o.hooks?.compact) for (const note of (await this.#o.hooks.compact({ manual }, this.#abort.signal).catch(() => ({ notes: [] as string[] }))).notes) this.#emit({ ev: "notice", msg: note });
     try {
-      const next = await compactMessages(this.#messages, this.#provider, this.#abort.signal, keep, { retry: (info) => this.#emit({ ev: "retry", ...info }) });
+      const next = await compactMessages(this.#messages, this.#provider, this.#abort.signal, keep, { retry: (info) => this.#emit({ ev: "retry", ...info }), hide: (t) => hideSecrets(t, this.#secrets()) });
       if (!next) { if (manual) this.#emit({ ev: "error", msg: "Nothing to compact yet — the conversation is still short." }); return false; }
       const open = unfinished(this.#todos);
       if (open && typeof next[0]?.content === "string") next[0] = { ...next[0], content: `${next[0].content}\n\n${open}` };
@@ -1450,7 +1463,7 @@ export class Engine implements AgentEngine {
   async #afterSandbox(id: string, args: Record<string, unknown>, d: Denial, first: string, execute: (unconfined: true) => Promise<string>): Promise<string> {
     const what = d.kind === "write" ? "write" : "open";
     const told = `the command was stopped by the sandbox: it tried to ${what} ${d.path}`;
-    const again = judge({ mode: this.#mode, tool: { name: "Bash", readOnly: false }, args, cwd: this.#o.cwd, rules: this.#o.rules, allowed: this.#allowed, knownUrl: (u) => this.#knownUrl(u), outside: this.#outside });
+    const again = judge({ mode: this.#mode, tool: { name: "Bash", readOnly: false }, args, cwd: this.#o.cwd, paths: this.#paths, rules: this.#o.rules, allowed: this.#allowed, knownUrl: (u) => this.#knownUrl(u), outside: this.#outside });
     if (again.kind === "stop") return `${first}\n[${told}. It may not run outside it either. ${again.message}]`;
     const key = `sandbox:${dirname(d.path)}`;
     const away = relative(this.#o.cwd, d.path).startsWith("..");
@@ -1467,11 +1480,14 @@ export class Engine implements AgentEngine {
       const given = await this.#approve({ title: `Run outside the sandbox: ${command.slice(0, 300)}`, options: approvalOptions(`commands that ${what} ${dirname(d.path)} outside the sandbox`), tool: id, ...(change ? { change } : {}), risk: `The sandbox stopped it: it tried to ${what} ${d.path}.` });
       if (given.optionId === ALLOW_ALWAYS) this.#allowed.add(key);
       allowed = given.optionId === ALLOW || given.optionId === ALLOW_ALWAYS;
-      if (!allowed) { const said = given.input?.trim(); return `${first}\n[${told}. The person was asked to run it outside the sandbox and said no${said ? `: ${this.#vault.hide(said).text}` : ""}. Do not look for a way around it: use another place, or say what you could not do.]`; }
+      if (!allowed) { const said = given.input?.trim(); return `${first}\n[${told}. ${given.unasked ? "Nobody could be asked to run it outside the sandbox, so it was refused" : "The person was asked to run it outside the sandbox and said no"}${said ? `: ${this.#vault.hide(said).text}` : ""}. Do not look for a way around it: use another place, or say what you could not do.]`; }
     }
     const output = await execute(true);
     return `${output}\n[ran outside the sandbox: ${told}; ${bypass ? "Bypass mode lets it" : "the person allowed it"}]`;
   }
+
+  /** The skills that come with the project and are not accepted: held back, with their folders. */
+  #held(): { name: string; dir: string }[] { return (attempt(() => this.#o.skills?.()) ?? []).filter((s) => !s.trusted); }
 
   /** The folders outside the project that the program keeps things in for the model: its long output, what was attached, its notes and the skills. */
   #readable(): string[] {

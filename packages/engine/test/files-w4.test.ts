@@ -23,7 +23,7 @@ describe("Read of a PDF with pages, for a model that sees", () => {
     const c = conversation(d, { media: new Media({ pdftoppm }) });
     const out = await read.run({ file_path: "a.pdf", pages: "2-3" }, c);
     expect(out).toContain("text of page 2");
-    expect(out).toContain("Pages 2, 3 are shown to you as pictures in the next message.");
+    expect(out).toContain("Pages 2, 3 are shown to you as pictures in the next message (sent by this tool, not written by the person).");
     expect(c.shown.map((p) => p.type)).toEqual(["image", "image"]);
     const calls = readFileSync(log, "utf8").trim().split("\n");
     expect(calls).toHaveLength(2);

@@ -167,6 +167,7 @@ describe("skills", () => {
     const f = fakeIO({ env });
     expect(await main(["run", "hello", "--config", config, "--cwd", work], f.io)).toBe(0);
     expect(String(mock.requests.at(-1)!.body.messages[0].content)).not.toContain("- release: Cut a release");
+    expect(f.err()).toMatch(/Skills of this project held back, not used:\n  release  not accepted yet/);
     const mineText = readFileSync(join(mine, "SKILL.md"), "utf8");
     new SkillTrust(skillTrustPath(env)).answer({ name: "release", hash: skillHash(mineText) }, true);
     expect(await main(["run", "hello", "--config", config, "--cwd", work], f.io)).toBe(0);
@@ -175,6 +176,23 @@ describe("skills", () => {
     expect(system).toContain("- release: Cut a release");
     expect(system).toContain("- tone: How to write to customers");
     expect((request.tools as { function: { name: string } }[]).map((t) => t.function.name)).toContain("Skill");
+  });
+
+  test("a held skill is named in the events of run, with why", async () => {
+    const { env, work, state } = setup();
+    const config = join(state, "navvied", "config.json");
+    mkdirSync(join(state, "navvied"), { recursive: true });
+    writeFileSync(config, JSON.stringify({ default: "m", models: { m: { baseUrl: mock.url, model: "mock-model", apiKey: "k", window: 100000 } } }));
+    const dir = join(work, ".navvied", "skills", "release");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), "---\ndescription: Cut a release\n---\nTag it.");
+    const trust = new SkillTrust(skillTrustPath(env));
+    trust.answer({ name: "release", hash: skillHash("---\ndescription: Cut a release\n---\nTag it.") }, true);
+    writeFileSync(join(dir, "SKILL.md"), "---\ndescription: Cut a release\n---\nTag it, then push.");
+    const f = fakeIO({ env });
+    expect(await main(["run", `read ${join(dir, "SKILL.md")}`, "--json", "--config", config, "--cwd", work], f.io)).toBe(0);
+    const notices = f.out().split("\n").filter(Boolean).map((l) => parseEvent(l)).flatMap((r) => (r.ok && r.value.ev === "notice" ? [r.value.msg] : []));
+    expect(notices.join("\n")).toContain("release  its text changed after you accepted it");
   });
 });
 

@@ -4,7 +4,7 @@
  * The session lives in this process, so a client that comes back with the last number it saw receives what it missed.
  */
 import { EventEncoder, parseCommand, type Command, type EngineEvent, type HistoryItem, type PermMode, type ComputerPermissionId, type ComputerState, type ScheduleInfo, type SearchHit, type SessionInfo, type SessionKind } from "@navvied/protocol";
-import { historyOf, MediaShelf, type ComputerHelper } from "@navvied/engine";
+import { hideInItems, hideSecrets, historyOf, MediaShelf, secretsIn, type ComputerHelper } from "@navvied/engine";
 import { pageCommand } from "../page-commands.ts";
 import type { Options } from "../args.ts";
 import { FileSessionStore, OAuthStore, findChrome, SkillBook, forgetCheckpoints, loadSkills } from "@navvied/engine";
@@ -55,7 +55,7 @@ const HISTORY = 5000;
 /** While no model is connected the configuration is looked at this often, so a page connects itself once one is set up. */
 const WATCH_MS = 1000;
 
-export interface Client { send(text: string): unknown; /** True: this window shows the agent's questions and can answer them. A window that does not say so (a page whose question card is not built yet) is not counted as someone who can be asked. */ answers?: true }
+export interface Client { send(text: string): unknown; /** True: this window shows the agent's questions and can answer them. A window that does not say so (a page whose question card is not built yet) is not counted as someone who can be asked. */ answers?: true; /** True: this window is not on this computer (it is reached through the relay), so what the person typed as a secret is not sent to it. */ leaves?: true }
 
 /** What the desktop app's native side gives the hub for computer use: where turning it on stands, asking the system for a grant, and the switch. It calls `changed` whenever a grant or the switch changes without a command (the person granted it in the system's settings). */
 export interface ComputerPort { state(): Promise<ComputerState>; request(id: ComputerPermissionId): Promise<void>; turn(on: boolean): Promise<void>; /** The driver of the screen while computer use is on, none while it is off: asked once at the start of each turn, so the switch applies to the conversation that is open. Without it the `computer` tool is never offered. `owner` is the one conversation's engine, so what a conversation was allowed is its own. */ helper?(owner?: object): ComputerHelper | undefined; /** The person takes the screen (`person`: the helper refuses every step with `human_has_control`) or gives it back (`agent`). It reports the one who has it as `control` of `state()`, and calls `changed` when the person takes it by using the screen themselves. Without it the hub says the person cannot take over from here. */ control?(who: "person" | "agent"): Promise<void> }
@@ -167,6 +167,24 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   /** What was said, in order. `starts` marks the first event of a conversation (a new one, or one opened), so a window that arrives fresh can be given only the current one of each kind. */
   const history: { seq: number; line: string; kind: SessionKind; starts: boolean; caps: boolean }[] = [];
   const clients = new Set<Client>();
+  /** What the person typed as a secret in these conversations (it stays in their journal and on this computer's windows). */
+  const typed = new Set<string>();
+  const noteTyped = (e: EngineEvent): void => {
+    const texts = e.ev === "user" ? [e.text] : e.ev === "loaded" ? (e.items ?? []).filter((i) => i.k === "user").map((i) => i.text) : [];
+    for (const t of texts) for (const v of secretsIn(t)) { typed.add(v); if (typed.size > 200) typed.delete(typed.values().next().value!); }
+  };
+  /** What a window gets: a window on another computer is sent every conversation text through the one hiding step. */
+  const lineFor = (c: Client, line: string): string => {
+    if (!c.leaves) return line;
+    try {
+      const e = JSON.parse(line) as { ev?: string; text?: unknown; items?: { text?: unknown }[] };
+      const known = [...typed];
+      if ((e.ev === "user" || e.ev === "text" || e.ev === "thought") && typeof e.text === "string") e.text = hideSecrets(e.text, known);
+      else if (e.ev === "loaded" && Array.isArray(e.items)) e.items = e.items.map((i) => (typeof i.text === "string" ? { ...i, text: hideSecrets(i.text, known) } : i));
+      else return line;
+      return JSON.stringify(e);
+    } catch { return line; }
+  };
   /** What a command that says nothing about it is for: the kind this program was started for. */
   const primary: SessionKind = options.kind ?? "agent";
   /** The account this computer is signed in to, if any. */
@@ -273,7 +291,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     if (e.ev === "caps") { lane.engineModels = new Set((e.models ?? []).map((m) => m.id)); lane.engineCaps = e; }
     const more = e.ev === "caps" ? otherKinds(lane) : [];
     const gone = e.ev === "caps" ? removedModels(lane) : new Set<string>();
-    const said: EngineEvent = e.ev === "caps" ? { ...e, ...(more.length || gone.size ? { models: [...(e.models ?? []).filter((m) => m.current || !gone.has(m.id)), ...more] } : {}), manage: true, rowActions: true, schedule: true, plugins: true, memory: true, memoryNotes: true, media: true, a2a: true, mcpBrowse: true, pluginInstall: true, skillReview: true, toolList: true, drafts: true, artifacts: true, scheduleNote: "Tasks run only while this computer is on and navvied is running.", ...(folders ? { folders } : {}) } : e;
+    const said: EngineEvent = e.ev === "caps" ? { ...e, ...(more.length || gone.size ? { models: [...(e.models ?? []).filter((m) => m.current || !gone.has(m.id)), ...more] } : {}), manage: true, rowActions: true, schedule: true, plugins: true, memory: true, memoryNotes: true, media: true, a2a: true, mcpBrowse: true, pluginInstall: true, skillReview: true, toolList: true, drafts: true, artifacts: true, scheduleNote: "Tasks run only while navvied is running.", ...(folders ? { folders } : {}) } : e;
     noteFiles(lane, e);
     // Each answer moves its conversation up the list: told just before the end of the turn, so that the end is still the last word of it.
     if (e.ev === "done" && lane.created) say(lane, { ev: "sessions", items: listSessions(lane) });
@@ -281,11 +299,12 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     if (e.ev === "done" && lane.switchTo) { const id = lane.switchTo; lane.switchTo = undefined; queueMicrotask(() => { if (lane.running) lane.switchTo = id; else switchModel(lane, id); }); }
     // A turn that ended while nobody was looking is marked unread, until someone opens it.
     if (e.ev === "done" && clients.size === 0) { const id = lane.created?.engine.sessionId; if (id) lane.meta.update((m) => { if (!m.unread.includes(id)) m.unread.push(id); }); }
+    noteTyped(said);
     const stamped = encoder.stamp(lane.kind === "agent" ? said : { ...said, kind: lane.kind });
     const line = JSON.stringify(stamped);
     history.push({ seq: stamped.seq, line, kind: lane.kind, starts: e.ev === "session" || e.ev === "loaded", caps: e.ev === "caps" });
     if (history.length > HISTORY) history.splice(0, history.length - HISTORY);
-    for (const c of clients) c.send(line);
+    for (const c of clients) c.send(lineFor(c, line));
     // The list of conversations is up to date in every window as it goes: a new conversation is in it as soon as its first message is taken.
     if (e.ev === "taken" && lane.created) say(lane, { ev: "sessions", items: listSessions(lane) });
   };
@@ -294,6 +313,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   const sayAside = (slot: Slot, e: EngineEvent): void => {
     const lane = slot.lane;
     slot.journal.record(e);
+    noteTyped(e);
     if (e.ev === "session" || e.ev === "loaded") slot.id = e.id;
     if (e.ev === "taken") { slot.running = true; slot.turn = []; }
     if (slot.running) { slot.turn.push(e); if (slot.turn.length > 3000) slot.turn.splice(0, slot.turn.length - 3000); }
@@ -301,13 +321,13 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     if (e.ev === "tool" && e.status === "running") toolUsage.add(e.name);
     noteFiles({ ...lane, created: slot.created, writing: slot.writing } as Lane, e);
     const line = JSON.stringify({ ...encoder.stamp(lane.kind === "agent" ? e : { ...e, kind: lane.kind }), bg: slot.id ?? "" });
-    for (const c of clients) c.send(line);
+    for (const c of clients) c.send(lineFor(c, line));
     if (e.ev === "done") finishAside(slot); else if (e.ev === "approval" || e.ev === "question") tellBackground();
   };
   const asideSlots = new Set<Slot>();
   /** Which conversations are still being worked on while another is open, told to every window (and to one that arrives, after `synced`). */
   const backgroundLine = (): string => JSON.stringify(encoder.stamp({ ev: "background", items: [...asideSlots].filter((s) => s.id).map((s) => ({ id: s.id!, ...(s.lane.kind === "chat" ? { kind: "chat" as const } : {}), state: s.asking ? "approval" as const : "working" as const })) }));
-  const tellBackground = (): void => { const line = backgroundLine(); for (const c of clients) c.send(line); };
+  const tellBackground = (): void => { const line = backgroundLine(); for (const c of clients) c.send(lineFor(c, line)); };
   /** A conversation answered in the background is done: it is marked unread (nobody was looking), and its engine is let go; the conversation itself is kept. */
   const finishAside = (slot: Slot): void => {
     slot.running = false;
@@ -347,11 +367,12 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     slot.bg = false;
     lane.created = slot.created; lane.slot = slot; lane.journal = slot.journal; lane.running = slot.running; lane.turn = slot.turn; lane.writing = slot.writing;
     const show = (e: EngineEvent, starts: boolean): void => {
+      noteTyped(e);
       const stamped = encoder.stamp(lane.kind === "agent" ? e : { ...e, kind: lane.kind });
       const line = JSON.stringify(stamped);
       history.push({ seq: stamped.seq, line, kind: lane.kind, starts, caps: false });
       if (history.length > HISTORY) history.splice(0, history.length - HISTORY);
-      for (const c of clients) c.send(line);
+      for (const c of clients) c.send(lineFor(c, line));
     };
     show({ ev: "loaded", id: slot.id!, items: lane.journal.items(slot.id!) ?? [] }, true);
     for (const e of lane.turn) show(e, false);
@@ -503,10 +524,10 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     } else {
       const store = new FileSessionStore(lane.storeDir);
       const items = lane.journal.items(id);
-      const messages = store.load(id) ?? (items ? messagesOf(items) : null);
+      const messages = store.load(id) ?? (items ? messagesOf(hideInItems(items)) : null);
       if (!messages?.length) { told(false, undefined, "That conversation was not found on this computer."); return; }
       try { store.save(newId, messages); } catch { told(false, undefined, "The copy could not be saved."); return; }
-      if (!lane.journal.copy(id, newId)) lane.journal.write(newId, items ?? historyOf(messages, 400));
+      if (!lane.journal.copy(id, newId)) lane.journal.write(newId, hideInItems(items ?? historyOf(messages, 400)));
       lane.meta.update((m) => { m.titles[newId] = title; });
       try { searchIndexOf(lane)?.put(newId, title, Date.now(), lane.journal.items(newId) ?? historyOf(messages, 400)); } catch { /* the index is a convenience */ }
     }
@@ -618,7 +639,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     const items = lane.journal.items(id) ?? (messages ? historyOf(messages, 400) : undefined);
     if (!items?.length) return undefined;
     const project = lane.journal.list(500).find((s) => s.id === id)?.project;
-    return { items, ...(project ? { project } : {}) };
+    return { items: hideInItems(items), ...(project ? { project } : {}) };
   };
   /** A conversation taken off this computer: its saved copy, its record, its search entry, its title and pin. If it is the one in use, a fresh one starts. */
   const dropLocal = (lane: Lane, id: string): void => {
@@ -875,7 +896,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   const hub: Hub = {
     attach(client, since) {
       if (since > 0) {
-        for (const h of history) if (h.seq > since) client.send(h.line);
+        for (const h of history) if (h.seq > since) client.send(lineFor(client, h.line));
       } else {
         // A window that knows nothing is given the current conversation of each kind, not the older ones the ring still holds.
         const from = new Map<SessionKind, number>();
@@ -883,8 +904,8 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
         // What each kind can do was said once, early: the latest word on it is given first, wherever it was said.
         const abilities = new Map<SessionKind, number>();
         history.forEach((h, i) => { if (h.caps) abilities.set(h.kind, i); });
-        for (const [kind, i] of abilities) if (i < (from.get(kind) ?? 0)) client.send(history[i]!.line);
-        history.forEach((h, i) => { if (i >= (from.get(h.kind) ?? 0)) client.send(h.line); });
+        for (const [kind, i] of abilities) if (i < (from.get(kind) ?? 0)) client.send(lineFor(client, history[i]!.line));
+        history.forEach((h, i) => { if (i >= (from.get(h.kind) ?? 0)) client.send(lineFor(client, h.line)); });
       }
       // The end of what was missed, also when there was nothing: a page knows from it that it is up to date.
       if (asideSlots.size) client.send(backgroundLine());
@@ -1057,7 +1078,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
         drafts.set(parsed.value.key, parsed.value.text);
         // Told to every window at once, but not kept in what a late window is replayed: it asks with `drafts`.
         const line = JSON.stringify(encoder.stamp({ ev: "drafts", items: drafts.list() }));
-        for (const c of clients) c.send(line);
+        for (const c of clients) c.send(lineFor(c, line));
         return;
       }
       if (parsed.value.cmd === "tools") { tellTools(lane); return; }

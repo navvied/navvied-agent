@@ -5,7 +5,7 @@ import type { Tool, ToolContext } from "../types.ts";
 import { DOCUMENT_EXTENSIONS, pageBlock, pdfPagesAt, readDocument } from "./documents.ts";
 import { fit } from "../media/fit.ts";
 import { hashFile, hashOf } from "./file-state.ts";
-import { mediaOf, showPages, withScratch } from "./page-images.ts";
+import { PICTURE_FOLLOWS, mediaOf, showPages, withScratch } from "./page-images.ts";
 import { renderNotebook } from "./notebook.ts";
 import { bomOf } from "./text-file.ts";
 import { lineCount } from "./write.ts";
@@ -75,7 +75,7 @@ async function picture(path: string, bytes: Buffer, ctx: ToolContext): Promise<s
   if (ctx.vision === false || !ctx.show) return `${path} is a picture (${kind.mime}, ${bytes.length} bytes). This model cannot see pictures, so it is not shown.`;
   const image = await withScratch((dir) => fit(mediaOf(ctx).shrinker(), path, bytes, dir, ctx.signal));
   ctx.show({ type: "image", mime: image.mime, data: image.data });
-  return `${path} is a picture (${kind.mime}, ${bytes.length} bytes${image.smaller ? ", made smaller" : ""}), shown to you in the next message.`;
+  return `${path} is a picture (${kind.mime}, ${bytes.length} bytes${image.smaller ? ", made smaller" : ""}), shown to you ${PICTURE_FOLLOWS}.`;
 }
 
 export const read: Tool = {

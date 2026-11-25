@@ -1,3 +1,4 @@
+import { hideInItems } from "@navvied/engine";
 import type { HistoryItem, ModelInfo } from "@navvied/protocol";
 import type { ConfigFile } from "./config.ts";
 import { modelInfoOf, resolved } from "./create.ts";
@@ -27,7 +28,7 @@ export function checkTarget(file: ConfigFile | null, env: Record<string, string 
 
 /** The conversation as text for a model that was not there, newest last, cut from the front when it is long. Told to the program as part of its instructions, never shown. */
 export function transcriptOf(items: readonly HistoryItem[], most = 30_000): string {
-  const lines = items.map((i) => (i.k === "tool" ? `(a tool was used: ${i.text})` : `${i.k === "user" ? "The person" : "You"}: ${i.text}`));
+  const lines = hideInItems(items).map((i) => (i.k === "tool" ? `(a tool was used: ${i.text})` : `${i.k === "user" ? "The person" : "You"}: ${i.text}`));
   let text = lines.join("\n");
   if (text.length > most) text = `[earlier messages left out]\n${text.slice(-most)}`;
   return `This conversation was held with another model before you. What was said so far, oldest first; carry on from it as one who was there:\n\n${text}`;

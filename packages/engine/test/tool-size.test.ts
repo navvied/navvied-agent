@@ -15,10 +15,10 @@ describe("the weight of the tools a small model is shown", () => {
     expect(browser.description.length + JSON.stringify(browser.parameters).length).toBeLessThanOrEqual(1400);
   });
 
-  test("the tools of a first request take at most 3,000 characters in all", async () => {
+  test("the tools of a first request take at most 4,200 characters in all (the task list and the two tools for many changes are in it from the start)", async () => {
     const r = rig(() => ({ text: "ok" }));
     await r.turn(prompt("hello"));
-    expect(JSON.stringify(r.provider.requests[0]!.tools).length).toBeLessThanOrEqual(3000);
+    expect(JSON.stringify(r.provider.requests[0]!.tools).length).toBeLessThanOrEqual(4200);
     r.cleanup();
   });
 });

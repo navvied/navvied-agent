@@ -1,6 +1,5 @@
 import type { Tool } from "../types.ts";
 import { changeFile } from "./edit.ts";
-import { wantsManyChanges } from "./edit-text.ts";
 import { place, str } from "./util.ts";
 
 export const multiEdit: Tool = {
@@ -15,7 +14,7 @@ export const multiEdit: Tool = {
     },
     required: ["file_path", "edits"],
   },
-  offeredWhen: wantsManyChanges,
+  offeredWhen: ({ small }) => !small,
   title: (a) => `Edit file: ${str(a.file_path)}`,
   async run(a, ctx) {
     const list = Array.isArray(a.edits) ? a.edits.filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null) : [];

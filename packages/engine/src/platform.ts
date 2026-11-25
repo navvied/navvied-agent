@@ -61,6 +61,12 @@ export function launch(argv: string[], platform: NodeJS.Platform = process.platf
 /** Whether child processes get their own process group (so the whole tree can be stopped). */
 export const usesProcessGroups = (platform: NodeJS.Platform = process.platform): boolean => platform !== "win32";
 
+/** Whether any process of the group led by `pid` still runs (a group outlives its leader as long as something it started does). Always false where there are no groups. */
+export function groupAlive(pid: number | undefined, platform: NodeJS.Platform = process.platform): boolean {
+  if (pid === undefined || !usesProcessGroups(platform)) return false;
+  try { process.kill(-pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }
+}
+
 /** Stop a process and everything it started. */
 export function killTree(child: Pick<ChildProcess, "pid" | "kill">, platform: NodeJS.Platform = process.platform): void {
   const pid = child.pid;

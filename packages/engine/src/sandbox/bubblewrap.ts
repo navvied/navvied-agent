@@ -1,8 +1,9 @@
 import type { Plan, Setting } from "./policy.ts";
 
 /** The arguments of bubblewrap for a plan: everything is read-only except what the plan lets be written, and what it hides cannot be opened. */
-export function bubblewrapArgs(plan: Plan, setting: Pick<Setting, "network">, o: { cwd: string; filter: boolean; dieWithParent: boolean }): string[] {
+export function bubblewrapArgs(plan: Plan, setting: Pick<Setting, "network">, o: { cwd: string; filter: boolean; dieWithParent: boolean; /** Join the user namespace open as descriptor 6 (see `joinUserns`). */ userns?: boolean }): string[] {
   return [
+    ...(o.userns ? ["--userns", "6"] : []),
     "--ro-bind", "/", "/",
     "--dev", "/dev",
     ...(o.dieWithParent ? ["--die-with-parent"] : []),
@@ -34,3 +35,6 @@ export const withFilter = (file: string, bwrap: string[], argv: string[]): strin
  */
 export const GUARD = 'echo >&4; read -r _ <&5 || exit 125; exec 4<&- 5<&-; exec "$@"';
 export const guarded = (argv: string[]): string[] => ["sh", "-c", GUARD, "sh", ...argv];
+
+/** Opens the user namespace `file` names as descriptor 6, for `--userns 6`, and then starts `argv` (what `bubblewrapArgs` asked for). */
+export const joinUserns = (file: string, argv: string[]): string[] => ["sh", "-c", 'exec 6<"$1" && shift && exec "$@"', "sh", file, ...argv];

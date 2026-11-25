@@ -19,13 +19,14 @@ const asText = (m: Message): string =>
  * Replace everything but the last few messages with a summary. Returns null when there is too little to summarise.
  * Throws if the provider cannot produce a summary (the caller keeps the conversation as it was).
  */
-export async function compactMessages(messages: Message[], provider: Provider, signal: AbortSignal, keep: number = KEEP_TAIL, on?: { retry?: (info: RetryInfo) => void }): Promise<Message[] | null> {
+export async function compactMessages(messages: Message[], provider: Provider, signal: AbortSignal, keep: number = KEEP_TAIL, on?: { retry?: (info: RetryInfo) => void; /** What a summary passes before it is kept: the secrets the person typed are not in it. */ hide?: (text: string) => string }): Promise<Message[] | null> {
   if (messages.length < keep + 2) return null;
   let cut = messages.length - keep;
   while (cut < messages.length && messages[cut]?.role === "tool") cut++; // never start the kept tail with an orphaned tool result
   if (cut >= messages.length) return null;
   const transcript = messages.slice(0, cut).map((m) => `${m.role.toUpperCase()}: ${asText(m)}`).join("\n\n").slice(-120_000);
-  const summary = (await provider.complete(SUMMARY_SYSTEM, transcript, signal, on)).trim();
+  const said = (await provider.complete(SUMMARY_SYSTEM, transcript, signal, on?.retry ? { retry: on.retry } : undefined)).trim();
+  const summary = on?.hide ? on.hide(said) : said;
   return [
     { role: "user", content: `[Summary of the earlier conversation]\n${summary}` },
     { role: "assistant", content: "Understood — continuing from that summary." },

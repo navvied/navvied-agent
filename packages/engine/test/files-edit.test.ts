@@ -171,11 +171,10 @@ describe("MultiEdit", () => {
     const { f, c } = await known("a\n");
     expect(await multi.run({ file_path: f, edits: [] }, c)).toMatch(/edits must be a list/);
   });
-  test("is offered to a model with a large window after the first step of a turn, so that the first request stays light", () => {
+  test("is offered to a model with a large window, from the first request, so the list never changes", () => {
     const s = { jobs: 0, userText: "" };
-    expect(multi.offeredWhen!({ ...s, small: true, steps: 3 })).toBe(false);
-    expect(multi.offeredWhen!({ ...s, small: false, steps: 0 })).toBe(false);
-    expect(multi.offeredWhen!({ ...s, small: false, steps: 1 })).toBe(true);
+    expect(multi.offeredWhen!({ ...s, small: true })).toBe(false);
+    expect(multi.offeredWhen!({ ...s, small: false })).toBe(true);
   });
 });
 

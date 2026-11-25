@@ -1,10 +1,10 @@
-import { homedir } from "node:os";
 import nativePath, { posix } from "node:path";
 import { shellView } from "./shell-scan.ts";
+import { expandHome, homeFrom } from "./where.ts";
 import { EDIT_LIKE, FILE_WRITERS, changedPaths } from "./tools/changed.ts";
 
 /** The path rules of the computer the files are on; tests pass the other system's. */
-export type Paths = Pick<typeof nativePath, "isAbsolute" | "relative" | "resolve" | "sep"> & { caseless?: boolean };
+export type Paths = Pick<typeof nativePath, "isAbsolute" | "relative" | "resolve" | "sep"> & { caseless?: boolean; /** What `~` is: the home folder of the environment the program was given. */ home?: string };
 
 /**
  * The path rules of this computer. Written out, not `nativePath`: on a Unix computer `path.posix` is the same object as `path`, so a
@@ -71,7 +71,7 @@ export const opaque = (command: string): boolean => /\$\(|`|<\(|>\(/.test(comman
 /** A path as rules see it: relative to the project when inside it, else whole. On Windows a path without a drive is on the project's. */
 function pathOf(file: unknown, cwd: string, p: Paths): string | undefined {
   if (typeof file !== "string" || !file) return undefined;
-  const full = p.resolve(cwd, file);
+  const full = p.resolve(cwd, expandHome(file, p.home ?? homeFrom()));
   const inside = p.relative(p.resolve(cwd), full).replace(/\\/g, "/");
   return inside.startsWith("..") || p.isAbsolute(inside) ? full.replace(/\\/g, "/") : inside;
 }
@@ -147,9 +147,9 @@ const SYSTEM_WHOLE = /^\/(etc|boot|usr|bin|sbin|lib|lib64|var|opt|root|home|User
  * `${HOME}` are put in for the home folder first, then the path is made plain the way the shell makes it (`//` is `/`, a last `/` or `/.` is nothing,
  * `..` goes up), then it is compared as a place, not as writing. A path that is not absolute here is the project's own, and is not this.
  */
-function wholeFolder(target: string): boolean {
-  const home = posix.normalize((process.env.HOME || homedir()).replace(/\\/g, "/")).replace(/(.)\/+$/, "$1");
-  let t = target.replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, home);
+function wholeFolder(target: string, homeDir: string): boolean {
+  const home = posix.normalize(homeDir.replace(/\\/g, "/")).replace(/(.)\/+$/, "$1");
+  let t = expandHome(target, home);
   if (!t.startsWith("/")) return false;
   t = posix.normalize(t).replace(/\/\*$/, "").replace(/(.)\/+$/, "$1") || "/";
   return t === "/" || t === home || home.startsWith(`${t}/`) || SYSTEM_WHOLE.test(t) || /^\/(home|Users)\/[^/]+$/.test(t);
@@ -164,14 +164,14 @@ const SPELLED = String.raw`(?:%(?:userprofile|systemdrive|homedrive|homepath|win
 const WINDOWS_WHOLE = new RegExp(String.raw`(?:^|\s)(?:${SPELLED}|${DRIVE}(?:/(?:windows|programdata|program files(?: \(x86\))?|users(?:/[^/\s]+)?))?)/?\*?(?=\s|$)`);
 
 /** The reason one command, as the shell will run it, may never run. */
-function blockedLine(line: string): string | undefined {
+function blockedLine(line: string, home: string): string | undefined {
   const words = line.trim();
   if (/^(rm|ri|rmdir|rd|del|erase|remove-item)\s/i.test(words)) {
     const args = words.split(/\s+/).slice(1);
     const recursive = args.some((a) => /^-[a-zA-Z]*[rR]/.test(a) || a === "--recursive" || /^\/s$/i.test(a));
     // `/q` after rd, rmdir, del or erase is a switch, not the folder /q.
     const targets = /^(rm|ri|remove-item)\s/i.test(words) ? args : args.filter((a) => !/^\/[a-z]$/i.test(a));
-    const everything = args.some((a) => !a.startsWith("-") && (WHOLE.test(a) || wholeFolder(a))) || WINDOWS_WHOLE.test(targets.join(" ").toLowerCase().replace(/\\/g, "/"));
+    const everything = args.some((a) => !a.startsWith("-") && (WHOLE.test(a) || wholeFolder(a, home))) || WINDOWS_WHOLE.test(targets.join(" ").toLowerCase().replace(/\\/g, "/"));
     if (recursive && everything) return "this would delete the whole home folder, a system folder or the whole disk";
   }
   if (/^format(\.com)?\s+[a-z]:/i.test(words) || /^(format-volume|clear-disk|remove-partition)(\s|$)/i.test(words)) return "this would format a disk";
@@ -188,10 +188,10 @@ function blockedLine(line: string): string | undefined {
  * The reason a shell command may never run, or nothing. It is judged as the shell will run it, in the way a POSIX shell reads it and in
  * the way Windows' shells do: quotes, escapes, variables, wrappers (`sudo`, `env`, `xargs`…), `sh -c`, `eval` and heredocs do not hide it.
  */
-function blockedCommand(command: string): string | undefined {
+function blockedCommand(command: string, home: string): string | undefined {
   for (const mode of ["posix", "windows"] as const) {
     for (const c of shellView(command, mode).cmds) {
-      const why = blockedLine(c.words.join(" ")) ?? c.redirects.map((r) => blockedLine(`${r.op} ${r.target}`)).find(Boolean);
+      const why = blockedLine(c.words.join(" "), home) ?? c.redirects.map((r) => blockedLine(`${r.op} ${r.target}`, home)).find(Boolean);
       if (why) return why;
     }
   }
@@ -205,9 +205,9 @@ function blockedCommand(command: string): string | undefined {
  * Returns the reason, or nothing when the call is not one of these.
  */
 export function hardBlock(tool: string, args: Record<string, unknown>, cwd: string, p: Paths = nativePaths): string | undefined {
-  if (tool === "Bash") return blockedCommand(String(args.command ?? ""));
+  if (tool === "Bash") return blockedCommand(String(args.command ?? ""), p.home ?? homeFrom());
   for (const file of changedPaths(tool, args)) {
-    const full = p.resolve(cwd, file).replace(/\\/g, "/");
+    const full = p.resolve(cwd, expandHome(file, p.home ?? homeFrom())).replace(/\\/g, "/");
     const caseless = caselessFor(p);
     if ((caseless ? SYSTEM_DIRS_CASELESS : SYSTEM_DIRS).test(full) || WINDOWS_SYSTEM_DIRS.test(full)) return "this would change a system folder";
     if ((caseless ? OWN_PERMISSIONS_CASELESS : OWN_PERMISSIONS).test(full)) return "this would change what the agent is allowed to do";

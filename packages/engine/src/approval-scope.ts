@@ -1,6 +1,7 @@
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { opaque, splitCommand } from "./rules.ts";
 import { changedPaths } from "./tools/changed.ts";
+import { expandHome, homeFrom } from "./where.ts";
 
 /** What a person agrees to when they say "do not ask again": a kind of command, a folder, a website, or one tool. */
 export interface Scope {
@@ -42,7 +43,8 @@ function bashScope(command: string): Scope {
   return { key: keys[0]!, ...(keys.length > 1 ? { keys } : {}), phrase };
 }
 
-function fileScope(file: string, cwd: string): Scope {
+function fileScope(given: string, cwd: string, home: string): Scope {
+  const file = expandHome(given, home);
   const full = isAbsolute(file) ? file : resolve(cwd, file);
   const inside = file ? relative(resolve(cwd), full).replace(/\\/g, "/") : "";
   // A file outside the project is never covered by a permission given for the project.
@@ -50,11 +52,11 @@ function fileScope(file: string, cwd: string): Scope {
   return inside.includes("/") ? { key: `file:${inside.split("/")[0]}`, phrase: `changes in ${inside.split("/")[0]}/` } : { key: "file:.", phrase: "changes in the project folder" };
 }
 
-export function approvalScope(tool: string, args: Record<string, unknown>, cwd: string): Scope {
+export function approvalScope(tool: string, args: Record<string, unknown>, cwd: string, home: string = homeFrom()): Scope {
   if (tool === "Bash") return bashScope(text(args.command));
   const files = changedPaths(tool, args);
   if (files.length) {
-    const scopes = files.map((file) => fileScope(file, cwd));
+    const scopes = files.map((file) => fileScope(file, cwd, home));
     const keys = [...new Set(scopes.map((s) => s.key))];
     return keys.length === 1 ? scopes[0]! : { key: keys[0]!, keys, phrase: [...new Set(scopes.map((s) => s.phrase))].join(" and ") };
   }

@@ -45,7 +45,7 @@ export async function runCommand(prompt: string | undefined, options: Options, i
     if (e.ev === "question" && created?.ok) created.value.engine.handle({ cmd: "answer", id: e.id, answers: e.questions.map(() => scripted.shift() ?? []) });
     if (e.ev === "approval" && created?.ok) {
       // No person to ask: approve only when told to; otherwise refuse and say how to allow it.
-      created.value.engine.handle({ cmd: "approve", id: e.id, optionId: options.yes ? "allow" : "deny" });
+      created.value.engine.handle({ cmd: "approve", id: e.id, ...(options.yes ? { optionId: "allow" } : { optionId: "deny", unasked: true }) });
       if (!options.yes && !note && !options.json) { note = true; io.stderr.write("denied: no one to ask. Use --yes to allow tool calls, or --mode bypass.\n"); }
     }
   };
@@ -54,6 +54,9 @@ export async function runCommand(prompt: string | undefined, options: Options, i
   created = createEngine(options, io, emit, { ...(options.answers ? { attended: () => true } : {}), ...extras });
   if (!created.ok) { io.stderr.write(`error: ${created.error}\n`); return EXIT.usage; }
   const { engine } = created.value;
+  // A skill that was held back is said, so a run never leaves out something of the project without telling.
+  const held = created.value.heldSkills?.();
+  if (held) emit({ ev: "notice", msg: held });
 
   let interrupts = 0;
   let force!: () => void;

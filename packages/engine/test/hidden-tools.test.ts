@@ -8,23 +8,22 @@ const outputs = (r: ReturnType<typeof rig>) => r.of("tool").filter((e) => e.stat
 
 describe("a tool that exists and is not offered", () => {
   test("is named in the prompt, without its definition, and a call to it is run, not refused", async () => {
-    const r = rig(calls({ name: "TodoWrite", args: { todos: [{ content: "look", status: "pending" }] } }));
+    const r = rig(calls({ name: "WebFetch", args: { url: "http://127.0.0.1:1/" } }));
     await r.turn(prompt("fix the bug in a.ts", { mode: "auto" }));
     const first = r.provider.requests[0]!;
-    expect(first.tools.map((t) => t.name)).not.toContain("TodoWrite");
-    expect(first.system).toContain("Also available, by name: WebFetch, WebSearch, TodoWrite.");
-    expect(r.of("plan").length).toBe(1);
+    expect(first.tools.map((t) => t.name)).not.toContain("WebFetch");
+    expect(first.system).toContain("Also available, by name: WebFetch, WebSearch.");
     expect(outputs(r).join("")).not.toContain("there is no tool");
     r.cleanup();
   });
 
-  test("once used it is offered, and no longer named as an extra", async () => {
-    const r = rig(calls({ name: "TodoWrite", args: { todos: [{ content: "look", status: "pending" }] } }));
+  test("once used it is still not offered: the list and the prompt stay as they were", async () => {
+    const r = rig(calls({ name: "WebFetch", args: { url: "http://127.0.0.1:1/" } }));
     await r.turn(prompt("fix the bug in a.ts", { mode: "auto" }));
     await r.turn(prompt("and now the other file", { mode: "auto" }));
-    const later = r.provider.requests.at(-1)!;
-    expect(later.tools.map((t) => t.name)).toContain("TodoWrite");
-    expect(later.system).toContain("Also available, by name: WebFetch, WebSearch.");
+    const [first, later] = [r.provider.requests[0]!, r.provider.requests.at(-1)!];
+    expect(later.tools.map((t) => t.name)).toEqual(first.tools.map((t) => t.name));
+    expect(later.system).toBe(first.system);
     r.cleanup();
   });
 
@@ -41,7 +40,7 @@ describe("a tool that exists and is not offered", () => {
   test("a tool that does not exist is refused with the ones there are", async () => {
     const r = rig(calls({ name: "TeleportHome", args: {} }));
     await r.turn(prompt("fix it", { mode: "auto" }));
-    expect(outputs(r).join("")).toContain('there is no tool "TeleportHome". Use one of: Read, Write, Edit, Bash, Glob, Grep');
+    expect(outputs(r).join("")).toContain('there is no tool "TeleportHome". Use one of: Read, Write, Edit, MultiEdit, apply_patch, Bash, Glob, Grep');
     r.cleanup();
   });
 });

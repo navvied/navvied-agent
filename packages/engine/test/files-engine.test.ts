@@ -99,15 +99,14 @@ describe("the files a conversation has read, through the engine", () => {
     expect(readFileSync(join(r.dir, "n.txt"), "utf8")).toBe("x\n");
     r.cleanup();
   });
-  test("MultiEdit and apply_patch come after the first step on a large window, never on a small one unless the switch says so", async () => {
+  test("MultiEdit and apply_patch are there from the first request on a large window, never on a small one unless the switch says so", async () => {
     const names = (r: ReturnType<typeof rig>, n: number): string[] => r.provider.requests[n]!.tools.map((t) => t.name);
     const work = steps({ name: "Read", args: { file_path: "a.txt" } });
     const large = rig(work);
     writeFileSync(join(large.dir, "a.txt"), "x\n");
     await large.turn(prompt("look at it", { mode: "auto" }));
-    expect(names(large, 0)).not.toContain("MultiEdit");
-    expect(names(large, 0)).not.toContain("apply_patch");
-    expect(names(large, 1)).toEqual(expect.arrayContaining(["MultiEdit", "apply_patch"]));
+    expect(names(large, 0)).toEqual(expect.arrayContaining(["MultiEdit", "apply_patch"]));
+    expect(names(large, 1)).toEqual(names(large, 0));
     const small = rig(work, { window: 8_000, small: true });
     writeFileSync(join(small.dir, "a.txt"), "x\n");
     await small.turn(prompt("look at it", { mode: "auto" }));
@@ -205,7 +204,7 @@ describe("a look at a place outside the project", () => {
   });
   test("is free in the folders the program keeps for the model: long output, attachments and notes", () => {
     for (const file of ["/tmp/navvied-output/o-1/output.txt", "/tmp/att/s1/report.pdf", "/home/u/.navvied/memory/notes.md"]) expect(look("Read", { file_path: file }).kind, file).toBe("go");
-    expect(look("Read", { file_path: "/tmp/navvied-output-other/x" }).kind).toBe("ask");
+    expect(look("Read", { file_path: "/home/u/.navvied/other/x" }).kind).toBe("ask");
   });
   test("what the person said to never ask again covers that folder only, and a rule that allows lets it through", () => {
     const other = resolve("/home/other");

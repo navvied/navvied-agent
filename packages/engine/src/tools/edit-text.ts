@@ -127,6 +127,3 @@ export function around(text: string, line: number, changed: number, most = 14): 
   const from = Math.max(1, line - 2), to = Math.min(lines.length, Math.min(line + changed + 1, from + most - 1));
   return lines.slice(from - 1, to).map((l, i) => `${String(from + i).padStart(6)}\t${l.length > 200 ? `${l.slice(0, 200)}…` : l}`).join("\n");
 }
-
-/** Whether a model with room for more tools is offered the ones for many changes at once: not in the first request of a turn, so that the first request of every piece of work stays light. */
-export const wantsManyChanges = (s: { small: boolean; steps?: number | undefined }): boolean => !s.small && (s.steps ?? 0) > 0;

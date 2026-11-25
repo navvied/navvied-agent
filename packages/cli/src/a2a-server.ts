@@ -8,10 +8,11 @@
  * Each peer has conversations of its own (a context is its own: another peer cannot name it), run by a `TaskRunner`.
  */
 import { A2A_ERR as ERR, CARD_PATH, CARD_PATH_LEGACY, FINAL_STATES, a2aNow, agentCard, newId, redact, rpcError, rpcResult, textMessage, textOf, untrusted, type Skill, type TaskState } from "@navvied/engine";
+import type { PromptFrom } from "@navvied/protocol";
 import type { A2aLimits } from "./a2a-config.ts";
 import type { PeerTokens } from "./a2a-tokens.ts";
 
-export interface RunJob { peer: string; context: string; /** Already framed as another agent's words. */ text: string; signal: AbortSignal; /** Words of the answer as they are written. */ progress(text: string): void }
+export interface RunJob { peer: string; context: string; /** Who is asking, for the screens: the name of the token and the label the sender gave itself (never the token). */ from: PromptFrom; /** Already framed as another agent's words. */ text: string; signal: AbortSignal; /** Words of the answer as they are written. */ progress(text: string): void }
 export interface RunResult { state: "completed" | "failed"; text: string }
 export interface TaskRunner {
   run(job: RunJob): Promise<RunResult>;
@@ -52,6 +53,15 @@ interface Rec {
 
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 const CONTEXT_ID = /^[\w.:-]{1,128}$/;
+const LABEL_CHARS = 64;
+
+/** Who is asking: `name` is the token's (trusted); `agent` is the label the sender wrote in `metadata.agent` (plain text, cut, no control characters), or the token's name when it wrote none. */
+function fromOf(peer: string, metadata: unknown): PromptFrom {
+  const label = (metadata as { agent?: unknown } | null)?.agent;
+  const clean = typeof label === "string" ? label.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069]/g, " ").replace(/\s+/g, " ").trim().slice(0, LABEL_CHARS) : "";
+  return { agent: clean || peer, name: peer };
+}
+
 const KEEP_MS = 60 * 60_000;
 const KEEP_TASKS = 100;
 const PATHS = new Set(["/", "/a2a"]);
@@ -128,7 +138,7 @@ export function startA2aServer(o: A2aServerOptions): A2aServer {
 
   /** Starts a task for the message in `params`, or says why not as `[code, words]`. */
   const start = (peer: string, params: unknown): Rec | [number, string] => {
-    const message = (params as { message?: unknown } | null)?.message as { role?: unknown; parts?: unknown; contextId?: unknown; taskId?: unknown } | undefined;
+    const message = (params as { message?: unknown } | null)?.message as { role?: unknown; parts?: unknown; contextId?: unknown; taskId?: unknown; metadata?: unknown } | undefined;
     if (!message || typeof message !== "object" || !Array.isArray(message.parts)) return [ERR.params, "send a message with parts: {\"message\": {\"role\": \"user\", \"parts\": [{\"kind\": \"text\", \"text\": \"...\"}]}}"];
     if (message.role !== undefined && message.role !== "user" && message.role !== "ROLE_USER") return [ERR.params, "the role of the message must be user"];
     const text = textOf({ parts: message.parts }).trim();
@@ -154,7 +164,7 @@ export function startA2aServer(o: A2aServerOptions): A2aServer {
     o.audit?.({ at: a2aNow(now()), peer, task: rec.id, what: "asked", text: redact(text).slice(0, 200) });
     const timer = setTimeout(() => { abort.abort(); end(rec, "failed", `The task took longer than ${L.taskSeconds} seconds and was stopped.`); }, L.taskSeconds * 1000);
     timer.unref?.();
-    rec.done = o.runner.run({ peer, context: ctx.id, text: untrusted("agent", text, peer), signal: abort.signal, progress: (t) => { if (t && rec.finished === undefined && rec.saidChars < L.answerChars) { rec.said.push(t); rec.saidChars += t.length; for (const f of rec.listen) f(words(rec, t)); } } })
+    rec.done = o.runner.run({ peer, context: ctx.id, from: fromOf(peer, message.metadata), text: untrusted("agent", text, peer), signal: abort.signal, progress: (t) => { if (t && rec.finished === undefined && rec.saidChars < L.answerChars) { rec.said.push(t); rec.saidChars += t.length; for (const f of rec.listen) f(words(rec, t)); } } })
       .then((r) => end(rec, r.state, redact(r.text).slice(0, L.answerChars) || (r.state === "failed" ? "The task failed." : "")), () => end(rec, "failed", "The task failed."))
       .finally(() => clearTimeout(timer));
     return rec;

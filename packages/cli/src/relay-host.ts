@@ -191,7 +191,7 @@ class Link {
     const since = typeof hello.since === "number" && hello.since > 0 ? hello.since : 0;
     // The page may have missed nothing, in which case nothing else would come: this tells it that it is connected.
     await this.#deliver(id, peer, JSON.stringify({ ev: "alive" }));
-    peer.attached = this.host.hub.attach({ send: (line) => { peer.queue = peer.queue.then(() => this.#deliver(id, peer, line)).catch(() => undefined); } }, since);
+    peer.attached = this.host.hub.attach({ leaves: true, send: (line) => { peer.queue = peer.queue.then(() => this.#deliver(id, peer, line)).catch(() => undefined); } }, since);
   }
 }
 

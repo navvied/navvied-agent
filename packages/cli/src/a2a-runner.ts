@@ -28,7 +28,7 @@ export function engineRunner(make: MakeEngine, mode: PermMode, quiet: (what: str
     const slot: Slot = { engine: undefined as never, sink: undefined, last: Promise.resolve() };
     const made = make((e) => {
       const sink = slot.sink;
-      if (e.ev === "approval") slot.engine.handle({ cmd: "approve", id: e.id, optionId: "deny" });
+      if (e.ev === "approval") slot.engine.handle({ cmd: "approve", id: e.id, optionId: "deny", unasked: true });
       else if (e.ev === "question") slot.engine.handle({ cmd: "answer", id: e.id, answers: e.questions.map(() => []) });
       if (!sink) return;
       if (e.ev === "text") { sink.answer += e.text; sink.progress(e.text); }
@@ -52,7 +52,7 @@ export function engineRunner(make: MakeEngine, mode: PermMode, quiet: (what: str
         const cancel = (): void => slot.engine.handle({ cmd: "cancel" });
         job.signal.addEventListener("abort", cancel, { once: true });
         try {
-          slot.engine.handle({ cmd: "prompt", text: job.text, qid: crypto.randomUUID(), mode });
+          slot.engine.handle({ cmd: "prompt", text: job.text, from: job.from, qid: crypto.randomUUID(), mode });
           await slot.engine.idle();
         } finally { job.signal.removeEventListener("abort", cancel); slot.sink = undefined; }
         if (sink.error) { quiet(sink.error); return { state: "failed", text: "The agent could not answer." }; }

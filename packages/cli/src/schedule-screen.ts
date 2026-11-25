@@ -2,7 +2,7 @@ import type { ScheduleInfo } from "@navvied/protocol";
 import type { Kit } from "./providers/kit.ts";
 import { BAD_CRON, BAD_DATE, BAD_DAY, BAD_EVERY, BAD_TIME, DATES, EVERIES, MONTHDAYS, TIMES, WEEKDAYS, WHENS, whenWords, firstWhen, parseDay, parseEvery, parseTime, scheduleOf, subSteps, validDate, whenOf, type When } from "@navvied/protocol";
 
-export const SCHEDULE_FOOT = "Tasks run only while this computer is on and navvied is running.";
+export const SCHEDULE_FOOT = "Tasks run only while navvied is running.";
 const MODES = [{ label: "Only read and plan", hint: "It changes nothing." }, { label: "Can change files", hint: "Your permission rules still apply." }];
 const clock = (h: number, m: number): string => `${h}:${String(m).padStart(2, "0")}`;
 

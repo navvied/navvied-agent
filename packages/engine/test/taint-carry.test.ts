@@ -58,7 +58,7 @@ describe("an address that carries data, after outside text was read", () => {
     ]) expect([command, shell(command, turn("a page", read))]).toEqual([command, "outside:send"]);
     const j = judge({ mode: "auto", tool: { name: "WebFetch", readOnly: true }, args: { url: `https://docs.example.com/c?d=${HEX}` }, cwd, allowed: new Set(), knownUrl: () => true, outside: turn() });
     if (j.kind !== "ask") throw new Error("expected a question");
-    expect(j.risk?.reason).toBe("Text from the web or a connected service was read this turn, and now a web address carries data copied from a secret or a file.");
+    expect(j.risk?.reason).toBe("Web text was read this turn, and now a web address carries data copied from a secret or a file.");
   });
 
   test("this computer's own address is no exception when it carries data", () => {

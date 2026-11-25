@@ -2,10 +2,11 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { bubblewrapArgs, guarded, withFilter } from "./bubblewrap.ts";
+import { bubblewrapArgs, guarded, joinUserns, withFilter } from "./bubblewrap.ts";
 import { denialIn, type Denial } from "./denial.ts";
 import { planFor, type Plan, type Setting } from "./policy.ts";
 import { seatbeltProfile } from "./seatbelt.ts";
+import { UserNamespace } from "./userns.ts";
 import { seccompProgram } from "./seccomp.ts";
 import { windowsAbility, windowsLaunch, windowsLine, sandboxHelper } from "./windows.ts";
 
@@ -87,7 +88,11 @@ export function abilityOf(platform: NodeJS.Platform = process.platform): Ability
 export class Sandbox {
   #said = false;
   #file: string | undefined;
+  readonly #space = new UserNamespace();
   constructor(private readonly o: SandboxOptions) {}
+
+  /** Ends what this sandbox keeps alive between commands (the namespace they share). */
+  close(): void { this.#space.close(); }
 
   setting(): Setting { return this.o.setting(); }
 
@@ -119,9 +124,11 @@ export class Sandbox {
     let started: string[];
     if (ability.how === "seatbelt") started = ["sandbox-exec", "-p", seatbeltProfile(plan, setting), ...argv];
     else {
-      const bwrap = bubblewrapArgs(plan, setting, { cwd: at.cwd, filter: filtered, dieWithParent: at.detached !== true });
+      const space = this.#space.file();
+      const bwrap = bubblewrapArgs(plan, setting, { cwd: at.cwd, filter: filtered, dieWithParent: at.detached !== true, userns: space !== undefined });
       const inside = guard ? guarded(argv) : argv;
       if (filtered) { this.#file ??= filterFile(seccompProgram()!); started = withFilter(this.#file, bwrap, inside); } else started = ["bwrap", ...bwrap, ...inside];
+      if (space) started = joinUserns(space, started);
     }
     const parts = ["writes only in the project, temp and caches", ...(plan.hiddenDirs.length + plan.hiddenFiles.length ? ["secret folders hidden"] : []), `network ${setting.network ? "on" : "off"}`, ...(filtered ? ["risky system calls blocked"] : [])];
     return { confined: true, argv: started, guarded: guard, line: `[sandbox: ${parts.join("; ")}]`, plan, denial: (output, cwd) => denialIn(output, plan, cwd) };

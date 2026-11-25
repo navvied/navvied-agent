@@ -1,4 +1,3 @@
-import { SLASH_COMMANDS } from "./slash.ts";
 
 export interface Brain {
   /** How a person would name it in a sentence: the model's id, or the program or plan it comes from. */
@@ -24,20 +23,14 @@ const IDENTITY = (brain: Brain): string => [
   "Say what you really did and what you did not check.",
 ].join(" ");
 
-/** Screens only the person uses: the model never needs to know them, and its prompt stays short. */
-export const PERSON_ONLY: ReadonlySet<string> = new Set(["session", "accent", "open", "agents", "screen"]);
-
-const commandList = (withMeaning: boolean): string =>
-  SLASH_COMMANDS.filter((c) => !PERSON_ONLY.has(c.name)).map((c) => (withMeaning ? `/${c.name} (${c.desc.replace(/\.$/, "").split(/[:.]/)[0]!.toLowerCase()})` : `/${c.name}`)).join(", ");
-
-/** What the brain knows about the program it runs in, so it can answer "how do I switch the model?" correctly. */
+/** What the brain knows about the program it runs in. The slash commands are the person's to type: they are not named here, so the prompt does not change when one is added. */
 export function aboutNavvied(brain: Brain): string {
-  if (brain.small) return "In the app the user types /model to choose or switch the model (a menu opens, nothing to type after it), /checkpoints and then /restore <number> to undo your changes, /clear to start over, /compact to free up space, and /mode or Shift+Tab to change the mode.";
+  if (brain.small) return "In the app the user chooses the model from a menu, can undo your changes from the snapshots saved before each message, and changes the mode with Shift+Tab.";
   return [
     "How navvied works, in case the user asks:",
-    "- The user talks to you in a terminal app or a web page. In the app they can type these commands: " + commandList(true) + ". /model opens a menu: nothing is typed after it.",
-    "- Shift+Tab (or /mode) changes the mode: ask (you wait for approval before changing files or running commands), auto (you act freely), plan (you only read, then present a plan).",
-    "- Every message saves a snapshot of the project first, so changes can be undone with /checkpoints and /restore.",
+    "- The user talks to you in a terminal app or a web page, and chooses the model from a menu there.",
+    "- Shift+Tab changes the mode: ask (you wait for approval before changing files or running commands), auto (you act freely), plan (you only read, then present a plan).",
+    "- Every message saves a snapshot of the project first, so the user can undo your changes.",
     "- The user can keep standing instructions in a file called NAVVIED.md, in the project folder or in their own navvied folder.",
     ...(brain.tools?.length ? [`- Your tools: ${brain.tools.join(", ")}.`] : []),
     ...(brain.program ? [

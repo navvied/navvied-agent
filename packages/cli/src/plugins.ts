@@ -63,6 +63,8 @@ export class SkillTrust {
   refused = (s: Pick<SkillInfo, "name" | "hash">): boolean => this.#read().denied.includes(this.key(s));
   /** Skills waiting for an answer: not accepted and not refused. */
   waiting(skills: readonly SkillInfo[]): SkillInfo[] { const { denied } = this.#read(); return skills.filter((s) => s.source === "project" && !this.said(s) && !denied.includes(this.key(s))); }
+  /** Why a project skill is not in use: the person refused it, its text changed after they accepted it, or nobody has answered yet. */
+  why(s: Pick<SkillInfo, "name" | "hash">): "refused" | "changed" | "waiting" { const now = this.#read(); return now.denied.includes(this.key(s)) ? "refused" : now.allowed.some((k) => k.startsWith(`${s.name}:`)) ? "changed" : "waiting"; }
   answer(s: Pick<SkillInfo, "name" | "hash">, allow: boolean): void {
     const now = this.#read(), k = this.key(s);
     const next = { allowed: now.allowed.filter((x) => x !== k), denied: now.denied.filter((x) => x !== k) };
@@ -78,6 +80,16 @@ export class SkillTrust {
 
 /** The skills in effect, less the ones switched off (and the project skills not yet accepted). */
 export const activeSkills = (state: PluginState, dirs: Parameters<typeof loadSkills>[0], trust: SkillTrust): SkillInfo[] => { const off = state.disabled(); return loadSkills({ ...dirs, trusted: trust.said }).filter((s) => !off.has(skillId(s.name))); };
+
+const HELD_WHY = { refused: "you refused it", changed: "its text changed after you accepted it", waiting: "not accepted yet" } as const;
+
+/** The project skills that were held back and why, as aligned rows; nothing when none was. */
+export function heldSkillsNote(skills: readonly SkillInfo[], trust: SkillTrust): string | undefined {
+  const held = skills.filter((s) => !s.trusted);
+  if (!held.length) return undefined;
+  const width = Math.max(...held.map((s) => s.name.length));
+  return `Skills of this project held back, not used:\n${held.map((s) => `  ${s.name.padEnd(width)}  ${HELD_WHY[trust.why(s)]}`).join("\n")}`;
+}
 
 /** Hooks less the ones switched off, keeping the others in their order. */
 export function activeHooks(state: PluginState, hooks: HookConfig | undefined): HookConfig | undefined {

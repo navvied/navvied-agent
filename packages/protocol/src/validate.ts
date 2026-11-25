@@ -123,7 +123,7 @@ function validateOne(raw: unknown): Result<Command> {
     case "approve":
       if (!isId(raw.id) || !isId(raw.optionId)) return fail("approve needs id and optionId");
       if (raw.input !== undefined && (typeof raw.input !== "string" || raw.input.length > 20_000)) return fail("approve.input must be text of at most 20000 characters");
-      return ok({ cmd: "approve", id: raw.id, optionId: raw.optionId, ...(typeof raw.input === "string" ? { input: raw.input } : {}) });
+      return ok({ cmd: "approve", id: raw.id, optionId: raw.optionId, ...(typeof raw.input === "string" ? { input: raw.input } : {}), ...(raw.unasked === true ? { unasked: true } : {}) });
     case "answer": {
       if (!isId(raw.id)) return fail("answer needs an id");
       if (!Array.isArray(raw.answers) || raw.answers.length > 4) return fail("answer.answers must be a list of at most 4 lists of text");

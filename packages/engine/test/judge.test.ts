@@ -52,3 +52,20 @@ describe("what each mode means, the same for every engine", () => {
     expect(kinds("Bash", { command })).toBe("ask ask go ask go");
   });
 });
+
+describe("a skill of the project that the person has not accepted", () => {
+  const held = () => [{ name: "deploy", dir: "/work/project/.navvied/skills/deploy" }];
+  test("its files are not read, in any mode, whichever tool reads them", () => {
+    for (const mode of ["ask", "edits", "plan", "auto", "bypass"] as const) {
+      expect(call(mode, "Read", { file_path: "/work/project/.navvied/skills/deploy/SKILL.md" }, { held }).kind).toBe("stop");
+      expect(call(mode, "Read", { file_path: ".navvied/skills/deploy/notes.md" }, { held }).kind).toBe("stop");
+      expect(call(mode, "Grep", { pattern: "x", path: ".navvied/skills/deploy" }, { held }).kind).toBe("stop");
+    }
+    const stopped = call("auto", "Read", { file_path: ".navvied/skills/deploy/SKILL.md" }, { held });
+    expect(stopped.kind === "stop" && stopped.message).toContain("has not accepted");
+  });
+  test("another skill, and the same files once it is accepted, are read as before", () => {
+    expect(call("auto", "Read", { file_path: ".navvied/skills/other/SKILL.md" }, { held }).kind).toBe("go");
+    expect(call("auto", "Read", { file_path: ".navvied/skills/deploy/SKILL.md" }, { held: () => [] }).kind).toBe("go");
+  });
+});

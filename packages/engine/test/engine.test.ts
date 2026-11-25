@@ -62,19 +62,27 @@ describe("a small model", () => {
     expect(small.provider.requests[0]!.system).toContain("Answer questions and chat in plain text, directly");
     expect(small.provider.requests[0]!.system.length).toBeLessThan(700);
     await small.turn(prompt("what is on https://example.com/docs ?"));
-    expect(names(small, 1)).toContain("WebFetch");
+    expect(names(small, 1)).toEqual(names(small, 0));
     expect(names(small, 1)).not.toContain("TodoWrite");
     small.cleanup();
+    const asked = rig(() => ({ text: "hi" }), { window: 32_768, small: true });
+    await asked.turn(prompt("what is on https://example.com/docs ?"));
+    expect(names(asked)).toContain("WebFetch");
+    asked.cleanup();
   });
 
-  test("a model with a large window gets the six tools of the work, and the others when the request calls for them", async () => {
+  test("a model with a large window gets the tools of the work, and the others when its first request calls for them", async () => {
     const large = rig(() => ({ text: "hi" }));
     await large.turn(prompt("say hi"));
-    expect(names(large)).toEqual(["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent", "AskUserQuestion"]);
+    expect(names(large)).toEqual(["Read", "Write", "Edit", "MultiEdit", "apply_patch", "Bash", "Glob", "Grep", "Agent", "TodoWrite", "AskUserQuestion"]);
     expect(large.provider.requests[0]!.system).toContain("Work carefully");
     await large.turn(prompt("research the latest docs and remember them, then:\n1. update\n2. test"));
-    expect(large.provider.requests[1]!.tools.map((t) => t.name)).toEqual(["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "TodoWrite", "AskUserQuestion"]);
+    expect(large.provider.requests[1]!.tools.map((t) => t.name)).toEqual(names(large));
     large.cleanup();
+    const asked = rig(() => ({ text: "hi" }));
+    await asked.turn(prompt("research the latest docs and remember them, then:\n1. update\n2. test"));
+    expect(names(asked)).toEqual(["Read", "Write", "Edit", "MultiEdit", "apply_patch", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "TodoWrite", "AskUserQuestion"]);
+    asked.cleanup();
   });
 
   test("what the program knows about itself is sent only with a request that asks about it", async () => {

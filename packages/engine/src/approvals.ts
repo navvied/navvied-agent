@@ -13,22 +13,25 @@ export const approvalOptions = (phrase: string, editable?: string): ApprovalOpti
   { optionId: DENY, name: "Deny", kind: "reject_once" },
 ];
 
+/** What came back for a question: the choice, what the person typed, and whether nobody was asked at all. */
+export interface ApprovalAnswer { optionId: string; input?: string; unasked?: boolean }
+
 export class ApprovalBroker {
-  #waiting = new Map<string, (answer: { optionId: string; input?: string }) => void>();
+  #waiting = new Map<string, (answer: ApprovalAnswer) => void>();
   #next = 0;
 
-  open(): { id: string; answer: Promise<{ optionId: string; input?: string }> } {
+  open(): { id: string; answer: Promise<ApprovalAnswer> } {
     const id = `ask${++this.#next}`;
-    const answer = new Promise<{ optionId: string; input?: string }>((resolve) => this.#waiting.set(id, resolve));
+    const answer = new Promise<ApprovalAnswer>((resolve) => this.#waiting.set(id, resolve));
     return { id, answer };
   }
 
   /** The user's choice. Unknown ids are ignored (a late or duplicate answer). */
-  answer(id: string, optionId: string, input?: string): boolean {
+  answer(id: string, optionId: string, input?: string, unasked?: boolean): boolean {
     const resolve = this.#waiting.get(id);
     if (!resolve) return false;
     this.#waiting.delete(id);
-    resolve({ optionId, ...(input !== undefined ? { input } : {}) });
+    resolve({ optionId, ...(input !== undefined ? { input } : {}), ...(unasked ? { unasked } : {}) });
     return true;
   }
 

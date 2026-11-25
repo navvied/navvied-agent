@@ -10,7 +10,7 @@ import type { SkillBook } from "./skill-book.ts";
 import type { Media } from "./media/media.ts";
 import type { MediaFile } from "./media/shelf.ts";
 import type { Need } from "./media/types.ts";
-import type { EngineEvent, PermMode, PictureInfo, QuestionItem, ScreenAsk, ScreenOutcome } from "@navvied/protocol";
+import type { EngineEvent, PermMode, PictureInfo, QuestionItem, ScreenAsk, ScreenOutcome, UploadAsk } from "@navvied/protocol";
 import type { Timing } from "./schedule-when.ts";
 import type { PeerAnswer } from "./a2a/client.ts";
 
@@ -172,6 +172,8 @@ export interface ComputerHelper {
 export type ComputerConsent = (ask: { app: string; about: "capture" | "input" | "foreground" }) => Promise<"once" | "app" | "no">;
 
 export interface ToolContext {
+  /** What `~` stands for in a path a tool is given. */
+  home?: string;
   /** A tool that frames its own text from outside says so here, so the rest of the turn is judged knowing it was read. */
   outside?: (text: string) => void;
   /** The helper that drives this computer's screen (when computer use is on). */
@@ -270,10 +272,12 @@ export interface Tool extends ToolSpec {
   /** Its calls are asked about, even in Auto, once the turn has read text from outside: a tool that starts something for later or sends something away. */
   askAfterOutside?: true;
   /** Whether to offer this tool now. A small model is easily led astray by tools it does not need, so some are offered only when the conversation calls for them. */
-  offeredWhen?(situation: { small: boolean; userText: string; jobs: number; /** Steps taken so far in this turn. */ steps?: number; /** A conversation, not work on a project. */ chat?: boolean; /** Running commands that can be typed to. */ typable?: number; skills?: number; /** Earlier conversations can be looked through. */ recall?: boolean; /** Notes can be kept. */ memory?: boolean; /** Jobs can be scheduled here. */ schedule?: boolean; /** Computer use is on. */ computer?: boolean; /** The turn has shown that a script would pay (see `code-offer.ts`). */ code?: boolean }): boolean;
+  offeredWhen?(situation: { small: boolean; userText: string; jobs: number; /** A conversation, not work on a project. */ chat?: boolean; /** Running commands that can be typed to. */ typable?: number; skills?: number; /** Earlier conversations can be looked through. */ recall?: boolean; /** Notes can be kept. */ memory?: boolean; /** Jobs can be scheduled here. */ schedule?: boolean; /** Computer use is on. */ computer?: boolean; /** The turn has shown that a script would pay (see `code-offer.ts`). */ code?: boolean }): boolean;
   /** Puts the arguments a model wrote in other words into the ones this tool has, before they are checked. */
   fixArgs?(args: Record<string, unknown>): Record<string, unknown>;
   title(args: Record<string, unknown>): string;
+  /** What the question to allow this call must say beyond its title, as data a screen can lay out (see `UploadAsk`). Read before the call runs; it must not change anything. */
+  asks?(args: Record<string, unknown>, where: { cwd: string; root?: string }): { upload?: UploadAsk } | undefined;
   run(args: Record<string, unknown>, ctx: ToolContext): Promise<string>;
 }
 

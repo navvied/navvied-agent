@@ -2,8 +2,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, realpathSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { killTree, usesProcessGroups } from "../platform.ts";
+import { groupAlive, killTree, usesProcessGroups } from "../platform.ts";
 import { Redactor } from "../redact.ts";
+import { expandHome, homeFrom } from "../where.ts";
 import { releaseChild, withGuardStdio } from "../sandbox/handshake.ts";
 
 export type Args = Record<string, unknown>;
@@ -11,7 +12,7 @@ export type Args = Record<string, unknown>;
 export const str = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback);
 export const num = (v: unknown, fallback: number): number => (typeof v === "number" && Number.isFinite(v) ? v : fallback);
 
-export const abs = (cwd: string, p: unknown): string => { const s = str(p); return isAbsolute(s) ? s : resolve(cwd, s); };
+export const abs = (cwd: string, p: unknown, home?: string): string => { const s = expandHome(str(p), home ?? homeFrom()); return isAbsolute(s) ? s : resolve(cwd, s); };
 
 /** A path with every link in it followed, even when the last parts do not exist yet (a file about to be written). */
 function followed(path: string): string {
@@ -26,8 +27,8 @@ function followed(path: string): string {
  * Where a tool should work for `p`: like `abs`, and, when the conversation is held to a folder (`ctx.root`), nothing outside it:
  * not by `..`, not by an absolute path, not through a link.
  */
-export function place(ctx: { cwd: string; root?: string }, p: unknown): string {
-  const full = abs(ctx.cwd, p);
+export function place(ctx: { cwd: string; root?: string; home?: string }, p: unknown): string {
+  const full = abs(ctx.cwd, p, ctx.home);
   if (!ctx.root) return full;
   const inside = relative(followed(ctx.root), followed(full));
   if (inside === ".." || inside.startsWith(`..${"/"}`) || inside.startsWith("..\\") || isAbsolute(inside)) throw new Error(`that is outside the folder this conversation may use (${ctx.root})`);
@@ -62,6 +63,8 @@ export function firstLines(text: string, most: number, what: string, hint: strin
 const STOP_GRACE_MS = 1500;
 /** How long to wait, after the command itself has ended, for what it left running behind it to let go of the output. */
 const EXIT_GRACE_MS = 400;
+/** How long the programs a shell left behind are given to end before they count as running on. */
+const LEFT_SETTLE_MS = 300;
 /** What every command is told, so that nothing waits for a person who is not there: no pager, no editor, no prompt for a password. */
 export const QUIET_ENV = { TERM: "dumb", NO_COLOR: "1", PAGER: "cat", GIT_PAGER: "cat", GIT_EDITOR: "true", GIT_TERMINAL_PROMPT: "0" } as const;
 
@@ -154,13 +157,13 @@ export class Capture {
   }
 }
 
-export interface RunResult { output: string; code: number | null; timedOut: boolean; interrupted: boolean; /** What ran out: the silence (no output for `idleMs`) or the whole time (`timeoutMs`). */ ranOut?: "silence" | "time"; /** The signal that ended the command, when one did. */ signal?: string; /** The command was not killed at its timeout: it was handed on (see `onTimeout`). */ adopted?: boolean; /** Where the whole output is, when it was too long to keep in memory. */ file?: string }
+export interface RunResult { output: string; code: number | null; timedOut: boolean; interrupted: boolean; /** What ran out: the silence (no output for `idleMs`) or the whole time (`timeoutMs`). */ ranOut?: "silence" | "time" | "left"; /** The signal that ended the command, when one did. */ signal?: string; /** The command was not killed at its timeout: it was handed on (see `onTimeout`). */ adopted?: boolean; /** Where the whole output is, when it was too long to keep in memory. */ file?: string }
 
 /**
  * Run a process, collect its output, and kill the whole process group on timeout or when `signal` aborts.
  * Never rejects: a failure to start is reported in `output`.
  */
-export function run(argv: string[], opts: { cwd: string; signal: AbortSignal; timeoutMs: number; /** Time it may be silent: the clock is restarted by every bit of output, and `timeoutMs` is then the most it may take in all. */ idleMs?: number; /** What the command starts with (this program's own environment when not given). */ /** Most output kept whole in memory, in characters (default 1,000,000); more goes to a file. */ maxOutput?: number; env?: NodeJS.ProcessEnv; onChunk?: (text: string) => void; /** Called once the command has started. */ onSpawn?: (child: ChildProcess) => void; /** The command is confined with a guard that waits to be released (`Launch.guarded`). */ guarded?: boolean; /** At the timeout: take the running command over (true) instead of killing it. */ onTimeout?: (child: ChildProcess, printed: string) => boolean }): Promise<RunResult> {
+export function run(argv: string[], opts: { cwd: string; signal: AbortSignal; timeoutMs: number; /** Time it may be silent: the clock is restarted by every bit of output, and `timeoutMs` is then the most it may take in all. */ idleMs?: number; /** What the command starts with (this program's own environment when not given). */ /** Most output kept whole in memory, in characters (default 1,000,000); more goes to a file. */ maxOutput?: number; env?: NodeJS.ProcessEnv; onChunk?: (text: string) => void; /** Called once the command has started. */ onSpawn?: (child: ChildProcess) => void; /** The command is confined with a guard that waits to be released (`Launch.guarded`). */ guarded?: boolean; /** At the timeout: take the running command over (true) instead of killing it. */ onTimeout?: (child: ChildProcess, printed: string) => boolean; /** When the shell has ended and programs it started (`server &`) still run in its group: take them over (true) instead of leaving them behind. */ onLeft?: (child: ChildProcess, code: number | null, printed: string) => boolean }): Promise<RunResult> {
   return new Promise((done) => {
     const [cmd, ...args] = argv;
     if (!cmd) return done({ output: "Error: empty command", code: null, timedOut: false, interrupted: false });
@@ -206,9 +209,22 @@ export function run(argv: string[], opts: { cwd: string; signal: AbortSignal; ti
       output.close();
       done({ output: output.text(), code, timedOut, interrupted, ...(ranOut ? { ranOut } : {}), ...(signal && !timedOut && !interrupted ? { signal } : {}), ...(adopted ? { adopted } : {}), ...(output.file ? { file: output.file } : {}) });
     };
-    child.on("close", (code, signal) => finish(code, "", signal));
+    // The shell has ended. What it started and left running in its group (`server &`) must not be left outside every list: it goes on as a job. A pipeline's last
+    // stragglers (`yes | head`) are gone within a moment, so they are waited for.
+    const ended = (code: number | null, signal?: string | null): void => {
+      if (settled || timedOut || interrupted || !opts.onLeft || !groupAlive(child.pid)) return finish(code, "", signal);
+      const until = Date.now() + LEFT_SETTLE_MS;
+      const look = (): void => {
+        if (settled) return;
+        if (groupAlive(child.pid) && Date.now() < until) { setTimeout(look, 20).unref?.(); return; }
+        if (groupAlive(child.pid) && !interrupted && opts.onLeft!(child, code, output.text())) { child.stdout.off("data", collect); child.stderr.off("data", collect); adopted = true; ranOut = "left"; }
+        finish(code, "", signal);
+      };
+      look();
+    };
+    child.on("close", (code, signal) => ended(code, signal));
     // The command has ended but something it started (`server &`) still holds the output: report what there is, do not wait for it.
-    child.on("exit", (code) => { const grace = setTimeout(() => finish(code), EXIT_GRACE_MS); grace.unref?.(); });
+    child.on("exit", (code) => { const grace = setTimeout(() => ended(code), EXIT_GRACE_MS); grace.unref?.(); });
     child.on("error", (e) => finish(null, `Error: ${e.message}`));
   });
 }

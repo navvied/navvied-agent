@@ -3,6 +3,7 @@ import { changedPaths } from "./tools/changed.ts";
 import { caselessFor, nativePaths, type Paths } from "./rules.ts";
 import { secretDirNames } from "./secret-stores.ts";
 import { programName, shellView, type Flat } from "./shell-scan.ts";
+import { expandHome, homeFrom } from "./where.ts";
 
 /**
  * What is asked about even when the person said "do not ask again", and in Auto mode: things that can be done, but not undone.
@@ -58,7 +59,8 @@ const GIT_BASH_DRIVE = /^\/([a-z])(\/.*)?$/i;
  * system's file on every computer (on Windows too, where the shell is Git Bash), and `C:\Windows\x` is the system's on every computer.
  * Only a path that is not absolute is made from the folder the command runs in, by this computer's rules.
  */
-function ofWrite(target: string, cwd: string, p: Paths): Risk | undefined {
+function ofWrite(given: string, cwd: string, p: Paths): Risk | undefined {
+  const target = expandHome(given, p.home ?? homeFrom());
   if (!target || target === "/dev/null" || /^\/dev\/(stdout|stderr|tty)$/.test(target)) return undefined;
   const flat = target.replace(/\\/g, "/");
   const posixAbsolute = target.startsWith("/");
@@ -142,7 +144,7 @@ const PROTECTED = new RegExp(String.raw`(^|\/)(\.git\/(?!info\/exclude$)|(?:${se
 const PROTECTED_CASELESS = new RegExp(PROTECTED.source, "i");
 
 function ofPath(file: string, cwd: string, p: Paths): Risk | undefined {
-  const full = p.resolve(cwd, file).replace(/\\/g, "/");
+  const full = p.resolve(cwd, expandHome(file, p.home ?? homeFrom())).replace(/\\/g, "/");
   const inside = p.relative(p.resolve(cwd), full).replace(/\\/g, "/");
   const protectedPath = caselessFor(p) ? PROTECTED_CASELESS : PROTECTED;
   return protectedPath.test(full) || protectedPath.test(inside) ? risk("protected-path", "This changes a file that sets up your shell, your keys, git itself or navvied.", "changes to setup files") : undefined;

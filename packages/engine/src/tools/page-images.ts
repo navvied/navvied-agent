@@ -7,6 +7,9 @@ import { drawPage } from "../media/render.ts";
 import { MediaError } from "../media/types.ts";
 import type { ToolContext } from "../types.ts";
 
+/** Where a picture a tool made arrives: in a message of its own that the tool sent, so the model does not take it for something the person wrote. */
+export const PICTURE_FOLLOWS = "in the next message (sent by this tool, not written by the person)";
+
 /** Most pages drawn for one call, and the most one drawn page may weigh once made smaller: what is not asked for or too heavy is not sent. */
 export const MOST_DRAWN = 8, MOST_PAGE_BYTES = 2_500_000;
 export const NO_RENDERER = "Page images need pdftoppm, mutool or gs on this computer; none was found.";
@@ -47,7 +50,7 @@ export async function showPages(ctx: ToolContext, pdf: string, pages: number[]):
     }
   });
   const lines: string[] = [];
-  if (shown.length) lines.push(`Page${shown.length === 1 ? "" : "s"} ${shown.join(", ")} ${shown.length === 1 ? "is" : "are"} shown to you as ${shown.length === 1 ? "a picture" : "pictures"} in the next message.`);
+  if (shown.length) lines.push(`Page${shown.length === 1 ? "" : "s"} ${shown.join(", ")} ${shown.length === 1 ? "is" : "are"} shown to you as ${shown.length === 1 ? "a picture" : "pictures"} ${PICTURE_FOLLOWS}.`);
   if (pages.length > asked.length) lines.push(`Only the first ${MOST_DRAWN} pages are drawn per call; ask for the rest from page ${pages[MOST_DRAWN]}.`);
   for (const f of failed) lines.push(`${f[0]!.toUpperCase()}${f.slice(1)}`);
   return lines.join("\n");

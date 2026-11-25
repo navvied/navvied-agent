@@ -1,3 +1,5 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import { CODE_AFTER, CodeOffer, asksForMany, codeNote } from "../src/code-offer.ts";
 import { SMALL_WINDOW, defaultTools } from "../src/index.ts";
@@ -93,6 +95,15 @@ describe("the tool in the list of an engine that has it switched on", () => {
     r.cleanup();
   });
 
+  test("40 parallel Reads of the real tool count the same, and the tool is there on the next request", async () => {
+    const r = rig((_q, n, dir) => (n === 0 ? { calls: Array.from({ length: 40 }, () => ({ name: "Read", args: { file_path: `${dir}/a.txt` } })) } : { text: "ok" }), tools());
+    writeFileSync(join(r.dir, "a.txt"), "hello");
+    await r.turn(prompt("read them"));
+    expect(offered(r, 0)).toBe(false);
+    expect(offered(r, 1)).toBe(true);
+    r.cleanup();
+  });
+
   test("sequential calls reach the limit at the sixth; big results reach the other limit", async () => {
     const a = rig((_q, n) => (n < 8 ? { calls: [call(n)] } : { text: "ok" }), tools(records()));
     await a.turn(prompt("get records"));
@@ -113,12 +124,12 @@ describe("the tool in the list of an engine that has it switched on", () => {
     r.cleanup();
   });
 
-  test("a model that used it keeps it; the next turn starts closed", async () => {
+  test("once offered it stays offered for the conversation, so the list does not change", async () => {
     const r = rig((_q, n) => (n === 0 ? { calls: Array.from({ length: 6 }, (_, i) => call(i)) } : { text: "ok" }), tools(records()));
     await r.turn(prompt("one"));
     expect(offered(r, 1)).toBe(true);
     await r.turn(prompt("two"));
-    expect(offered(r, r.provider.requests.length - 1)).toBe(false);
+    expect(offered(r, r.provider.requests.length - 1)).toBe(true);
     r.cleanup();
   });
 

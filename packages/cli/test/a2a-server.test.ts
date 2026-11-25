@@ -149,7 +149,8 @@ describe("the server of agent-to-agent calls", () => {
     const t = boot();
     await t.rpc(t.alice, "message/send", { message: { role: "user", parts: [{ kind: "text", text: "go" }], metadata: { peer: "bob", mode: "bypass" } }, mode: "bypass", metadata: { peer: "bob" }, configuration: { blocking: true } });
     expect(t.runner.jobs[0]!.peer).toBe("alice");
-    expect(Object.keys(t.runner.jobs[0]!).sort()).toEqual(["context", "peer", "progress", "signal", "text"]);
+    expect(Object.keys(t.runner.jobs[0]!).sort()).toEqual(["context", "from", "peer", "progress", "signal", "text"]);
+    expect(t.runner.jobs[0]!.from).toEqual({ agent: "alice", name: "alice" });
   });
 
   test("a context goes on, belongs to its peer, and another peer's task or context cannot be read or reached", async () => {
@@ -204,6 +205,19 @@ describe("the server of agent-to-agent calls", () => {
     expect(refused.status).toBe(429);
     expect(refused.headers.get("retry-after")).toBe("60");
     expect((await t.send(t.bob, "bob is not slowed by alice")).status).toBe(200);
+  });
+
+  test("a task says who is asking: the name of the token, and the label the sender gave itself (cut, plain), never the token", async () => {
+    const t = boot();
+    await t.send(t.alice, "hello");
+    const labelled = await t.rpc(t.bob, "message/send", { message: { kind: "message", role: "user", messageId: crypto.randomUUID(), parts: [{ kind: "text", text: "hi" }], metadata: { agent: `  Bob\u202e's\nlaptop ${"x".repeat(100)}` } }, configuration: { blocking: true } });
+    expect(labelled.status).toBe(200);
+    expect(t.runner.jobs[0]!.from).toEqual({ agent: "alice", name: "alice" });
+    const from = t.runner.jobs[1]!.from;
+    expect(from.name).toBe("bob");
+    expect(from.agent).toStartWith("Bob 's laptop xxx");
+    expect(from.agent.length).toBe(64);
+    expect(JSON.stringify(t.runner.jobs.map((j) => j.from))).not.toContain(t.alice);
   });
 
   test("two tasks at once for one peer are refused, and a conversation that is busy says so", async () => {

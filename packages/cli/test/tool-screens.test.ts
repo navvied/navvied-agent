@@ -151,7 +151,7 @@ describe("/schedule", () => {
     expect(s.items.map((i) => i.label)).toEqual(["on   Morning summary", "off  Tidy", "New task"]);
     expect(s.items[0]!.hint).toBe("Every weekday at 9:00, next tomorrow 9:00, Ran fine today 9:00");
     expect(s.items[1]!.hint).toBe("Every day at 22:00, off, Not run yet, can change files");
-    expect(s.frame.body).toContain("Tasks run only while this computer is on and navvied is running.");
+    expect(s.frame.body).toContain("Tasks run only while navvied is running.");
   });
   test("a task that was just saved has no finished run yet, so it says it has not run", async () => {
     const t = scripted([undefined]);

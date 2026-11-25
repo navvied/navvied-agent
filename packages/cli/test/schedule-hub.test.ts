@@ -43,7 +43,7 @@ describe("scheduled tasks through the hub", () => {
     const { hub, got } = open();
     const caps = got.find((e) => e.ev === "caps") as unknown as { schedule?: boolean; scheduleNote?: string };
     expect(caps.schedule).toBe(true);
-    expect(caps.scheduleNote).toContain("only while this computer is on");
+    expect(caps.scheduleNote).toContain("only while navvied is running");
     await hub.stop();
   });
 

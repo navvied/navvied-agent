@@ -1,6 +1,6 @@
 import type { CommandInfo } from "./complete.ts";
 
-/** The commands a person can type in the app. The help list, the suggestions and what the agent is told about itself all come from here. */
+/** The commands a person can type in the app. The help list and the suggestions come from here; the agent is never told of them. */
 export const SLASH_COMMANDS: readonly CommandInfo[] = [
   { name: "web", desc: "Open this conversation in your browser, to keep going there" },
   { name: "memory", desc: "See and add what navvied remembers about this project and about you" },

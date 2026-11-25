@@ -153,6 +153,23 @@ export function secretsIn(text: string): string[] {
   return [...found].filter((v) => v.length >= 6);
 }
 
+/**
+ * The one step a conversation's text passes before it leaves the live engine (the search index, the meaning index and its embeddings server, a summary,
+ * a copy, a transfer, a hand-over, the relay, the cloud): keys and shapes of keys, what `known` says, and a password the person said in words become `[hidden]`.
+ * The person's own journal keeps what they typed; nothing else does.
+ */
+export function hideSecrets(text: string, known: readonly string[] = []): string {
+  let safe = redact(text);
+  for (const v of [...secretsIn(safe), ...known]) if (v) safe = safe.split(v).join("[hidden]");
+  return safe;
+}
+
+/** A whole conversation through that step: a password said in one message is hidden in every message that holds the same value. */
+export function hideInItems<T extends { text: string }>(items: readonly T[]): T[] {
+  const known = [...new Set(items.flatMap((i) => secretsIn(i.text)))].sort((a, b) => b.length - a.length);
+  return items.map((i) => { const text = hideSecrets(i.text, known); return text === i.text ? i : { ...i, text }; });
+}
+
 export interface Hidden { text: string; /** How many values were put out of sight. */ count: number }
 
 /**

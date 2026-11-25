@@ -3,7 +3,7 @@
  * embedding model and `--embeddings`, Ollama, or any service that speaks the chat-completions style `/embeddings` call, on the person's own key). Nothing
  * is built in and nothing is sent anywhere the person did not name; with no server set up this module is never used. Plain HTTP, no library.
  */
-import { redact, secretsIn } from "./redact.ts";
+import { hideSecrets } from "./redact.ts";
 
 export interface EmbeddingConfig {
   /** The server's address: `http://127.0.0.1:8080/v1` for the chat shape, `http://127.0.0.1:11434` for Ollama. */
@@ -25,9 +25,7 @@ export class EmbeddingError extends Error {}
 
 /** The text as it may leave this computer: secrets hidden, passwords said in words too, cut to the size a passage may have. */
 export function forEmbedding(text: string): string {
-  let safe = redact(text);
-  for (const v of secretsIn(safe)) safe = safe.split(v).join("[hidden]");
-  return safe.replace(/\s+/g, " ").trim().slice(0, EMBED_TEXT_MAX);
+  return hideSecrets(text).replace(/\s+/g, " ").trim().slice(0, EMBED_TEXT_MAX);
 }
 
 /** The vector with length 1, so that how alike two texts are is the dot product. */

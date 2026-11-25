@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { EmbeddingError, dot, embed, forEmbedding, fuse, type EmbeddingConfig } from "@navvied/engine";
+import { EmbeddingError, dot, embed, forEmbedding, fuse, hideInItems, type EmbeddingConfig } from "@navvied/engine";
 import type { HistoryItem } from "@navvied/protocol";
 import { embeddingConfig, type EmbeddingSettings } from "./meaning-config.ts";
 import type { Found, SearchIndex } from "./search-index.ts";
@@ -85,7 +85,8 @@ export class Meaning {
   }
 
   /** Gives the messages of a conversation their vectors: the ones that have none (or whose text changed), up to a few at a time. Returns how many were made. */
-  async index(id: string, items: readonly HistoryItem[], signal?: AbortSignal): Promise<number> {
+  async index(id: string, typed: readonly HistoryItem[], signal?: AbortSignal): Promise<number> {
+    const items = hideInItems(typed);
     const messages = items.flatMap((i, at) => (i.k !== "tool" && i.text.trim() ? [{ id, n: at + 1, text: i.text }] : []));
     this.#db.query("DELETE FROM msgs WHERE session = ? AND n > ?").run(id, items.length);
     return this.#store(messages, signal);
