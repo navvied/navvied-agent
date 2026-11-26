@@ -1,8 +1,3 @@
-/**
- * The module a script imports (`from navvied_tools import *`): one function for each of the program's own tools, and `call_tool(name, **args)` for any other tool the model was offered (a connected program's). Each sends the call over
- * the socket the program listens on and gives back plain Python values: text for most, a list of lines for `grep` and `glob`. A refused
- * or failed call raises `ToolError` with the reason.
- */
 export const STUBS = `import json, os, re, socket, threading
 
 __all__ = ["read", "grep", "glob", "write", "edit", "bash", "web_fetch", "web_search", "call_tool", "ToolError"]
@@ -14,15 +9,16 @@ class ToolError(RuntimeError):
 
 _lock = threading.Lock()
 _conn = None
+_door = None
 
 
 def _call(tool, **args):
     global _conn
     with _lock:
         if _conn is None:
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.connect(os.environ["NAVVIED_CODE_SOCK"])
+            s = socket.create_connection(("127.0.0.1", _door[0]))
             _conn = s.makefile("rw", encoding="utf-8", newline="\\n")
+            _conn.write(_door[1] + "\\n")
         _conn.write(json.dumps({"tool": tool, "args": {k: v for k, v in args.items() if v is not None}}) + "\\n")
         _conn.flush()
         line = _conn.readline()
@@ -59,8 +55,10 @@ def bash(command):
     return _call("Bash", command=command)
 
 
-def _reset():
-    global _conn
+def _reset(door=None):
+    global _conn, _door
+    if door is not None:
+        _door = door
     if _conn is not None:
         try:
             _conn.close()

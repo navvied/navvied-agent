@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { homedir } from "node:os";
+import { homeFrom } from "../src/where.ts";
 import { win32, posix } from "node:path";
 import { hardBlock, onlyLooks, riskOf } from "../src/index.ts";
 import type { Paths } from "../src/rules.ts";
@@ -204,10 +204,27 @@ describe("a command is judged as the shell will run it", () => {
 });
 
 describe("the hard floor reads a target as a place, not as writing", () => {
-  const home = process.env.HOME || homedir();
+  const home = homeFrom();
   const NEVER_PLACES = ["rm -rf ~", "rm -rf ~/", "rm -rf ~/*", "rm -rf ~/.", "rm -rf $HOME", "rm -rf $HOME/", "rm -rf \"$HOME\"", "rm -rf ${HOME}/", "rm -rf $HOME/.", "rm -rf //", "rm -rf ///", "rm -rf /.", "rm -rf /./", "rm -rf /home", "rm -rf /home/", `rm -rf ${home}`, `rm -rf ${home}/`, `rm -rf ${home}/.`, `rm -rf ${home}/*`, `rm -rf ${home}/docs/..`, "rm -rf ~/projects/..", "rm -rf /home/someone", "rm -rf /home/someone/", "rm -rf /Users/someone/", "rm -rf /usr//", "rm -rf /etc/.", "sudo rm -rf ~/", "rm -fr $HOME/"];
   test.each(NEVER_PLACES)("never: %s", (command) => { expect(blocked(command)).toBe(true); });
   test.each(["rm -rf ~/project/build", "rm -rf ./node_modules", "rm -rf build/", "rm -rf ./", "rm -rf $HOME/project/build/", `rm -rf ${home}/project/x`, "rm -rf /tmp/x", "rm -rf /home/someone/project", "rm -rf ../build", "rm -rf ~/.cache/x"])("allowed here, asked elsewhere: %s", (command) => { expect(blocked(command)).toBe(false); });
+});
+
+describe("the hard floor reads a Windows home and drive as places, in every spelling and on every computer", () => {
+  const on = (home: string): Paths => ({ isAbsolute: win32.isAbsolute, relative: win32.relative, resolve: win32.resolve, sep: "\\", home });
+  const refused = (command: string, home: string): boolean => hardBlock("Bash", { command }, "D:\\work\\project", on(home)) !== undefined;
+  const PROFILE = "C:\\Users\\someone", MOVED = "D:\\profiles\\someone", FROM_GIT_BASH = "/c/Users/someone";
+  const HOME_SPELLINGS = ["rm -rf ~/", "rm -rf ~/.", "rm -rf ~/*", "rm -rf $HOME/", "rm -rf ${HOME}/", "rm -rf $HOME/.", "rm -fr \"$HOME/\"", "sudo rm -rf ~/", "rm -rf ~/projects/..", "rm -rf %USERPROFILE%\\.", "rd /s /q %USERPROFILE%\\docs\\..", "Remove-Item -Recurse $env:USERPROFILE\\."];
+
+  test.each(HOME_SPELLINGS)("never, wherever the home is: %s", (command) => {
+    for (const home of [PROFILE, MOVED, FROM_GIT_BASH]) expect([home, refused(command, home)]).toEqual([home, true]);
+  });
+
+  test.each(["rm -rf C:\\Users\\someone/.", "rm -rf C:\\Users\\someone/docs/..", "rm -rf c:/users/SOMEONE//", "rm -rf /c/Users/someone/.", "rd /s /q C:\\Users\\someone\\.", "rm -rf C:/.", "rm -rf C:\\Windows\\.", "rm -rf C:/Users/someone-else/work/../."])("never, spelt with its drive: %s", (command) => { expect(refused(command, PROFILE)).toBe(true); });
+
+  test.each(["rm -rf D:\\profiles\\someone\\.", "rm -rf d:/Profiles/Someone/", "rm -rf /d/profiles", "rm -rf D:/profiles/."])("never, a home that is not under Users, nor what holds it: %s", (command) => { expect(refused(command, MOVED)).toBe(true); });
+
+  test.each(["rm -rf ~/project/build", "rm -rf $HOME/.cache/x", "rm -rf C:\\Users\\someone\\project\\build", "rm -rf %USERPROFILE%\\project\\out", "rm -rf D:/work/project/dist", "rm -rf /d/work/out", "rm -rf ./node_modules", "rd /s /q build", "rmdir /s /q out", "del /s /q /f dist"])("allowed here, asked elsewhere: %s", (command) => { expect(refused(command, PROFILE)).toBe(false); });
 });
 
 describe("the hard floor sees through the same tricks", () => {

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_SANDBOX, Sandbox, sandboxAbility, type SandboxSetting } from "../src/index.ts";
 import { commandLine, quoteArg, useSandboxHelper, windowsLaunch, windowsLine } from "../src/sandbox/index.ts";
-import { ACTIVE_PROCESSES, DENY_ONLY_GROUPS, UI_RESTRICTIONS, jobLimits, parseRun, startupInfo, uiLimits, wide } from "../src/sandbox/windows-run.ts";
+import { ACTIVE_PROCESSES, DENY_ONLY_GROUPS, UI_RESTRICTIONS, jobLimits, parseRun, runConfined, startupInfo, uiLimits, wide } from "../src/sandbox/windows-run.ts";
 import { windowsAbility } from "../src/sandbox/windows.ts";
 import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
@@ -128,7 +128,35 @@ describe("the sandbox on Windows, with a faked computer", () => {
   });
 });
 
-/** These run on a Windows computer only (public CI on Windows is where they are shown to pass). */
+describe("the helper's calls into the system (runs everywhere: the system is a stand-in)", () => {
+  const EXPORTED_BY: Record<string, string[]> = {
+    "kernel32.dll": ["AssignProcessToJobObject", "CloseHandle", "CreateJobObjectW", "GetCurrentProcess", "GetExitCodeProcess", "GetLastError", "GetStdHandle", "OpenProcess", "ResumeThread", "SetInformationJobObject", "TerminateJobObject", "WaitForMultipleObjects"],
+    "advapi32.dll": ["CreateProcessAsUserW", "CreateRestrictedToken", "CreateWellKnownSid", "OpenProcessToken"],
+  };
+  const standIn = (answer: (name: string) => number) => async () => {
+    const real = await import("bun:ffi");
+    const dlopen = (library: string, calls: Record<string, unknown>) => {
+      for (const name of Object.keys(calls)) if (!EXPORTED_BY[library]?.includes(name)) throw new Error(`Symbol "${name}" not found in "${library}"`);
+      return { symbols: Object.fromEntries(Object.keys(calls).map((name) => [name, () => answer(name)])) };
+    };
+    return { dlopen: dlopen as unknown as typeof real.dlopen, FFIType: real.FFIType, ptr: real.ptr };
+  };
+
+  test("every call is asked of the library that has it, so the helper gets as far as the system's first answer", async () => {
+    let said = "";
+    const code = await runConfined(["--", "x"], (t) => { said += t; }, standIn(() => 0));
+    expect([code, said]).toEqual([1, "sandbox: reading the token failed (error 0)\n"]);
+  });
+
+  test("whatever stops the helper is said in its own line, which the sandbox passes on as the reason", async () => {
+    let said = "";
+    const code = await runConfined(["--", "x"], (t) => { said += t; }, async () => { throw new Error("the system library did not load\nat somewhere"); });
+    expect([code, said]).toEqual([1, "sandbox: the system library did not load\n"]);
+    const ran = (() => ({ status: code, stderr: said })) as unknown as typeof spawnSync;
+    expect(windowsAbility(helper, ran).why).toBe("the system library did not load");
+  });
+});
+
 describe.skipIf(process.platform !== "win32")("the sandbox on a real Windows computer", () => {
   const main = join(import.meta.dir, "..", "..", "cli", "src", "main.ts");
   const words = [process.execPath, main];

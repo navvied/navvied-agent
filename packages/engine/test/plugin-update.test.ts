@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import { LIMITS, PluginLock, installPlugin, readPack } from "../src/plugin-pack.ts";
 import { checkOutdated, updatePlugin } from "../src/plugin-update.ts";
@@ -19,7 +19,6 @@ const fresh = (label: string): string => { const d = join(base, `${label}-${++n}
 const put = (root: string, rel: string, text: string | Buffer): void => { const p = join(root, ...rel.split("/")); mkdirSync(join(p, ".."), { recursive: true }); writeFileSync(p, text); };
 const places = (): { root: string; lock: PluginLock } => { const d = fresh("home"); return { root: join(d, "plugins"), lock: new PluginLock(join(d, "plugins.lock.json")) }; };
 
-/** A plugin folder: one hook and one skill; `over` replaces manifest keys. */
 function makePlugin(over: Record<string, unknown> = {}, name = "lint-helper", dir?: string): string {
   const d = dir ?? join(fresh("plugin"), name);
   put(d, "navvied-plugin.json", JSON.stringify({ name, version: "1.0.0", description: "Checks style", skills: ["style"], hooks: { PreToolUse: [{ matcher: "Write", command: "node ${NAVVIED_PLUGIN_ROOT}/check.js" }] }, ...over }));
@@ -256,7 +255,9 @@ describe("updating a plugin", () => {
     const cwd = process.cwd();
     process.chdir(join(source, ".."));
     try { await installPlugin({ from: "lint-helper", ...p }); } finally { process.chdir(cwd); }
-    expect(p.lock.read()["lint-helper"]!.source).toBe(source);
+    const recorded = p.lock.read()["lint-helper"]!.source;
+    expect(isAbsolute(recorded)).toBe(true);
+    expect(realpathSync(recorded)).toBe(realpathSync(source));
     expect((await updatePlugin({ name: "lint-helper", ...p })).ok).toBe(true);
   });
 

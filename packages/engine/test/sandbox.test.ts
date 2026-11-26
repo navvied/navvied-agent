@@ -27,7 +27,6 @@ const works = linux && sandboxAbility().how === "bubblewrap";
 const setting = (s: Partial<SandboxSetting> = {}) => () => ({ ...DEFAULT_SANDBOX, ...s });
 const sandbox = (s: Partial<SandboxSetting> = {}, o: { hide?: string[] } = {}) => new Sandbox({ setting: setting(s), home, ...(o.hide ? { hide: () => o.hide! } : {}) });
 
-/** Runs a shell command confined, the way the Bash tool starts one (as a job that is not ended with its parent: this call has no program to release a guard). */
 function confined(command: string, s: Partial<SandboxSetting> = {}, o: { hide?: string[]; cwd?: string } = {}): { code: number | null; out: string; line: string } {
   const cwd = o.cwd ?? project;
   const launch = sandbox(s, o).confine(["bash", "-c", command], { root: project, cwd, detached: true });
@@ -50,7 +49,6 @@ describe("the list of secret places is one list", () => {
 });
 
 describe("the system call filter", () => {
-  /** What the kernel would do with a call: the filter run as the small machine it is. */
   function verdict(program: Uint8Array, arch: number, nr: number): number {
     const v = new DataView(program.buffer, program.byteOffset);
     let acc = 0, pc = 0;
@@ -111,7 +109,6 @@ describe("what is built for macOS and for bubblewrap, as text", () => {
     expect(text).toContain('(subpath "/tmp") (subpath "/private/tmp")');
     expect(text).toContain('(subpath "/private/var/folders/x") (subpath "/var/folders/x")');
     expect(text).not.toContain("deny network");
-    // Later rules win: the hidden places are denied after the writable ones are allowed.
     expect(text.lastIndexOf("(allow file-write*")).toBeLessThan(text.indexOf('(deny file-read* (subpath "/Users/a/.ssh") (literal "/Users/a/.netrc"))'));
     expect(text).toContain('(deny file-write* (subpath "/Users/a/.ssh") (literal "/Users/a/.netrc"))');
   });
@@ -167,7 +164,6 @@ describe("what a command may write and cannot see", () => {
     expect(denialIn("bash: /usr/local/bin/tool: Read-only file system", plan, project)).toEqual({ path: "/usr/local/bin/tool", kind: "write" });
     expect(denialIn(`EROFS: read-only file system, open '${away}/a.txt'`, plan, project)).toEqual({ path: join(away, "a.txt"), kind: "write" });
     expect(denialIn(`ls: cannot open directory '${join(home, ".ssh")}': Permission denied`, plan, project)).toEqual({ path: join(home, ".ssh"), kind: "hidden" });
-    // An ordinary refusal, a read-only message about the project itself, and an unrelated failure are not the sandbox.
     expect(denialIn("touch: cannot touch '/etc/x': Permission denied", plan, project)).toBeUndefined();
     expect(denialIn(`cp: cannot create '${project}/a': Read-only file system`, plan, project)).toBeUndefined();
     expect(denialIn("npm ERR! code ENOENT", plan, project)).toBeUndefined();
@@ -240,8 +236,7 @@ describe.skipIf(!works)("a confined command, for real (bubblewrap)", () => {
 
   const tag = (): string => `${process.pid}${Math.floor(Math.random() * 100000)}`;
   const alive = (t: string): boolean => spawnSync("pgrep", ["-f", `^sleep [34]${t}$`]).status === 0;
-  /** Ends the sleeps this test started (found by their own unique tag), by pid: nothing is ever killed by a name or a pattern. */
-  const endTagged = (t: string): void => { for (const pid of spawnSync("pgrep", ["-f", `^sleep [34]${t}$`], { encoding: "utf8" }).stdout.split("\n").filter(Boolean)) { try { process.kill(Number(pid), "SIGKILL"); } catch { /* already gone */ } } };
+  const endTagged = (t: string): void => { for (const pid of spawnSync("pgrep", ["-f", `^sleep [34]${t}$`], { encoding: "utf8" }).stdout.split("\n").filter(Boolean)) { try { process.kill(Number(pid), "SIGKILL"); } catch { continue; } } };
 
   test("when the process group is killed everything it started is gone", async () => {
     const t = tag();
@@ -255,6 +250,8 @@ describe.skipIf(!works)("a confined command, for real (bubblewrap)", () => {
 
   const anyProcessOf = (t: string): boolean => spawnSync("pgrep", ["-f", `sleep 3${t}`]).status === 0;
   const GONE_WITHIN_MS = 20_000;
+  const MOST_LEFT_COMMAND = 200;
+  const processesOf = (tags: readonly string[]): string => spawnSync("ps", ["-eo", "pid=,ppid=,stat=,args="], { encoding: "utf8" }).stdout.split("\n").filter((line) => tags.some((t) => line.includes(`sleep 3${t}`))).map((line) => line.trim().slice(0, MOST_LEFT_COMMAND)).join(" | ");
 
   async function standIn(how: "foreground" | "interactive" | "detached"): Promise<{ tag: string; kill(): Promise<void> }> {
     const t = tag();
@@ -281,14 +278,13 @@ describe.skipIf(!works)("a confined command, for real (bubblewrap)", () => {
       return program.tag;
     }));
     try {
-      await until(() => !runs.some(anyProcessOf), GONE_WITHIN_MS);
+      await until(() => !runs.some(anyProcessOf), GONE_WITHIN_MS).catch((e: Error) => { throw new Error(`${e.message}; still running (pid parent state command): ${processesOf(runs)}`); });
     } finally { runs.forEach(endTagged); }
   }, 30_000);
 
   test("a command is not started unless it is released by the program that is still its parent", () => {
     const launch = sandbox().confine(["sh", "-c", "echo started"], { root: project, cwd: project });
     if (!launch.confined || !launch.guarded) throw new Error("not guarded");
-    // Descriptor 5 is where the program answers the guard: a program that died has closed it, so nothing arrives.
     const started = (input: string) => { const r = spawnSync("sh", ["-c", 'exec "$@" 4>/dev/null 5<&0', "sh", ...launch.argv], { input, encoding: "utf8" }); return { code: r.status, out: r.stdout }; };
     expect(started("")).toEqual({ code: 125, out: "" });
     expect(started("go\n")).toEqual({ code: 0, out: "started\n" });

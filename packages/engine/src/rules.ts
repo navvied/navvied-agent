@@ -129,49 +129,54 @@ export class Rules {
 
 interface Parsed { text: string; tool: string; pattern: string | undefined }
 
-/** The files that hold what the agent may do: it can never change its own permissions, whatever the mode. */
 const OWN_PERMISSIONS = /(^|\/)(\.navvied\/permissions\.json|navvied\/config\.json)$/;
 const SYSTEM_DIRS = /^\/(etc|boot|usr|bin|sbin|lib|lib64|System|dev|proc|sys)(\/|$)/;
-/** The same patterns for a computer that does not tell `ETC` from `etc`. */
 const folded = (re: RegExp): RegExp => new RegExp(re.source, "i");
 const OWN_PERMISSIONS_CASELESS = folded(OWN_PERMISSIONS), SYSTEM_DIRS_CASELESS = folded(SYSTEM_DIRS);
 const WINDOWS_SYSTEM_DIRS = /^[a-z]:\/(windows|program files|program files \(x86\)|programdata)(\/|$)/i;
 
-/** What `rm -r` must never be pointed at: the disk, the home folder, or a whole system folder. */
 const WHOLE = /^(\/|~|\$HOME|\/\*|~\/\*|\$HOME\/\*|\/(etc|boot|usr|bin|sbin|lib|lib64|var|opt|root|home|System|Library|Applications|dev|proc|sys)\/?\*?)$/;
 
 const SYSTEM_WHOLE = /^\/(etc|boot|usr|bin|sbin|lib|lib64|var|opt|root|home|Users|System|Library|Applications|dev|proc|sys)$/;
 
-/**
- * Whether a target of a delete is the disk, a folder every program depends on, or a whole home folder, however it is spelt: `~`, `$HOME` and
- * `${HOME}` are put in for the home folder first, then the path is made plain the way the shell makes it (`//` is `/`, a last `/` or `/.` is nothing,
- * `..` goes up), then it is compared as a place, not as writing. A path that is not absolute here is the project's own, and is not this.
- */
-function wholeFolder(target: string, homeDir: string): boolean {
-  const home = posix.normalize(homeDir.replace(/\\/g, "/")).replace(/(.)\/+$/, "$1");
-  let t = expandHome(target, home);
-  if (!t.startsWith("/")) return false;
-  t = posix.normalize(t).replace(/\/\*$/, "").replace(/(.)\/+$/, "$1") || "/";
-  return t === "/" || t === home || home.startsWith(`${t}/`) || SYSTEM_WHOLE.test(t) || /^\/(home|Users)\/[^/]+$/.test(t);
+const DRIVE_PATH = /^([a-z]):(\/.*)?$/i;
+const GIT_BASH_DRIVE_PATH = /^\/([a-z])(\/.*)?$/i;
+const WINDOWS_HOME_VARIABLE = /^(?:%userprofile%|%homedrive%%homepath%|\$env:userprofile|\$\{?userprofile\}?)(?=[/\\]|$)/i;
+const WINDOWS_WHOLE_PLACE = /^\/(?:|windows|programdata|program files(?: \(x86\))?|users(?:\/[^/]+)?)$/;
+const ANY_USER_HOME = /^\/(home|Users)\/[^/]+$/;
+
+interface Place { drive: string; path: string }
+
+const plain = (path: string): string => posix.normalize(path).replace(/\/\*$/, "").replace(/(.)\/+$/, "$1") || "/";
+
+function placeOf(written: string): Place | undefined {
+  const flat = written.replace(/\\/g, "/");
+  const driven = DRIVE_PATH.exec(flat) ?? GIT_BASH_DRIVE_PATH.exec(flat);
+  if (driven) return { drive: driven[1]!.toLowerCase(), path: plain(driven[2] ?? "/").toLowerCase() };
+  return flat.startsWith("/") ? { drive: "", path: plain(flat) } : undefined;
 }
 
-/**
- * What a delete must never be pointed at on Windows, in any of its shells: a drive (`C:`, `/c` in Git Bash), the folders every
- * Windows install is made of, a user's whole home folder, or the variables that stand for them. Spelt with `/` or `\\`, in any case.
- */
+const holds = (place: Place, home: Place): boolean => place.drive === home.drive && (place.path === home.path || home.path.startsWith(place.path === "/" ? "/" : `${place.path}/`));
+
+function wholeFolder(target: string, homeDir: string): boolean {
+  const place = placeOf(expandHome(target.replace(WINDOWS_HOME_VARIABLE, "~"), homeDir));
+  if (!place) return false;
+  const home = placeOf(homeDir);
+  if (home && holds(place, home)) return true;
+  return place.drive ? WINDOWS_WHOLE_PLACE.test(place.path) : place.path === "/" || SYSTEM_WHOLE.test(place.path) || ANY_USER_HOME.test(place.path);
+}
+
 const DRIVE = String.raw`(?:[a-z]:|/[a-z])`;
 const SPELLED = String.raw`(?:%(?:userprofile|systemdrive|homedrive|homepath|windir|systemroot)%|\$env:(?:userprofile|systemdrive|homedrive|windir|systemroot)|\$\{?(?:userprofile|systemdrive)\}?)`;
 const WINDOWS_WHOLE = new RegExp(String.raw`(?:^|\s)(?:${SPELLED}|${DRIVE}(?:/(?:windows|programdata|program files(?: \(x86\))?|users(?:/[^/\s]+)?))?)/?\*?(?=\s|$)`);
 
-/** The reason one command, as the shell will run it, may never run. */
 function blockedLine(line: string, home: string): string | undefined {
   const words = line.trim();
   if (/^(rm|ri|rmdir|rd|del|erase|remove-item)\s/i.test(words)) {
     const args = words.split(/\s+/).slice(1);
     const recursive = args.some((a) => /^-[a-zA-Z]*[rR]/.test(a) || a === "--recursive" || /^\/s$/i.test(a));
-    // `/q` after rd, rmdir, del or erase is a switch, not the folder /q.
     const targets = /^(rm|ri|remove-item)\s/i.test(words) ? args : args.filter((a) => !/^\/[a-z]$/i.test(a));
-    const everything = args.some((a) => !a.startsWith("-") && (WHOLE.test(a) || wholeFolder(a, home))) || WINDOWS_WHOLE.test(targets.join(" ").toLowerCase().replace(/\\/g, "/"));
+    const everything = targets.some((a) => !a.startsWith("-") && (WHOLE.test(a) || wholeFolder(a, home))) || WINDOWS_WHOLE.test(targets.join(" ").toLowerCase().replace(/\\/g, "/"));
     if (recursive && everything) return "this would delete the whole home folder, a system folder or the whole disk";
   }
   if (/^format(\.com)?\s+[a-z]:/i.test(words) || /^(format-volume|clear-disk|remove-partition)(\s|$)/i.test(words)) return "this would format a disk";
@@ -184,10 +189,6 @@ function blockedLine(line: string, home: string): string | undefined {
   return undefined;
 }
 
-/**
- * The reason a shell command may never run, or nothing. It is judged as the shell will run it, in the way a POSIX shell reads it and in
- * the way Windows' shells do: quotes, escapes, variables, wrappers (`sudo`, `env`, `xargs`…), `sh -c`, `eval` and heredocs do not hide it.
- */
 function blockedCommand(command: string, home: string): string | undefined {
   for (const mode of ["posix", "windows"] as const) {
     for (const c of shellView(command, mode).cmds) {
@@ -199,11 +200,6 @@ function blockedCommand(command: string, home: string): string | undefined {
   return undefined;
 }
 
-/**
- * What the agent may never do, whatever the mode and whatever the rules say: wipe the computer, format a disk, write over the
- * system. Short on purpose: it stops the disasters, and everything else is left to the mode and to the person's rules.
- * Returns the reason, or nothing when the call is not one of these.
- */
 export function hardBlock(tool: string, args: Record<string, unknown>, cwd: string, p: Paths = nativePaths): string | undefined {
   if (tool === "Bash") return blockedCommand(String(args.command ?? ""), p.home ?? homeFrom());
   for (const file of changedPaths(tool, args)) {

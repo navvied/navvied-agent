@@ -48,11 +48,10 @@ export function executeCodeTool(limits: CodeLimits = CODE_LIMITS): Tool {
         return new CodeSession({ python, dir, cwd: ctx.cwd, env: { ...scrubbed(process.env), ...QUIET_ENV, PYTHONUNBUFFERED: "1", PYTHONDONTWRITEBYTECODE: "1" } });
       };
       const session = ctx.keep ? ctx.keep(EXECUTE_CODE_TOOL, make) : make();
-      const socket = join(session.dir, `rpc-${++served}.sock`);
-      const calls = await serveCalls(socket, ctx.call, limits.calls);
+      const calls = await serveCalls(ctx.call, limits.calls);
       let out = "", dropped = false;
       try {
-        const ran = await session.run(code, { sock: socket, reset: a.reset === true, timeoutMs: limits.seconds * 1000, signal: ctx.signal, onOut: (text) => { ctx.live?.(text); if (out.length < MOST_HELD) out += text; else dropped = true; } });
+        const ran = await session.run(code, { port: calls.port, token: calls.token, reset: a.reset === true, timeoutMs: limits.seconds * 1000, signal: ctx.signal, onOut: (text) => { ctx.live?.(text); if (out.length < MOST_HELD) out += text; else dropped = true; } });
         const printed = redact(out).trimEnd();
         const saved = printed.length > limits.stdout && !ctx.root ? spill(printed) : undefined;
         const status = ran.timedOut ? `[timed out after ${limits.seconds} s and stopped; the variables are gone]` : ran.interrupted ? "[interrupted; the variables are gone]" : ran.exit === 0 ? "" : ran.exit === null ? "[the Python program ended; the variables are gone]" : `[exit ${ran.exit}]`;
@@ -68,7 +67,5 @@ export function executeCodeTool(limits: CodeLimits = CODE_LIMITS): Tool {
     },
   };
 }
-
-let served = 0;
 
 export const executeCode = executeCodeTool();

@@ -2,20 +2,16 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { rmSync } from "node:fs";
 import { killTree, usesProcessGroups } from "../platform.ts";
 
-/**
- * The Python that stays up for a conversation: it reads one request a line (`{code, sock}`), runs it in the same global names every
- * time (so variables, imports and loaded data survive from one script to the next), and says it is done with a line of its own.
- * What the script writes to its error stream goes into the same stream as its output, in the order it happened.
- */
 const RUNNER = `import sys, os, json, traceback
+sys.stdin.reconfigure(encoding="utf-8", newline="\\n")
+sys.stdout.reconfigure(encoding="utf-8", newline="\\n")
 sys.path.insert(0, os.environ["NAVVIED_CODE_DIR"])
 sys.stderr = sys.stdout
 g = {"__name__": "__main__"}
 import navvied_tools
 for line in sys.stdin:
     req = json.loads(line)
-    os.environ["NAVVIED_CODE_SOCK"] = req["sock"]
-    navvied_tools._reset()
+    navvied_tools._reset((req["port"], req["token"]))
     status = 0
     try:
         exec(compile(req["code"], "<script>", "exec"), g)
@@ -50,11 +46,10 @@ export class CodeSession {
   #held = "";
   #starts = 0;
   constructor(private readonly o: { python: string; dir: string; cwd: string; env: Record<string, string> }) {}
-  /** The folder with the module the scripts import and the sockets of their calls. */
   get dir(): string { return this.o.dir; }
 
   #start(): ChildProcess {
-    const child = spawn(this.o.python, ["-u", "-c", RUNNER], { cwd: this.o.cwd, env: { ...this.o.env, NAVVIED_CODE_DIR: this.o.dir, PYTHONDONTWRITEBYTECODE: "1" }, detached: usesProcessGroups(), windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(this.o.python, ["-u", "-c", RUNNER], { cwd: this.o.cwd, env: { ...this.o.env, NAVVIED_CODE_DIR: this.o.dir, PYTHONDONTWRITEBYTECODE: "1", PYTHONUTF8: "1" }, detached: usesProcessGroups(), windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     child.stdin!.on("error", () => undefined);
     child.stderr!.on("data", () => undefined);
     child.once("close", () => { if (this.#child === child) this.#child = undefined; });
@@ -63,8 +58,7 @@ export class CodeSession {
     return child;
   }
 
-  /** Runs a script. `reset` starts the program afresh first. Output goes to `onOut` as it arrives (without the line that ends it). */
-  run(code: string, o: { sock: string; reset?: boolean; timeoutMs: number; signal: AbortSignal; onOut(text: string): void }): Promise<Ran> {
+  run(code: string, o: { port: number; token: string; reset?: boolean; timeoutMs: number; signal: AbortSignal; onOut(text: string): void }): Promise<Ran> {
     if (o.reset) { this.#kill(); this.#starts = 0; }
     const had = this.#child !== undefined;
     const child = this.#child ?? this.#start();
@@ -96,7 +90,7 @@ export class CodeSession {
       child.stdout!.on("data", onData);
       child.once("close", onClose);
       if (o.signal.aborted) { onAbort(); return; }
-      child.stdin!.write(`${JSON.stringify({ code, sock: o.sock })}\n`);
+      child.stdin!.write(`${JSON.stringify({ code, port: o.port, token: o.token })}\n`);
     });
   }
 

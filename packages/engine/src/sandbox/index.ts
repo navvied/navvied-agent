@@ -92,8 +92,10 @@ export class Sandbox {
   readonly #space = new UserNamespace();
   constructor(private readonly o: SandboxOptions) {}
 
-  /** Ends what this sandbox keeps alive between commands (the namespace they share). The lookout is the program's, not a sandbox's: it ends with the program. */
-  close(): void { this.#space.close(); }
+  close(): void {
+    this.#space.close();
+    lookout.release(this);
+  }
 
   setting(): Setting { return this.o.setting(); }
 
@@ -132,7 +134,7 @@ export class Sandbox {
       if (space) started = joinUserns(space, started);
     }
     const parts = ["writes only in the project, temp and caches", ...(plan.hiddenDirs.length + plan.hiddenFiles.length ? ["secret folders hidden"] : []), `network ${setting.network ? "on" : "off"}`, ...(filtered ? ["risky system calls blocked"] : [])]
-    const look = ability.how === "bubblewrap" ? lookout.start() : undefined;
+    const look = ability.how === "bubblewrap" ? lookout.start(this) : undefined;
     if (ability.how === "bubblewrap" && !look) parts.push("other programs not listed");
     return { confined: true, argv: started, guarded: guard, ...(look ? { look } : {}), line: `[sandbox: ${parts.join("; ")}]`, plan, denial: (output, cwd) => denialIn(output, plan, cwd) };
   }
