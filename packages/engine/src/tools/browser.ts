@@ -12,6 +12,11 @@ import { Session } from "./browser/session.ts";
 import { DialogOpen, KEY_NAMES, RefError, type Point, type Tab } from "./browser/tab.ts";
 import { findChrome } from "./browser/launch.ts";
 import type { Ref } from "./browser/ax.ts";
+import * as nodePath from "node:path";
+
+export function shownFile(project: string, file: string, system: Pick<typeof nodePath, "relative" | "sep"> = nodePath): string {
+  return (system.relative(project, file) || file).split(system.sep).join("/");
+}
 
 export { findChrome, devToolsEndpoint, openWithRetry } from "./browser/launch.ts";
 export { describeReading } from "./browser/page.ts";
@@ -321,7 +326,7 @@ export const browser: Tool = {
       if (s.opened.length) { tail.push(`A new tab opened (tab ${s.tabs.indexOf(s.current) + 1}) and is the current one.`); tab = s.current; s.opened = []; }
       const reading = action === "read" && num(a.offset, 0) > 0 && tab.reading ? tab.reading : await tab.read();
       const got = await s.downloaded(downloadMark, 30_000);
-      for (const d of got) tail.push(d.state === "done" ? `Downloaded ${relative(ctx.cwd, d.path!) || d.path} (${d.bytes} bytes).` : d.state === "going" ? `Still downloading ${d.name}.` : `The download of ${d.name} failed${d.note ? `: ${d.note}` : ""}.`);
+      for (const d of got) tail.push(d.state === "done" ? `Downloaded ${shownFile(ctx.cwd, d.path!)} (${d.bytes} bytes).` : d.state === "going" ? `Still downloading ${d.name}.` : `The download of ${d.name} failed${d.note ? `: ${d.note}` : ""}.`);
       if (tab.chooser !== undefined) tail.push("A file chooser is open: use upload with path.");
       const asked = ["open", "click", "type", "press", "new", "wait"].includes(action) ? await challenge(tab, ctx) : "";
       const head = [note, ...tail].filter(Boolean).join("\n");

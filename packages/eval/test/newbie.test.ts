@@ -8,7 +8,7 @@ import { SkillTrust, projectSkillDirs } from "../../cli/src/plugins.ts";
 import { TOOL_ROWS } from "../../cli/src/tool-table.ts";
 import { loadSkills } from "../../engine/src/skills.ts";
 import { installedMedia } from "../src/media-cache.ts";
-import { agentConfig, check, mediaEnv, prepare, protectedChanged, shell, trustSkills } from "../src/workspace.ts";
+import { agentConfig, check, mediaEnv, missingPrograms, prepare, protectedChanged, shell, trustSkills } from "../src/workspace.ts";
 import { main } from "../src/main.ts";
 import { LANE_ROWS, caseFix, derive, judge, laneBases, laneJobs, laneTasks, mockTasks, tagged, wantedFiles, type LaneResult, type Tag } from "../src/newbie.ts";
 import { CALLS, estimateLane, estimateTable, laneTable } from "../src/newbie-report.ts";
@@ -56,8 +56,11 @@ describe("the prompts", () => {
     for (const p of NEWBIE.filter((p) => p.then)) expect(p.styles, p.id).toContain("follow-up");
   });
 
-  test("the plain tasks they are tied to are fit to measure with (they fail untouched, pass with their solution)", async () => {
-    for (const t of laneBases().filter((t) => t.id.startsWith("newbie-"))) expect(await validateTask(t), t.id).toEqual({ task: t.id, status: "ok", problems: [] });
+  test("the plain tasks they are tied to are fit to measure with (they fail untouched, pass with their solution); one that needs a program this computer lacks is skipped and says which", async () => {
+    for (const t of laneBases().filter((t) => t.id.startsWith("newbie-"))) {
+      const missing = missingPrograms(t);
+      expect(await validateTask(t), t.id).toEqual(missing.length ? { task: t.id, status: "skipped", problems: [`needs ${missing.join(", ")}`] } : { task: t.id, status: "ok", problems: [] });
+    }
   });
 
   test("the tasks made for the lane are small and have what the lane needs", () => {
@@ -236,7 +239,8 @@ describe("the checks a prompt may change", () => {
     writeFileSync(join(dir, "other.txt"), "y\n");
     const r = await shell(dir, `${caseFix(["ANSWER.txt", "summary.txt"])}; ls`);
     expect(r.ok).toBe(true);
-    expect(r.output.split("\n").filter(Boolean).sort()).toEqual(["ANSWER.TXT", "ANSWER.txt", "other.txt"]);
+    expect([...new Set(r.output.split("\n").filter(Boolean).map((name) => name.toLowerCase()))].sort()).toEqual(["answer.txt", "other.txt"]);
+    expect(readFileSync(join(dir, "ANSWER.txt"), "utf8")).toBe("x\n");
     rmSync(dir, { recursive: true, force: true });
   });
 

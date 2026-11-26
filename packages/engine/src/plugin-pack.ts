@@ -314,8 +314,10 @@ export type InstallResult = { ok: true; pack: Pack } | { ok: false; error: strin
 const ARCHIVE = /\.(tar\.gz|tgz|tar|zip)$/i;
 const GIT_ADDRESS = /^(https?:\/\/|ssh:\/\/|git:\/\/|git@|file:\/\/)/i;
 
-/** A source as it may be written to the lock file and shown: without a password or token in an address. */
+const ADDRESS_WITH_HOST = /^[a-z][a-z0-9+.-]*:\/\//i;
+
 export function plainSource(from: string): string {
+  if (!ADDRESS_WITH_HOST.test(from)) return from;
   try { const u = new URL(from); u.username = ""; u.password = ""; return u.toString(); } catch { return from; }
 }
 

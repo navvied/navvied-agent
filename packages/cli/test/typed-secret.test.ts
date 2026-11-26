@@ -24,8 +24,8 @@ describe("a password the person typed stays in their journal and goes nowhere el
     const journal = new Journal(dir);
     journal.write("c1", ITEMS);
     expect(journal.items("c1")![0]!.text).toContain(PASSWORD);
-    expect(statSync(join(dir, "c1.json")).mode & 0o777).toBe(0o600);
-    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    if (process.platform !== "win32") expect(statSync(join(dir, "c1.json")).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(dir).mode & 0o777).toBe(0o700);
   });
 
   test("a copy of a conversation (a fork) and its title do not hold it", () => {
@@ -35,7 +35,7 @@ describe("a password the person typed stays in their journal and goes nowhere el
     expect(journal.copy("c1", "c2")).toBe(true);
     expect(readFileSync(join(dir, "c2.json"), "utf8")).not.toContain(PASSWORD);
     expect(titleOf(ITEMS)).not.toContain(PASSWORD);
-    expect(statSync(join(dir, "c2.json")).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(join(dir, "c2.json")).mode & 0o777).toBe(0o600);
   });
 
   test("the search index does not find it, and holds it nowhere in its rows", () => {

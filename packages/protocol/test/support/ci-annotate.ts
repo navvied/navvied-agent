@@ -1,13 +1,11 @@
-/**
- * Turns the test runner's JUnit report into GitHub annotations, so a failure names itself on a computer nobody can log in to. The runner
- * calls a failed or slow hook "(unnamed)"; the report still says which file and which group of tests it belongs to, and how long it took.
- *
- *   bun packages/protocol/test/support/ci-annotate.ts report.xml
- */
 import { readFileSync } from "node:fs";
 
 const SLOW_SECONDS = 3;
 const MOST_SLOW = 15;
+export const MOST_MESSAGE = 60_000;
+const MOST_NAME = 200;
+const MOST_REASON = 120;
+const ROOM_FOR_THE_REST = 60;
 
 const unxml = (s: string): string => s.replace(/&(#x[0-9a-f]+|#\d+|lt|gt|amp|quot|apos);/gi, (_, t: string) => {
   if (t[0] === "#") return String.fromCodePoint(t[1] === "x" || t[1] === "X" ? parseInt(t.slice(2), 16) : parseInt(t.slice(1), 10));
@@ -39,12 +37,24 @@ export function cases(xml: string): Case[] {
 const label = (c: Case): string => (c.name === "(unnamed)" ? `a hook of "${c.suite || "the file"}"` : [c.suite, c.name].filter(Boolean).join(" > "));
 const place = (c: Case): string => (c.file ? `file=${property(c.file)},` : "");
 
-/** One workflow command per failed test or hook, then the slowest ones that passed (a hook that nearly ran out of time is the next failure). */
+const failureLine = (c: Case): string => [c.file, `${label(c)} (${c.seconds.toFixed(1)} s)`.slice(0, MOST_NAME), c.failure!.split("\n")[0]!.slice(0, MOST_REASON)].filter(Boolean).join(" :: ");
+
+function allFailed(failed: readonly Case[]): string {
+  const head = `::error title=${property(`${failed.length} failed tests`)}::`;
+  let list = "";
+  for (const [at, one] of failed.entries()) {
+    const next = `${at ? "%0A" : ""}${data(failureLine(one))}`;
+    if (head.length + list.length + next.length > MOST_MESSAGE - ROOM_FOR_THE_REST) return `${head}${list}%0Aand ${failed.length - at} more that did not fit`;
+    list += next;
+  }
+  return head + list;
+}
+
 export function annotations(xml: string): string[] {
   const all = cases(xml);
-  const lines = all.filter((c) => c.failure !== undefined).map((c) => `::error ${place(c)}title=${property(`${label(c)} (${c.seconds.toFixed(1)} s)`)}::${data(c.failure!)}`);
+  const failed = all.filter((c) => c.failure !== undefined);
   const slow = all.filter((c) => c.failure === undefined && c.seconds >= SLOW_SECONDS).sort((a, b) => b.seconds - a.seconds).slice(0, MOST_SLOW);
-  return [...lines, ...slow.map((c) => `::warning ${place(c)}title=${property(`slow: ${label(c)}`)}::took ${c.seconds.toFixed(1)} s`)];
+  return [...(failed.length ? [allFailed(failed)] : []), ...slow.map((c) => `::warning ${place(c)}title=${property(`slow: ${label(c)}`)}::took ${c.seconds.toFixed(1)} s`)];
 }
 
 if (import.meta.main) {

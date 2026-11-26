@@ -15,12 +15,10 @@ export interface ComputerPort {
 export interface PortInput {
   use: ComputerUse;
   grants: Grants;
-  /** Whether the person turned it on (kept with the other switches of tools), and the change of it. */
+  grantsRead?: Promise<void>;
   isOn(): boolean;
   setOn(on: boolean): void;
-  /** Something changed that no command said: a grant given in System Settings, the driver fetched. */
   changed(): void;
-  /** Where a computer that is not this one's to drive (a cloud session) says why. */
   unavailable?: string;
 }
 
@@ -36,10 +34,10 @@ export class ComputerHere implements ComputerPort {
 
   isOn(): boolean { return this.i.isOn(); }
 
-  /** The step the last `state` found: for the row of the tools screen, which cannot wait for the system. */
   get step(): ComputerState["step"] { return this.cached; }
 
   async state(): Promise<ComputerState> {
+    await this.i.grantsRead;
     const { use, grants } = this.i;
     const support = use.support();
     const reason = this.i.unavailable ?? (support.ok ? undefined : support.message);
@@ -51,8 +49,8 @@ export class ComputerHere implements ComputerPort {
     return { on, step, permissions, ...(on ? { control: this.who } : {}) };
   }
 
-  /** The first time the system asks itself; after that, or when the system will not ask again, the page of System Settings is opened. */
   async request(id: ComputerPermissionId): Promise<void> {
+    await this.i.grantsRead;
     const { grants } = this.i;
     if (grants.state(id) !== "missing") return;
     if (this.asked.has(id)) grants.settings(id);

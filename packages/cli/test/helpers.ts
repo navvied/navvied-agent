@@ -1,9 +1,10 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Env } from "../src/config.ts";
 import type { System } from "../src/system.ts";
 import type { IO } from "../src/io.ts";
+import { removeNow } from "../../protocol/test/support/cleanup.ts";
 
 /** Text chunks you can push into standard input while a command is running. */
 export class InputQueue implements AsyncIterable<string> {
@@ -89,7 +90,7 @@ export function fakeIO(opts: { interactive?: boolean; color?: boolean; env?: Env
 
 export const tempDir = (): string => mkdtempSync(join(tmpdir(), "navvied-cli-"));
 /** Windows lets go of a folder a moment after the program that used it has ended, so a removal is retried. */
-export const remove = (d: string): void => rmSync(d, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+export const remove = (d: string): void => removeNow(d);
 
 /** A scripted model server (chat-completions API over SSE). It answers from keywords in the latest user message. */
 export function startMockModel() {

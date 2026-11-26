@@ -212,6 +212,8 @@ describe("installing", () => {
   test("an address with a password is recorded without it", () => {
     expect(plainSource("https://me:hunter2@example.com/p.git")).toBe("https://example.com/p.git");
     expect(plainSource("git@host:me/p.git")).toBe("git@host:me/p.git");
+    expect(plainSource("ssh://me:hunter2@example.com/p.git")).toBe("ssh://example.com/p.git");
+    for (const folder of ["C:\\Users\\Me\\lint-helper", "D:/Work/lint-helper.zip", "c:lint-helper"]) expect(plainSource(folder)).toBe(folder);
   });
 });
 

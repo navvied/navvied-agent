@@ -24,7 +24,7 @@ const rig = () => {
 const states = (events: EngineEvent[]) => events.filter((e) => e.ev === "job").map((e) => (e as { status: string }).status);
 
 describe("stopping a command", () => {
-  test.skipIf(process.platform === "win32")("it is stopped for the person even when something it started got away and keeps its output open", async () => {
+  test.skipIf(process.platform === "win32" || !Bun.which("setsid"))("it is stopped for the person even when something it started got away and keeps its output open", async () => {
     const { events, jobs } = rig();
     const pidFile = join(dir, "escaper.pid");
     const saysItIsOut = `echo $$ > "$1"; exec sleep 600`;

@@ -1,10 +1,7 @@
-import { readFileSync, readdirSync, readlinkSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
 import { rm } from "node:fs/promises";
 
-/**
- * Removing what a test made. A folder cannot be removed on Windows while a program that was started in it is still exiting, or while a
- * file in it is open; those errors pass, so the removal is tried again for a few seconds before it is called a failure.
- */
 const TRANSIENT = new Set(["EBUSY", "EPERM", "ENOTEMPTY", "EACCES", "EMFILE", "ENFILE"]);
 
 /**
@@ -25,6 +22,54 @@ export function stragglers(dir: string): string[] {
   return found;
 }
 
+export interface Running { pid: number; parent: number; name: string; command: string }
+
+const MOST_COMMAND = 160;
+const MOST_HOLDERS = 8;
+const LIST_MS = 15_000;
+const WINDOWS_PROCESSES = "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress";
+
+export function holdingFrom(processes: readonly Running[], dir: string, self: number): string[] {
+  const parents = new Map(processes.map((p) => [p.pid, p.parent]));
+  const startedHere = (pid: number): boolean => {
+    const seen = new Set<number>();
+    for (let at: number | undefined = parents.get(pid); at !== undefined && !seen.has(at); at = parents.get(at)) {
+      if (at === self) return true;
+      seen.add(at);
+    }
+    return false;
+  };
+  return processes.filter((p) => p.pid !== self && (startedHere(p.pid) || p.command.toLowerCase().includes(dir.toLowerCase()))).slice(0, MOST_HOLDERS).map((p) => `${p.pid} ${p.name}: ${p.command.slice(0, MOST_COMMAND)}`);
+}
+
+function windowsProcesses(): Running[] {
+  const listed = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_PROCESSES], { encoding: "utf8", timeout: LIST_MS, maxBuffer: 16 * 1024 * 1024 });
+  if (listed.status !== 0) return [];
+  const rows = JSON.parse(listed.stdout) as { ProcessId: number; ParentProcessId: number; Name: string; CommandLine: string | null }[];
+  return rows.map((r) => ({ pid: r.ProcessId, parent: r.ParentProcessId, name: r.Name, command: r.CommandLine ?? "" }));
+}
+
+function holders(dir: string): string[] {
+  try {
+    return process.platform === "win32" ? holdingFrom(windowsProcesses(), dir, process.pid) : stragglers(dir);
+  } catch (e) {
+    return [`they could not be listed: ${(e as Error).message}`];
+  }
+}
+
+const naming = (e: unknown, dir: string): Error => {
+  const found = holders(dir);
+  return Object.assign(new Error(`${(e as Error).message}; maybe held by: ${found.length ? found.join(" | ") : "no program that could be named"}`), { code: (e as NodeJS.ErrnoException).code });
+};
+
+export function removeNow(dir: string): void {
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  } catch (e) {
+    throw naming(e, dir);
+  }
+}
+
 export async function removeTree(dir: string): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     const holding = stragglers(dir);
@@ -33,7 +78,7 @@ export async function removeTree(dir: string): Promise<void> {
       await rm(dir, { recursive: true, force: true });
       return;
     } catch (e) {
-      if (attempt >= 50 || !TRANSIENT.has((e as NodeJS.ErrnoException).code ?? "")) throw e;
+      if (attempt >= 50 || !TRANSIENT.has((e as NodeJS.ErrnoException).code ?? "")) throw naming(e, dir);
       await Bun.sleep(100);
     }
   }

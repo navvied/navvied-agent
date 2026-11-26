@@ -14,7 +14,7 @@ import { run } from "../src/tools/util.ts";
 import { cleanupAll, prompt, rig, until, wait } from "./helpers.ts";
 import { outsideFolder } from "./outside.ts";
 
-const base = mkdtempSync(join(tmpdir(), "navvied-sandbox-test-"));
+const base = realpathSync(mkdtempSync(join(tmpdir(), "navvied-sandbox-test-")));
 const home = join(base, "home");
 const project = join(base, "home", "project");
 const away = outsideFolder();

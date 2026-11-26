@@ -23,12 +23,11 @@ jobs:
       - name: Run the tests
         shell: bash
         run: |
-          set +e
-          # The JUnit report names every failed test and every hook that failed or timed out ("(unnamed)" in the console), with its file and group.
-          bun test packages --timeout 30000 --reporter=junit --reporter-outfile="$RUNNER_TEMP/junit.xml" 2>&1 | tee "$RUNNER_TEMP/test.log"
-          code=${PIPESTATUS[0]}
-          bun packages/protocol/test/support/ci-annotate.ts "$RUNNER_TEMP/junit.xml"
-          exit $code
+          bun test packages --timeout 30000 --reporter=junit --reporter-outfile="$RUNNER_TEMP/junit.xml"
+      - name: Name every failed test
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bun packages/protocol/test/support/ci-annotate.ts "$RUNNER_TEMP/junit.xml"
 
   windows-install:
     if: github.repository == 'navvied/navvied-agent'
