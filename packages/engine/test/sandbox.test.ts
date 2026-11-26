@@ -24,6 +24,7 @@ afterAll(cleanupAll, HOOK_MS);
 
 const linux = process.platform === "linux";
 const works = linux && sandboxAbility().how === "bubblewrap";
+const hasSandboxThatReportsDenials = process.platform !== "win32";
 const setting = (s: Partial<SandboxSetting> = {}) => () => ({ ...DEFAULT_SANDBOX, ...s });
 const sandbox = (s: Partial<SandboxSetting> = {}, o: { hide?: string[] } = {}) => new Sandbox({ setting: setting(s), home, ...(o.hide ? { hide: () => o.hide! } : {}) });
 
@@ -158,7 +159,7 @@ describe("what a command may write and cannot see", () => {
     expect(plan.writable.map(realpath).sort()).toEqual([realpath(wt), realpath(join(main, ".git"))].sort());
   });
 
-  test("a failure is the sandbox's only when it says so about a place the sandbox governs", () => {
+  test.skipIf(!hasSandboxThatReportsDenials)("a failure is the sandbox's only when it says so about a place the sandbox governs", () => {
     const plan = { writable: [project], hiddenDirs: [join(home, ".ssh")], hiddenFiles: [] };
     expect(denialIn("touch: cannot touch '/etc/x': Read-only file system", plan, project)).toEqual({ path: "/etc/x", kind: "write" });
     expect(denialIn("bash: /usr/local/bin/tool: Read-only file system", plan, project)).toEqual({ path: "/usr/local/bin/tool", kind: "write" });

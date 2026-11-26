@@ -12,7 +12,7 @@ export type Args = Record<string, unknown>;
 export const str = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback);
 export const num = (v: unknown, fallback: number): number => (typeof v === "number" && Number.isFinite(v) ? v : fallback);
 
-export const abs = (cwd: string, p: unknown, home?: string): string => { const s = expandHome(str(p), home ?? homeFrom()); return isAbsolute(s) ? s : resolve(cwd, s); };
+export const abs = (cwd: string, p: unknown, home?: string): string => resolve(cwd, expandHome(str(p), home ?? homeFrom()));
 
 /** A path with every link in it followed, even when the last parts do not exist yet (a file about to be written). */
 function followed(path: string): string {

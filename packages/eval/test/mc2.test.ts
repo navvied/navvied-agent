@@ -45,7 +45,7 @@ describe("the second-measurement tasks", () => {
     const config = agentConfig(tasks[0]!);
     const path = config.env.NAVVIED_CONFIG!;
     try {
-      expect(statSync(path).mode & 0o077).toBe(0);
+      if (process.platform !== "win32") expect(statSync(path).mode & 0o077).toBe(0);
       const file = JSON.parse(readFileSync(path, "utf8")) as { mcp: Record<string, { command: string; args: string[] }> };
       expect(file.mcp.records!.args).toEqual([SERVER]);
     } finally { config.remove(); }

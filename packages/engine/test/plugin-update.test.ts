@@ -116,8 +116,10 @@ describe("zip archives", () => {
     expect(unzipTo(makeZip([{ name: "dev", mode: 0o020666 }]), into(), limits)).toContain("link");
     const out = into();
     expect(unzipTo(makeZip([{ name: "a/run.sh", data: "#!/bin/sh", mode: 0o100755 }, { name: "a/b.txt", data: "b", mode: 0o100644 }, { name: "a/c/", mode: 0o040755 }]), out, limits)).toBeUndefined();
-    expect(statSync(join(out, "a", "run.sh")).mode & 0o100).toBe(0o100);
-    expect(statSync(join(out, "a", "b.txt")).mode & 0o111).toBe(0);
+    if (process.platform !== "win32") {
+      expect(statSync(join(out, "a", "run.sh")).mode & 0o100).toBe(0o100);
+      expect(statSync(join(out, "a", "b.txt")).mode & 0o111).toBe(0);
+    }
     expect(readFileSync(join(out, "a", "b.txt"), "utf8")).toBe("b");
   });
 

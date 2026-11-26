@@ -94,8 +94,9 @@ describe("the environment of a hook", () => {
     process.env.NAVVIED_TEST_API_TOKEN = "other-value";
     try {
       const show = js(`say({additionalContext:[process.env.NAVVIED_TEST_API_KEY??"gone",process.env.NAVVIED_TEST_API_TOKEN??"gone",process.env.NAVVIED_PLUGIN_ROOT??"none",process.env.NAVVIED_HOOK].join("|")})`);
-      const scrubbed = commandHooks({ PreToolUse: [{ command: show, root: "/plug" }] }, dir, () => "s", { drop: ["NAVVIED_TEST_API_KEY", "NAVVIED_TEST_API_TOKEN"], keep: ["NAVVIED_TEST_API_TOKEN"] });
-      expect((await scrubbed.pre({ tool: "X", input: {} }, signal)).context).toBe("gone|other-value|/plug|1");
+      const plugin = join(dir, "plug");
+      const scrubbed = commandHooks({ PreToolUse: [{ command: show, root: plugin }] }, dir, () => "s", { drop: ["NAVVIED_TEST_API_KEY", "NAVVIED_TEST_API_TOKEN"], keep: ["NAVVIED_TEST_API_TOKEN"] });
+      expect((await scrubbed.pre({ tool: "X", input: {} }, signal)).context).toBe(`gone|other-value|${plugin}|1`);
       const byDefault = commandHooks({ PreToolUse: [{ command: show }] }, dir, () => "s");
       expect((await byDefault.pre({ tool: "X", input: {} }, signal)).context).toBe("gone|gone|none|1");
     } finally { delete process.env.NAVVIED_TEST_API_KEY; delete process.env.NAVVIED_TEST_API_TOKEN; }

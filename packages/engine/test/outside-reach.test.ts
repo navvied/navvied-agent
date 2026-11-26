@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { PermMode } from "@navvied/protocol";
 import { Rules, judge, nativePaths, type JudgeInput } from "../src/index.ts";
 import { place } from "../src/tools/util.ts";
@@ -14,6 +14,7 @@ const row = (tool: string, args: Record<string, unknown>, more: Partial<JudgeInp
   MODES.map((mode) => judge({ mode, tool: { name: tool, readOnly: READERS.includes(tool) }, args, cwd, allowed: new Set(), knownUrl: () => true, ...more }).kind).join(" ");
 const home = { ...nativePaths, home: "/home/pat" };
 const ASKED = "ask ask go ask go";
+const A_SYSTEM_FILE = process.platform === "win32" ? "C:\\Windows\\win.ini" : "/etc/hosts";
 
 describe("one place decides what is outside the project, for every tool", () => {
   test("a file the program writes outside the project is asked about in Ask, Edits and Auto, by every tool that writes", () => {
@@ -32,7 +33,7 @@ describe("one place decides what is outside the project, for every tool", () => 
     expect(row("Write", { file_path: "src/a.ts", content: "x" })).toBe("ask go go go go");
     expect(row("Write", { file_path: "/tmp/x/a.ts", content: "x" })).toBe("ask go go go go");
     expect(row("Write", { file_path: join(tmpdir(), "a.ts"), content: "x" })).toBe("ask go go go go");
-    expect(row("Write", { file_path: "/etc/hosts", content: "x" })).toBe("stop stop stop stop stop");
+    expect(row("Write", { file_path: A_SYSTEM_FILE, content: "x" })).toBe("stop stop stop stop stop");
   });
 
   test("a rule that allows the file is the person's word, and what was allowed for a folder stays allowed for it", () => {
@@ -76,11 +77,16 @@ describe("`~` is the home of the environment the program was given", () => {
     expect(outsideProject("~/a", cwd, { ...nativePaths, home: `${cwd}/h` })).toBe(false);
     expect(outsideProject("~/a", cwd, { ...nativePaths, home: "/srv/h" })).toBe(true);
   });
+  test("a tool works on the very path the permission check judged, in this computer's own spelling", () => {
+    const folder = resolve("/work/project");
+    for (const written of [`${folder}/src/../b.ts`, `${folder}//src/./a.ts`, "~//notes/../a.md"]) expect(place({ cwd: folder, home: resolve("/home/pat") }, written)).toBe(resolve(folder, written.replace("~", resolve("/home/pat"))));
+  });
+
   test("a tool reaches `~` in the home it is given", () => {
     const dir = mkdtempSync(join(tmpdir(), "navvied-home-"));
     try {
       expect(place({ cwd: "/work/project", home: dir }, "~/.local/bin/x")).toBe(join(dir, ".local/bin/x"));
-      expect(place({ cwd: "/work/project", home: dir }, "src/a.ts")).toBe("/work/project/src/a.ts");
+      expect(place({ cwd: "/work/project", home: dir }, "src/a.ts")).toBe(resolve("/work/project", "src/a.ts"));
       expect(() => place({ cwd: "/work/project", root: "/work/project", home: dir }, "~/a")).toThrow(/outside the folder/);
       expect(existsSync(join(dir, ".local"))).toBe(false);
     } finally { rmSync(dir, { recursive: true, force: true }); }

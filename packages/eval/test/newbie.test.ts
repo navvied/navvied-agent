@@ -477,6 +477,12 @@ describe("the lane with the scripted model", () => {
   });
 });
 
+async function cyclicModules(dir: string, env: Record<string, string>): Promise<string[]> {
+  const asked = await shell(dir, `python3 -c "import os, sys; sys.path.insert(0, os.environ['BENCH_FIXTURES']); import mc; print(*mc.modules()[1])"`, env);
+  expect([asked.ok, asked.ok ? "" : asked.output]).toEqual([true, ""]);
+  return asked.output.trim().split(" ");
+}
+
 describe("code-4: no format was asked, so a module may be named three ways", () => {
   const tasks = new Map(laneTasks().map((t) => [t.id, t]));
   const prompt = NEWBIE.find((p) => p.id === "code-4")!;
@@ -487,7 +493,7 @@ describe("code-4: no format was asked, so a module may be named three ways", () 
     const dir = mkdtempSync(join(tmpdir(), "navvied-newbie-c4-"));
     try {
       expect((await shell(dir, 'python3 "$BENCH_FIXTURES/mc.py" setup import-cycles', env)).ok).toBe(true);
-      const right = (await shell(dir, `python3 -c "import sys; sys.path.insert(0, '$BENCH_FIXTURES'); import mc; print(*mc.modules()[1])"`, env)).output.trim().split(" ");
+      const right = await cyclicModules(dir, env);
       expect(right.length).toBeGreaterThan(2);
       const holds = async (lines: string[], command = check): Promise<boolean> => { writeFileSync(join(dir, "cycles.txt"), `${lines.join("\n")}\n`); return (await shell(dir, command, env)).ok; };
       for (const form of [(m: string) => m, (m: string) => `${m}.ts`, (m: string) => `src/${m}.ts`, (m: string) => `src/${m}`]) expect(await holds(right.map(form))).toBe(true);
@@ -517,7 +523,7 @@ describe("the import-cycle answer may sit in src/ when the final answer names th
     const base = mkdtempSync(join(tmpdir(), "navvied-newbie-cycfolder-"));
     try {
       expect((await shell(base, 'python3 "$BENCH_FIXTURES/mc.py" setup import-cycles', env)).ok).toBe(true);
-      const right = (await shell(base, `python3 -c "import sys; sys.path.insert(0, '$BENCH_FIXTURES'); import mc; print(*mc.modules()[1])"`, env)).output.trim().split(" ");
+      const right = await cyclicModules(base, env);
       const holds = async (files: Record<string, string[]>, answer: string): Promise<boolean> => {
         const paths = Object.keys(files).map((f) => join(base, f));
         for (const [f, lines] of Object.entries(files)) { mkdirSync(dirname(join(base, f)), { recursive: true }); writeFileSync(join(base, f), `${lines.join("\n")}\n`); }

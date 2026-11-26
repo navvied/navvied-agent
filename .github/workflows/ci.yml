@@ -23,7 +23,7 @@ jobs:
       - name: Run the tests
         shell: bash
         run: |
-          bun test packages --timeout 30000 --reporter=junit --reporter-outfile="$RUNNER_TEMP/junit.xml"
+          env -u GITHUB_ACTIONS bun test packages --timeout 30000 --reporter=junit --reporter-outfile="$RUNNER_TEMP/junit.xml"
       - name: Name every failed test
         if: ${{ !cancelled() }}
         shell: bash

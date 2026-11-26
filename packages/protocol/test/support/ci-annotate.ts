@@ -6,6 +6,8 @@ export const MOST_NOTE_BYTES = 4096;
 export const MOST_NOTES = 8;
 const MOST_NAME = 130;
 const MOST_REASON = 110;
+const MOST_DETAIL = 240;
+const SAYS_NOTHING = /^(?:[-+] (?:Expected|Received)\s+[-+] \d+|at .*|[[\]{}(),]*)$/;
 const ROOM_FOR_THE_REST = 60;
 
 const unxml = (s: string): string => s.replace(/&(#x[0-9a-f]+|#\d+|lt|gt|amp|quot|apos);/gi, (_, t: string) => {
@@ -40,10 +42,12 @@ const place = (c: Case): string => (c.file ? `file=${property(c.file)},` : "");
 
 const shortPath = (file: string): string => file.replaceAll("\\", "/").replace(/^.*?\/packages\//, "").replace(/^packages\//, "packages/");
 
-function grouped(failed: readonly Case[]): { head: string; names: string[] }[] {
+const detailOf = (failure: string): string => failure.split("\n").slice(1).map((line) => line.replace(/\s+/g, " ").trim()).filter((line) => !SAYS_NOTHING.test(line)).join(" ").slice(0, MOST_DETAIL);
+
+function grouped(failed: readonly Case[], detailed: boolean): { head: string; names: string[] }[] {
   const groups = new Map<string, string[]>();
   for (const c of failed) {
-    const head = [shortPath(c.file), c.failure!.split("\n")[0]!.slice(0, MOST_REASON)].filter(Boolean).join(" :: ");
+    const head = [shortPath(c.file), c.failure!.split("\n")[0]!.slice(0, MOST_REASON), detailed ? detailOf(c.failure!) : ""].filter(Boolean).join(" :: ");
     groups.set(head, [...(groups.get(head) ?? []), label(c).slice(0, MOST_NAME)]);
   }
   return [...groups].map(([head, names]) => ({ head, names }));
@@ -51,11 +55,11 @@ function grouped(failed: readonly Case[]): { head: string; names: string[] }[] {
 
 interface Note { lines: string[]; bytes: number }
 
-function split(failed: readonly Case[]): { notes: string[]; left: number } {
+function split(failed: readonly Case[], detailed: boolean): { notes: string[]; left: number } {
   const notes: Note[] = [{ lines: [], bytes: 0 }];
   const room = (at: number): number => MOST_NOTE_BYTES - (at === MOST_NOTES - 1 ? ROOM_FOR_THE_REST : 0);
   let named = 0;
-  for (const { head, names } of grouped(failed)) {
+  for (const { head, names } of grouped(failed, detailed)) {
     let open = false;
     for (const name of names) {
       let note = notes.at(-1)!;
@@ -75,7 +79,8 @@ function split(failed: readonly Case[]): { notes: string[]; left: number } {
 }
 
 function allFailed(failed: readonly Case[]): string[] {
-  const { notes, left } = split(failed);
+  const detailed = split(failed, true);
+  const { notes, left } = detailed.left ? split(failed, false) : detailed;
   return notes.map((body, at) => {
     const title = `${failed.length} failed tests${notes.length > 1 ? ` (${at + 1} of ${notes.length})` : ""}`;
     const rest = left && at === notes.length - 1 ? `\nand ${left} more that did not fit` : "";

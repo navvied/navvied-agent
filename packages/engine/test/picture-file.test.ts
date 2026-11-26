@@ -61,7 +61,7 @@ describe("the pictures a tool saves", () => {
     expect(files).toHaveLength(50);
     expect(existsSync(join(dir, "tools", "browser", "shot-2026-11-25T09-00-00-000Z.png"))).toBe(false);
     expect(existsSync(join(dir, "tools", "browser", "shot-2026-11-25T09-00-52-000Z.png"))).toBe(true);
-    expect(statSync(join(dir, "tools", "browser")).mode & 0o700).toBe(0o700);
+    if (process.platform !== "win32") expect(statSync(join(dir, "tools", "browser")).mode & 0o700).toBe(0o700);
     expect(reports.at(-1)!.picture).toMatchObject({ width: 3, height: 4, bytes: 33 });
   });
 });

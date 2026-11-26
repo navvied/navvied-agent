@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MOST_NOTES, MOST_NOTE_BYTES, annotations, cases } from "./support/ci-annotate.ts";
+
+const QUIETLY = "env -u GITHUB_ACTIONS";
 
 const report = `<?xml version="1.0"?><testsuites>
 <testsuite name="a.test.ts" file="a.test.ts">
@@ -28,7 +31,7 @@ describe("the test report as annotations", () => {
 
   test("failures are listed in errors of their own, grouped by file and reason, with short paths; slow ones stay warnings", () => {
     expect(annotations(report)).toEqual([
-      '::error title=2 failed tests::a.test.ts :: test timed out :: a hook of "suite one"%0Apackages/x/y.test.ts :: Expected: 2 :: a < b: c, d',
+      '::error title=2 failed tests::a.test.ts :: test timed out :: a hook of "suite one"%0Apackages/x/y.test.ts :: Expected: 2 :: Received: 1 :: a < b: c, d',
       "::warning file=a.test.ts,title=slow%3A suite one > slow but fine::took 3.5 s",
     ]);
     expect(notes(failing(3, () => "turn timed out", () => "/home/r/work/x/x/packages/engine/test/e.test.ts"))[0]!.message).toBe("engine/test/e.test.ts :: turn timed out :: " + [0, 1, 2].map((i) => `a long group of tests > case ${i} of the thing under test`).join(" | "));
@@ -63,6 +66,23 @@ describe("the test report as annotations", () => {
     expect(naming).toContain("if: ${{ !cancelled() }}");
     expect(steps.indexOf(naming)).toBeGreaterThan(steps.indexOf(running));
   });
+
+  test("the test runner is run so that it writes no notes of its own, which would use up the few a step may show", () => {
+    const workflow = readFileSync(join(import.meta.dir, "../../../.github/workflows/ci.yml"), "utf8");
+    const command = workflow.split("\n").find((line) => line.includes("bun test packages"))!.trim();
+    expect(command).toStartWith(`${QUIETLY} bun test packages `);
+    const folder = mkdtempSync(join(tmpdir(), "navvied-runner-notes-"));
+    try {
+      writeFileSync(join(folder, "thrown.test.ts"), 'import { test } from "bun:test";\ntest("throws", () => { throw new Error("boom"); });\n');
+      const notes = (how: string): number => {
+        const ran = Bun.spawnSync(["bash", "-c", `${how} "$RUNNER_BUN" test ./thrown.test.ts 2>&1`], { cwd: folder, env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", GITHUB_ACTIONS: "true", RUNNER_BUN: process.execPath } });
+        expect(ran.stdout.toString()).toContain("boom");
+        return ran.stdout.toString().split("\n").filter((line) => line.startsWith("::error")).length;
+      };
+      expect(notes("")).toBeGreaterThan(0);
+      expect(notes(QUIETLY)).toBe(0);
+    } finally { rmSync(folder, { recursive: true, force: true }); }
+  }, 30_000);
 
   test("a clean report has nothing to say", () => {
     expect(annotations('<testsuites><testcase name="x" classname="" time="0.1" file="a.ts" /></testsuites>')).toEqual([]);
