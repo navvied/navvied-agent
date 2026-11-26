@@ -12,6 +12,7 @@ import { SearchIndex } from "./search-index.ts";
 export class Conversations {
   readonly storeDir: string;
   #index: SearchIndex | undefined;
+  #closed = false;
   readonly #journalDir: string;
   readonly #indexPath: string;
   readonly #config: string;
@@ -24,8 +25,10 @@ export class Conversations {
     this.#indexPath = chat ? chatSearchIndexPath(env) : searchIndexPath(env);
   }
 
-  /** Opened when first needed; a computer that never searches makes none until a conversation is saved. */
-  get index(): SearchIndex | undefined { try { return (this.#index ??= new SearchIndex(this.#indexPath)); } catch { return undefined; } }
+  get index(): SearchIndex | undefined {
+    if (this.#closed) return undefined;
+    try { return (this.#index ??= new SearchIndex(this.#indexPath)); } catch { return undefined; }
+  }
 
   /** Search by meaning, when the person set up a server for it in the configuration; otherwise nothing, and nothing is ever sent. */
   get meaning(): Meaning | undefined {
@@ -66,5 +69,10 @@ export class Conversations {
     };
   }
 
-  close(): void { try { this.#index?.close(); } catch { /* it was closed */ } this.#index = undefined; }
+  close(): void {
+    this.#closed = true;
+    const open = this.#index;
+    this.#index = undefined;
+    try { open?.close(); } catch { return; }
+  }
 }

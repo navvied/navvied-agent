@@ -2,9 +2,10 @@ import { readFileSync } from "node:fs";
 
 const SLOW_SECONDS = 3;
 const MOST_SLOW = 15;
-export const MOST_MESSAGE = 60_000;
-const MOST_NAME = 200;
-const MOST_REASON = 120;
+export const MOST_NOTE_BYTES = 4096;
+export const MOST_NOTES = 8;
+const MOST_NAME = 130;
+const MOST_REASON = 110;
 const ROOM_FOR_THE_REST = 60;
 
 const unxml = (s: string): string => s.replace(/&(#x[0-9a-f]+|#\d+|lt|gt|amp|quot|apos);/gi, (_, t: string) => {
@@ -37,24 +38,56 @@ export function cases(xml: string): Case[] {
 const label = (c: Case): string => (c.name === "(unnamed)" ? `a hook of "${c.suite || "the file"}"` : [c.suite, c.name].filter(Boolean).join(" > "));
 const place = (c: Case): string => (c.file ? `file=${property(c.file)},` : "");
 
-const failureLine = (c: Case): string => [c.file, `${label(c)} (${c.seconds.toFixed(1)} s)`.slice(0, MOST_NAME), c.failure!.split("\n")[0]!.slice(0, MOST_REASON)].filter(Boolean).join(" :: ");
+const shortPath = (file: string): string => file.replaceAll("\\", "/").replace(/^.*?\/packages\//, "").replace(/^packages\//, "packages/");
 
-function allFailed(failed: readonly Case[]): string {
-  const head = `::error title=${property(`${failed.length} failed tests`)}::`;
-  let list = "";
-  for (const [at, one] of failed.entries()) {
-    const next = `${at ? "%0A" : ""}${data(failureLine(one))}`;
-    if (head.length + list.length + next.length > MOST_MESSAGE - ROOM_FOR_THE_REST) return `${head}${list}%0Aand ${failed.length - at} more that did not fit`;
-    list += next;
+function grouped(failed: readonly Case[]): { head: string; names: string[] }[] {
+  const groups = new Map<string, string[]>();
+  for (const c of failed) {
+    const head = [shortPath(c.file), c.failure!.split("\n")[0]!.slice(0, MOST_REASON)].filter(Boolean).join(" :: ");
+    groups.set(head, [...(groups.get(head) ?? []), label(c).slice(0, MOST_NAME)]);
   }
-  return head + list;
+  return [...groups].map(([head, names]) => ({ head, names }));
+}
+
+interface Note { lines: string[]; bytes: number }
+
+function split(failed: readonly Case[]): { notes: string[]; left: number } {
+  const notes: Note[] = [{ lines: [], bytes: 0 }];
+  const room = (at: number): number => MOST_NOTE_BYTES - (at === MOST_NOTES - 1 ? ROOM_FOR_THE_REST : 0);
+  let named = 0;
+  for (const { head, names } of grouped(failed)) {
+    let open = false;
+    for (const name of names) {
+      let note = notes.at(-1)!;
+      let piece = open ? ` | ${name}` : `${note.lines.length ? "\n" : ""}${head} :: ${name}`;
+      if (note.bytes + Buffer.byteLength(piece) > room(notes.length - 1)) {
+        if (notes.length === MOST_NOTES) return { notes: notes.map((n) => n.lines.join("")), left: failed.length - named };
+        notes.push((note = { lines: [], bytes: 0 }));
+        piece = `${head} :: ${name}`;
+      }
+      note.lines.push(piece);
+      note.bytes += Buffer.byteLength(piece);
+      open = true;
+      named++;
+    }
+  }
+  return { notes: notes.map((n) => n.lines.join("")), left: 0 };
+}
+
+function allFailed(failed: readonly Case[]): string[] {
+  const { notes, left } = split(failed);
+  return notes.map((body, at) => {
+    const title = `${failed.length} failed tests${notes.length > 1 ? ` (${at + 1} of ${notes.length})` : ""}`;
+    const rest = left && at === notes.length - 1 ? `\nand ${left} more that did not fit` : "";
+    return `::error title=${property(title)}::${data(body + rest)}`;
+  });
 }
 
 export function annotations(xml: string): string[] {
   const all = cases(xml);
   const failed = all.filter((c) => c.failure !== undefined);
   const slow = all.filter((c) => c.failure === undefined && c.seconds >= SLOW_SECONDS).sort((a, b) => b.seconds - a.seconds).slice(0, MOST_SLOW);
-  return [...(failed.length ? [allFailed(failed)] : []), ...slow.map((c) => `::warning ${place(c)}title=${property(`slow: ${label(c)}`)}::took ${c.seconds.toFixed(1)} s`)];
+  return [...(failed.length ? allFailed(failed) : []), ...slow.map((c) => `::warning ${place(c)}title=${property(`slow: ${label(c)}`)}::took ${c.seconds.toFixed(1)} s`)];
 }
 
 if (import.meta.main) {

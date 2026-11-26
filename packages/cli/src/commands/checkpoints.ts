@@ -14,7 +14,7 @@ async function withEngine(options: Options, io: IO, act: (send: (command: Comman
   if (!created.ok) { io.stderr.write(`error: ${created.error}\n`); return EXIT.usage; }
   const { engine } = created.value;
   await act(async (command) => { engine.handle(command); await engine.idle(); });
-  engine.close();
+  created.value.dispose();
   return failed ? EXIT.failed : EXIT.ok;
 }
 

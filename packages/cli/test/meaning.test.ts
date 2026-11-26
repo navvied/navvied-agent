@@ -150,17 +150,20 @@ describe("notes by meaning", () => {
   test("a model that was changed: vectors of another model, or of another size, are made again", async () => {
     const s = serve();
     const path = join(mkdtempSync(join(tmpdir(), "navvied-meaning-")), "v.sqlite"); dirs.push(join(path, ".."));
-    await new Meaning(s.chat(), path).notes("dates", NOTES);
+    const opened: Meaning[] = [];
+    const meaning = (model?: string): Meaning => { const made = new Meaning(s.chat(model ? { model } : {}), path); opened.push(made); return made; };
+    await meaning().notes("dates", NOTES);
     const before = s.seen.length;
-    await new Meaning(s.chat({ model: "fake-2" }), path).notes("dates", NOTES);
+    await meaning("fake-2").notes("dates", NOTES);
     expect(s.seen.slice(before).flatMap((r) => r.body.input)).toEqual(["dates", ...NOTES]);
     s.state.dim = 12;
-    const again = new Meaning(s.chat({ model: "fake-2" }), path);
+    const again = meaning("fake-2");
     const like = await again.notes("dates", NOTES);
     expect(like.size).toBe(0);
     const made = s.seen.length;
     expect((await again.notes("dates", NOTES)).size).toBe(NOTES.length);
     expect(s.seen.slice(made).flatMap((r) => r.body.input)).toEqual(["dates", ...NOTES]);
+    for (const one of opened) one.close();
   });
 });
 

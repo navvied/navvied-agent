@@ -106,6 +106,6 @@ export async function acpCommand(options: Options, io: IO): Promise<number> {
   };
   for await (const chunk of io.stdin) { try { for (const line of lines.push(chunk)) run(line); } catch { write({ id: null, error: { code: -32700, message: "message too long" } }); } }
   for (const line of lines.flush()) run(line);
-  for (const s of sessions.values()) { await s.created.engine.idle().catch(() => undefined); s.created.engine.close(); }
+  for (const s of sessions.values()) { await s.created.engine.idle().catch(() => undefined); s.created.dispose(); }
   return EXIT.ok;
 }

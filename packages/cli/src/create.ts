@@ -51,7 +51,7 @@ export function visionFor(file: ConfigFile | null, model: ResolvedModel, env: Re
   return model.vision === true && model.provider ? serviceOf(model.name, model, file, env, path) : undefined;
 }
 
-export interface Created { engine: AgentEngine; /** The name of the model in the configuration. */ entry: string; modelName: string; where: string; cwd: string; tools?: string[]; notes: string[]; /** What was held back among the project skills and why, in words; nothing when all are in use. */ heldSkills?: () => string | undefined; /** The model is reached through a program the person is signed in to, which keeps its own sessions. */ program?: true }
+export interface Created { engine: AgentEngine; dispose(): void; entry: string; modelName: string; where: string; cwd: string; tools?: string[]; notes: string[]; heldSkills?: () => string | undefined; program?: true }
 
 /** What signs the requests of a model that has no key: the saved sign-in of a program account, or a credential file's access token. */
 const credentialsOf = (m: { signIn?: { provider: string; file?: string }; adc?: { file: string; tokenUri: string; scope: string } }, env: Record<string, string | undefined>): Credentials | undefined =>
@@ -281,5 +281,9 @@ export function createEngine(options: Options, io: IO, say: (e: EngineEvent) => 
     engine.loadTools(connectMcp(servers, model.value.small, engine.closing, { window: model.value.window, store: new OAuthStore(mcpAuthPath(io.env, options.config)), host: engine.mcpHost }));
   }
   const notes = instructionFiles(cwd, dirname(path), INSTRUCTION_FILE_NAMES);
-  return { ok: true, value: { engine, entry: model.value.name, modelName: shown || provider?.model || cli?.model || model.value.name, where: describeModel(cli, provider?.baseUrl), cwd, ...(kind === "chat" || cli ? {} : { heldSkills: () => heldSkillsNote(skillsNow(), skillTrust) }), ...(cli ? { program: true as const } : { tools: defaultTools().map((t) => t.name) }), notes } };
+  const dispose = (): void => {
+    engine.close();
+    if (!extras.conversations) book.close();
+  };
+  return { ok: true, value: { engine, dispose, entry: model.value.name, modelName: shown || provider?.model || cli?.model || model.value.name, where: describeModel(cli, provider?.baseUrl), cwd, ...(kind === "chat" || cli ? {} : { heldSkills: () => heldSkillsNote(skillsNow(), skillTrust) }), ...(cli ? { program: true as const } : { tools: defaultTools().map((t) => t.name) }), notes } };
 }

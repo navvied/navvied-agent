@@ -29,29 +29,35 @@ const MOST_HOLDERS = 8;
 const LIST_MS = 15_000;
 const WINDOWS_PROCESSES = "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress";
 
-export function holdingFrom(processes: readonly Running[], dir: string, self: number): string[] {
+export function holdingFrom(processes: readonly Running[], dir: string, self: number, lister?: number): string[] {
   const parents = new Map(processes.map((p) => [p.pid, p.parent]));
-  const startedHere = (pid: number): boolean => {
+  const descends = (pid: number, from: number): boolean => {
     const seen = new Set<number>();
     for (let at: number | undefined = parents.get(pid); at !== undefined && !seen.has(at); at = parents.get(at)) {
-      if (at === self) return true;
+      if (at === from) return true;
       seen.add(at);
     }
     return false;
   };
-  return processes.filter((p) => p.pid !== self && (startedHere(p.pid) || p.command.toLowerCase().includes(dir.toLowerCase()))).slice(0, MOST_HOLDERS).map((p) => `${p.pid} ${p.name}: ${p.command.slice(0, MOST_COMMAND)}`);
+  const isTheListing = (pid: number): boolean => lister !== undefined && (pid === lister || descends(pid, lister));
+  return processes.filter((p) => p.pid !== self && !isTheListing(p.pid) && (descends(p.pid, self) || p.command.toLowerCase().includes(dir.toLowerCase()))).slice(0, MOST_HOLDERS).map((p) => `${p.pid} ${p.name}: ${p.command.slice(0, MOST_COMMAND)}`);
 }
 
-function windowsProcesses(): Running[] {
+function windowsProcesses(): { processes: Running[]; lister: number } {
   const listed = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_PROCESSES], { encoding: "utf8", timeout: LIST_MS, maxBuffer: 16 * 1024 * 1024 });
-  if (listed.status !== 0) return [];
+  if (listed.status !== 0) return { processes: [], lister: listed.pid };
   const rows = JSON.parse(listed.stdout) as { ProcessId: number; ParentProcessId: number; Name: string; CommandLine: string | null }[];
-  return rows.map((r) => ({ pid: r.ProcessId, parent: r.ParentProcessId, name: r.Name, command: r.CommandLine ?? "" }));
+  return { lister: listed.pid, processes: rows.map((r) => ({ pid: r.ProcessId, parent: r.ParentProcessId, name: r.Name, command: r.CommandLine ?? "" })) };
+}
+
+function windowsHolders(dir: string): string[] {
+  const { processes, lister } = windowsProcesses();
+  return holdingFrom(processes, dir, process.pid, lister);
 }
 
 function holders(dir: string): string[] {
   try {
-    return process.platform === "win32" ? holdingFrom(windowsProcesses(), dir, process.pid) : stragglers(dir);
+    return process.platform === "win32" ? windowsHolders(dir) : stragglers(dir);
   } catch (e) {
     return [`they could not be listed: ${(e as Error).message}`];
   }

@@ -18,6 +18,11 @@ describe("a folder a test cannot remove says who may be holding it", () => {
     expect(holdingFrom(processes, "C:\\Temp\\navvied-cli-ab12", 10)).toEqual(["11 helper.exe: helper serve", "12 node.exe: node watch.js", '20 editor.exe: editor "C:\\Temp\\navvied-cli-ab12\\notes.txt"']);
   });
 
+  test("the program that lists them, and what it started, is never named as a holder", () => {
+    const listing = [...processes, { pid: 40, parent: 10, name: "powershell.exe", command: "powershell -Command Get-CimInstance Win32_Process" }, { pid: 41, parent: 40, name: "conhost.exe", command: "conhost" }];
+    expect(holdingFrom(listing, "C:\\Temp\\none", 10, 40)).toEqual(["11 helper.exe: helper serve", "12 node.exe: node watch.js"]);
+  });
+
   test("a long command is cut and a loop of parents ends", () => {
     const odd = [{ pid: 2, parent: 3, name: "a", command: "x".repeat(900) }, { pid: 3, parent: 2, name: "b", command: "y" }];
     const found = holdingFrom(odd, "/t/none", 1);

@@ -80,7 +80,7 @@ export async function runCommand(prompt: string | undefined, options: Options, i
     }
   } else if (options.last && !options.json) io.stdout.write(`${answer.trim()}\n`);
   off();
-  engine.close();
+  created.value.dispose();
 
   if (interrupts > 1 || stop === "cancelled") return EXIT.cancelled;
   return failed || schemaFailed || stop === "error" ? EXIT.failed : EXIT.ok;
