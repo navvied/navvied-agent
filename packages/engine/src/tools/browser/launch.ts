@@ -66,6 +66,8 @@ const QUIET = [
   "--disable-features=Translate,OptimizationHints,MediaRouter,NetworkTimeServiceQuerying,SafeBrowsingHashPrefixRealTimeLookups,AutofillServerCommunication",
 ];
 
+const OWN_SECRETS_ONLY = ["--use-mock-keychain", "--password-store=basic"];
+
 class StoppedAtStart extends Error {}
 
 export interface Launched { endpoint: string; /** On Linux it returns when the browser and everything it started have ended. */ stop(): void }
@@ -90,7 +92,7 @@ export async function launch(chrome: string, proxyPort: number): Promise<Launche
 async function start(chrome: string, proxyPort: number): Promise<Launched> {
   // The long form of the folder: a short 8.3 name (RUNNER~1) in a profile path is one more thing for a browser on Windows to trip over.
   const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "navvied-browser-")));
-  const child: ChildProcess = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${dir}`, `--proxy-server=http://127.0.0.1:${proxyPort}`, "--proxy-bypass-list=<-loopback>", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync", ...QUIET, "--mute-audio", "--hide-scrollbars", "--window-size=1280,900", ...(process.platform === "win32" ? ["--disable-gpu"] : []), ...(process.getuid?.() === 0 || process.env.NAVVIED_BROWSER_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), ...extraFlags(), "about:blank"], { detached: usesProcessGroups(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true, env: { ...process.env, [MARK]: dir, BREAKPAD_DUMP_LOCATION: join(dir, "crashes") } });
+  const child: ChildProcess = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${dir}`, `--proxy-server=http://127.0.0.1:${proxyPort}`, "--proxy-bypass-list=<-loopback>", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--no-first-run", "--no-default-browser-check", ...OWN_SECRETS_ONLY, "--disable-extensions", "--disable-sync", ...QUIET, "--mute-audio", "--hide-scrollbars", "--window-size=1280,900", ...(process.platform === "win32" ? ["--disable-gpu"] : []), ...(process.getuid?.() === 0 || process.env.NAVVIED_BROWSER_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), ...extraFlags(), "about:blank"], { detached: usesProcessGroups(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true, env: { ...process.env, [MARK]: dir, BREAKPAD_DUMP_LOCATION: join(dir, "crashes") } });
   let said = "", stopped: number | null | undefined, over = false;
   child.stderr?.on("data", (d: Buffer) => { said = (said + d.toString("utf8")).slice(-600); });
   child.on("exit", (code) => { stopped = code; });

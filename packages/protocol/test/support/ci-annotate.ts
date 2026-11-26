@@ -14,7 +14,7 @@ const unxml = (s: string): string => s.replace(/&(#x[0-9a-f]+|#\d+|lt|gt|amp|quo
   if (t[0] === "#") return String.fromCodePoint(t[1] === "x" || t[1] === "X" ? parseInt(t.slice(2), 16) : parseInt(t.slice(1), 10));
   return ({ lt: "<", gt: ">", amp: "&", quot: '"', apos: "'" } as Record<string, string>)[t.toLowerCase()]!;
 });
-const data = (s: string): string => s.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+export const data = (s: string): string => s.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
 const property = (s: string): string => data(s).replace(/:/g, "%3A").replace(/,/g, "%2C");
 
 interface Case { file: string; suite: string; name: string; seconds: number; failure?: string }

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { browser, closeBrowser, findChrome } from "../src/index.ts";
@@ -52,6 +52,14 @@ describe.skipIf(!chrome || process.platform === "win32")("a browser that stops w
     closeBrowser();
     try { return await body(); } finally { closeBrowser(); if (before === undefined) delete process.env.NAVVIED_CHROME; else process.env.NAVVIED_CHROME = before; }
   };
+
+  test("it is started so that its throwaway profile never asks for the person's keychain or keyring", async () => {
+    const seen = join(dir, "flags.txt");
+    await withBrowser(`printf '%s\\n' "$@" > ${JSON.stringify(seen)}; exit 3`, () => run({ action: "open", url: home }));
+    const flags = readFileSync(seen, "utf8").split("\n");
+    expect(flags).toContain("--use-mock-keychain");
+    expect(flags).toContain("--password-store=basic");
+  });
 
   test("the answer says it stopped, with its exit code and its last words, at once rather than after 15 s", async () => {
     const started = Date.now();
