@@ -159,6 +159,13 @@ export class Tab {
     finally { this.#watchers.delete(watcher); }
   }
 
+  async answerDialog(accept: boolean, promptText?: string): Promise<"answered" | { refused: string }> {
+    const announced = this.dialog !== undefined;
+    try { await this.send("Page.handleJavaScriptDialog", { accept, ...(promptText !== undefined ? { promptText } : {}) }); }
+    catch (e) { if (announced || !(e instanceof Error)) throw e; return { refused: e.message }; }
+    return "answered";
+  }
+
   async eval<T>(expression: string): Promise<T> {
     const r = await this.send<{ result?: { value?: T }; exceptionDetails?: { exception?: { description?: string }; text?: string } }>("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description?.split("\n")[0] ?? r.exceptionDetails.text ?? "the page script failed");

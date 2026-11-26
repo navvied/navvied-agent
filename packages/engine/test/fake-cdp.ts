@@ -186,7 +186,7 @@ export class FakeBrowser {
       }
       case "Page.getNavigationHistory": return { currentIndex: page!.at, entries: page!.history.map((url, id) => ({ id, url })) };
       case "Page.navigateToHistoryEntry": page!.at = p.entryId; this.#load(page!, page!.history[p.entryId]!); return {};
-      case "Page.handleJavaScriptDialog": { page!.blocked = false; this.event("Page.javascriptDialogClosed", { result: p.accept }, page!.sessionId); queueMicrotask(() => this.release()); return {}; }
+      case "Page.handleJavaScriptDialog": { if (!page!.blocked) throw new Error("No dialog is showing"); page!.blocked = false; this.event("Page.javascriptDialogClosed", { result: p.accept }, page!.sessionId); queueMicrotask(() => this.release()); return {}; }
       case "Page.captureScreenshot": return { data: jpeg(Math.max(1, Math.round(p.clip.width * p.clip.scale * this.window.ratio)), Math.max(1, Math.round(p.clip.height * p.clip.scale * this.window.ratio))) };
       case "Accessibility.getFullAXTree": {
         if (!p.frameId) return { nodes: page!.ax };

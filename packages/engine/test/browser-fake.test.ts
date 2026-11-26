@@ -166,9 +166,18 @@ describe("dialogs", () => {
     expect(await run({ action: "dialog" })).toContain("dialog was accepted");
   });
 
-  test("answering when there is none says so", async () => {
+  test("answering when there is none says so, with the browser's own words", async () => {
     await open();
-    expect(await run({ action: "dialog" })).toBe("There is no dialog open.");
+    expect(await run({ action: "dialog" })).toBe("There is no dialog open. The browser says: No dialog is showing");
+  });
+
+  test("a dialog the browser never announced is still answered, and said to be one it had not announced", async () => {
+    await open();
+    [...fake.pages.values()][0]!.blocked = true;
+    const out = await run({ action: "dialog", accept: false });
+    expect(out).toContain("A dialog the browser had not announced was dismissed.");
+    expect(out).toContain("Welcome to the shop");
+    expect(fake.calls("Page.handleJavaScriptDialog")[0]!.params.accept).toBe(false);
   });
 });
 

@@ -22,7 +22,7 @@ export function followed(path: string): string {
   const rest: string[] = [];
   let here = resolve(path);
   while (!existsSync(here) && dirname(here) !== here) { rest.unshift(here.slice(dirname(here).length).replace(/^[\\/]/, "")); here = dirname(here); }
-  try { here = realpathSync(here); } catch { return join(here, ...rest); }
+  try { here = realpathSync.native(here); } catch { return join(here, ...rest); }
   return join(here, ...rest);
 }
 

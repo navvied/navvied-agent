@@ -189,14 +189,15 @@ export const browser: Tool = {
         await s.cdp.send("Target.activateTarget", { targetId: target.targetId }).catch(() => undefined);
       }
       if (action === "dialog") {
-        if (!tab.dialog) return "There is no dialog open.";
-        const was = tab.dialog;
-        await tab.send("Page.handleJavaScriptDialog", { accept: a.accept !== false, ...(a.text !== undefined ? { promptText: str(a.text) } : {}) });
-        s.say({ what: "dialog", state: "answered", type: was.type, accepted: a.accept !== false });
+        const announced = tab.dialog;
+        const accepted = a.accept !== false;
+        const answered = await tab.answerDialog(accepted, a.text !== undefined ? str(a.text) : undefined);
+        if (answered !== "answered") return `There is no dialog open. The browser says: ${answered.refused}`;
+        s.say({ what: "dialog", state: "answered", type: announced?.type ?? "unannounced", accepted });
         await tab.settle();
         const reading = await tab.read();
         supersede(ctx, s, tab, reading);
-        return out(said(`The ${was.type} dialog was ${a.accept === false ? "dismissed" : "accepted"}.`, describeReading(reading, ctx.window)));
+        return out(said(`${announced ? `The ${announced.type} dialog` : "A dialog the browser had not announced"} was ${accepted ? "accepted" : "dismissed"}.`, describeReading(reading, ctx.window)));
       }
       if (tab.dialog && !["console", "switch", "new"].includes(action)) return out(dialogNote(tab.dialog));
 

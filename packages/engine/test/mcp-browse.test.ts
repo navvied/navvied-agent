@@ -25,6 +25,8 @@ describe("what a page may ask of the connected programs", () => {
     } finally { mcp.close(); }
   });
 
+  const why = (asked: Promise<unknown>): Promise<string> => asked.then(() => "it was answered", (refused: Error) => refused.message);
+
   const withTheRichProgram = async (look: (mcp: Awaited<ReturnType<typeof connectMcp>>) => Promise<void>): Promise<void> => {
     const mcp = await connectMcp({ docs: server("rich") });
     try { await look(mcp); } finally { mcp.close(); }
@@ -39,11 +41,11 @@ describe("what a page may ask of the connected programs", () => {
   }));
 
   test("an address the program does not know is an error", () => withTheRichProgram(async (mcp) => {
-    await expect(mcp.readResource("docs", "note://zzz", signal)).rejects.toThrow("no resource");
+    expect(await why(mcp.readResource("docs", "note://zzz", signal))).toContain("no resource");
   }));
 
   test("a program that is not connected has no documents", () => withTheRichProgram(async (mcp) => {
-    await expect(mcp.readResource("other", "note://a", signal)).rejects.toThrow("has no documents");
+    expect(await why(mcp.readResource("other", "note://a", signal))).toContain("has no documents");
   }));
 
   test("tools by words are the same search the model has, and a page's search offers nothing to the model", async () => {

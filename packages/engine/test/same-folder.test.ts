@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,12 +23,22 @@ describe("a folder is the same folder by whichever of its names it is called", (
   });
 
   test("a temporary folder that is known by a linked name is scratch space under its real name too", () => {
-    const before = process.env.TMPDIR;
-    process.env.TMPDIR = join(link, "scratch");
+    const names = ["TMPDIR", "TEMP", "TMP"] as const;
+    const before = names.map((name) => process.env[name]);
+    for (const name of names) process.env[name] = join(link, "scratch");
     try {
       expect(tmpdir()).toBe(join(link, "scratch"));
       expect(outside(join(real, "scratch", "x.txt"), join(away, "elsewhere"))).toBe(false);
-    } finally { if (before === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = before; }
+    } finally { names.forEach((name, at) => { if (before[at] === undefined) delete process.env[name]; else process.env[name] = before[at]; }); }
+  });
+
+  test.skipIf(process.platform !== "win32")("on Windows a folder's short name and its long name are one folder", () => {
+    const long = join(real, "project", "a folder with a long name");
+    mkdirSync(long, { recursive: true });
+    const asked = spawnSync("cmd.exe", ["/d", "/s", "/c", `for %I in ("${long}") do @echo %~sI`], { encoding: "utf8", windowsVerbatimArguments: true });
+    const short = asked.stdout.trim();
+    expect(short).not.toBe("");
+    expect([outside(join(short, "x.txt"), long), outside(join(long, "x.txt"), short)]).toEqual([false, false]);
   });
 
   test("a link inside the project that leads out of it is outside", () => {
