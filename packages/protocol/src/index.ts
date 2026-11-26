@@ -5,3 +5,4 @@ export { MOST_WATCHED, Opener, SECRET_BYTES, Sealer, fromBase64Url, hashProof, n
 export * from "./qr.ts";
 export { REFUSED, classifyFile, type DocumentExtension, type FileClass } from "./file-kind.ts";
 export * from "./schedule-when.ts";
+export { noWindowSaid, screenStepTitle } from "./screen-steps.ts";

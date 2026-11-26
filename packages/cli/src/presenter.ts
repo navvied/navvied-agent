@@ -468,7 +468,7 @@ export class Presenter {
     else {
       this.#count(e.name);
       const bad = e.status === "error" || e.screen?.verdict === "refused" || failed(output) || (e.code !== undefined && e.code !== null && e.code !== 0) || (bash ? bash.exitCode !== undefined && bash.exitCode !== 0 : false);
-      const refusal = e.screen ? refusalWords(e.screen) : undefined;
+      const refusal = e.screen ? refusalWords(e.screen, String((input as { action?: unknown } | undefined)?.action ?? "")) : undefined;
       if (bad && refusal) {
         this.#counts.failed++; this.#group.failed++;
         this.#row(this.#bad("✗"), refusal.title, right, notes);

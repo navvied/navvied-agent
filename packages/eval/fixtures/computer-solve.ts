@@ -9,6 +9,7 @@ import { screenOf } from "./computer-worlds.ts";
 
 const secret = process.env.BENCH_SECRET ?? "";
 const plans: Record<string, { world: string; calls: ComputerCall[]; answer: string }> = {
+  "notes-door": { world: "notes", calls: [{ action: "capture", app: "Notes", mode: "ax" }, { action: "click", app: "Notes", target: 3 }, { action: "capture", app: "Notes", mode: "ax" }], answer: `Door note ${codeOf(secret, "8")}` },
   "capture-click": { world: "export", calls: [{ action: "capture", app: "Preferences", mode: "ax" }, { action: "click", app: "Preferences", target: 3 }, { action: "capture", app: "Preferences", mode: "ax" }], answer: codeOf(secret, "1") },
   "stale-number": { world: "tasks", calls: [{ action: "capture", app: "Tasks", mode: "ax" }, { action: "click", app: "Tasks", target: 3 }, { action: "capture", app: "Tasks", mode: "ax" }, { action: "click", app: "Tasks", target: 2 }, { action: "capture", app: "Tasks", mode: "ax" }], answer: codeOf(secret, "2") },
   "refused-next": { world: "backup", calls: [{ action: "capture", app: "Backup", mode: "ax" }], answer: "Could not read the code: the person must allow Accessibility in the system settings first." },

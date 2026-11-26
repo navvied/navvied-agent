@@ -1,4 +1,4 @@
-import type { ComputerCall, ComputerConsent, ComputerHelper, ComputerResult } from "@navvied/engine";
+import { noWindowMatches, type ComputerCall, type ComputerConsent, type ComputerHelper, type ComputerResult } from "@navvied/engine";
 import type { PermMode } from "@navvied/protocol";
 import { clampWait, Guard, type Refusal } from "./guard.ts";
 import { NotSent, OutcomeUnknown, type CallResult } from "./mcp.ts";
@@ -27,7 +27,6 @@ export interface AdapterInput {
 interface Win { pid: number; windowId: number; app: string; title: string }
 interface Element { token: string; frame?: { x: number; y: number; w: number; h: number }; /** What the system lets be done to it, when it says (an empty list: nothing can be pressed, it can only be clicked where it is). */ actions?: string[] }
 
-const NEXT_GONE = (app: string) => `${app} has no open window. Ask the person to open it, then capture again.`;
 const NEXT_UNKNOWN = "The step was sent and could not be confirmed. Capture the app and look before you act again; do not send it twice.";
 const NEXT_CUT = "The step was cut off when the person stopped the turn, and it is not known how far it got. Capture the app and look before you act again.";
 const NEXT_FAILED = "This could not be done. Capture the app again; if it fails again, tell the person.";
@@ -61,6 +60,7 @@ export function refusalOf(r: CallResult): { code: NonNullable<ComputerResult["co
 const pause = (ms: number, signal?: AbortSignal): Promise<void> => new Promise<void>((resolve) => { const t = setTimeout(resolve, ms); signal?.addEventListener("abort", () => { clearTimeout(t); resolve(); }, { once: true }); });
 
 const TYPE_PIECE = 120;
+const windowLines = (wins: readonly Win[]): string[] => wins.map((x, n) => `${n + 1} window "${x.title}" of ${x.app}`);
 const CUT = Symbol("cut");
 const cut = (signal: AbortSignal): Promise<typeof CUT> => new Promise((resolve) => { if (signal.aborted) resolve(CUT); else signal.addEventListener("abort", () => resolve(CUT), { once: true }); });
 
@@ -131,15 +131,20 @@ export class DriverAdapter implements ComputerHelper {
   private async list(app?: string): Promise<ComputerResult> {
     const w = await this.windows(app);
     if ("fail" in w) return w.fail;
-    const tree = w.wins.map((x, n) => `${n + 1} window "${x.title}" of ${x.app}`).join("\n");
-    return { verdict: "delivered", tree };
+    if (app && !w.wins.length) return this.missing(app);
+    return { verdict: "delivered", tree: windowLines(w.wins).join("\n") };
+  }
+
+  private async missing(app: string): Promise<ComputerResult> {
+    const open = await this.windows();
+    return "fail" in open ? open.fail : noWindowMatches(app, windowLines(open.wins));
   }
 
   private async capture(app: string, mode: "ax" | "som" | "vision"): Promise<ComputerResult> {
     const w = await this.windows(app);
     if ("fail" in w) return w.fail;
     const win = w.wins[0];
-    if (!win) return refused("background_unavailable", NEXT_GONE(app), { app });
+    if (!win) return this.missing(app);
     const r = await this.safe("get_window_state", { pid: win.pid, window_id: win.windowId, tree_format: "both", include_screenshot: mode !== "ax", ...(mode === "vision" ? { capture_mode: "vision" } : {}), timeout_ms: 8000 });
     if ("fail" in r) return r.fail;
     this.window = { pid: win.pid, windowId: win.windowId, app: win.app || app, title: win.title };

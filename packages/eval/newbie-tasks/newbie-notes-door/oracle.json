@@ -1,0 +1,6 @@
+[
+  { "tool": "computer", "args": { "action": "capture", "app": "Notes" } },
+  { "tool": "computer", "args": { "action": "click", "app": "Notes", "target": "${result:(\\d+) note \"Door\"}" } },
+  { "tool": "computer", "args": { "action": "capture", "app": "Notes" } },
+  { "tool": "Write", "args": { "file_path": "ANSWER.txt", "content": "${result:(Door note \\w+)}\n" } }
+]

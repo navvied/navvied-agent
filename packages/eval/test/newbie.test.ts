@@ -10,7 +10,7 @@ import { loadSkills } from "../../engine/src/skills.ts";
 import { installedMedia } from "../src/media-cache.ts";
 import { agentConfig, check, mediaEnv, prepare, protectedChanged, shell, trustSkills } from "../src/workspace.ts";
 import { main } from "../src/main.ts";
-import { caseFix, derive, judge, laneBases, laneJobs, laneTasks, mockTasks, tagged, wantedFiles, type LaneResult, type Tag } from "../src/newbie.ts";
+import { LANE_ROWS, caseFix, derive, judge, laneBases, laneJobs, laneTasks, mockTasks, tagged, wantedFiles, type LaneResult, type Tag } from "../src/newbie.ts";
 import { CALLS, estimateLane, estimateTable, laneTable } from "../src/newbie-report.ts";
 import { CANNOT_WORDS, LANE_TOOLS, NEWBIE, UNCHECKED_WORDS, type Style } from "../src/newbie-prompts.ts";
 import { changesOf, type TaskResult } from "../src/run.ts";
@@ -21,11 +21,12 @@ const tag = (tool: string, lane: Tag["lane"] = "newbie"): Tag => ({ lane, tool, 
 
 describe("the prompts", () => {
   test("every tool of the Tools list has at least five, and a lane to judge them by", () => {
-    for (const row of TOOL_ROWS) {
+    expect(LANE_ROWS.map((r) => r.id)).toEqual([...TOOL_ROWS.map((r) => r.id), "no-screen"]);
+    for (const row of LANE_ROWS) {
       expect(LANE_TOOLS[row.id]?.accept.length).toBeGreaterThan(0);
       expect(NEWBIE.filter((p) => p.tool === row.id).length).toBeGreaterThanOrEqual(5);
     }
-    expect(Object.keys(LANE_TOOLS).sort()).toEqual(TOOL_ROWS.map((r) => r.id).sort());
+    expect(Object.keys(LANE_TOOLS).sort()).toEqual(LANE_ROWS.map((r) => r.id).sort());
   });
 
   test("the accepted tools are tools of the row (or, where nothing can be done, the ones that only look)", () => {
@@ -61,7 +62,7 @@ describe("the prompts", () => {
 
   test("the tasks made for the lane are small and have what the lane needs", () => {
     const own = laneTasks().filter((t) => t.id.startsWith("newbie-"));
-    expect(own.map((t) => t.id).sort()).toEqual(["newbie-cannot-computer", "newbie-cannot-video", "newbie-recall", "newbie-watch-clip"]);
+    expect(own.map((t) => t.id).sort()).toEqual(["newbie-cannot-computer", "newbie-cannot-video", "newbie-notes-door", "newbie-recall", "newbie-watch-clip"]);
     expect(own.filter((t) => t.idle).map((t) => t.id).sort()).toEqual(["newbie-cannot-computer", "newbie-cannot-video"]);
     expect(own.find((t) => t.id === "newbie-recall")!.earlier?.length).toBe(1);
   });
@@ -123,7 +124,7 @@ describe("the checker", () => {
   });
 
   test("where nothing can be done, saying so or asking is right, and making things up is not", () => {
-    const t = tag("computer-use");
+    const t = tag("no-screen");
     expect(judge(t, result({ tools: { Read: 1 }, said: "Sorry, I cannot make use of the screen here." })).flags).toEqual(["solved"]);
     expect(judge(t, result({ said: `${CANNOT_WORDS.at(-4)!} bikin video` })).flags).toEqual(["solved"]);
     expect(judge(t, result({ said: "Which note do you mean?" })).flags).toEqual(["solved"]);
@@ -272,12 +273,16 @@ describe("the checks a prompt may change", () => {
     expect(tasks.get("research-two-helpers")!.check).toContain("= heron");
   });
 
-  test("the lane that cannot be judged here says where it is judged, in place of robust", () => {
-    const table = laneTable([tagged(tag("computer-use", "neat"), result({ said: "I cannot." })), tagged(tag("computer-use"), result({ said: "I cannot." }))]);
-    const row = table.split("\n").find((l) => l.startsWith("| Computer Use |"))!;
-    expect(row).toContain("proven by the computer-use CI check, not in this lane");
-    expect(row).toContain("| 1/1 | 1/1 |");
-    expect(row).not.toContain("| yes |");
+  test("computer use and no screen are two rows, each judged by its own runs", () => {
+    const table = laneTable([
+      tagged(tag("computer-use", "neat"), result({ tools: { computer: 2 } })), tagged(tag("computer-use"), result({ tools: { computer: 2 } })),
+      tagged(tag("no-screen", "neat"), result({ said: "I cannot." })), tagged(tag("no-screen"), result({ said: "Done." })),
+    ]);
+    const row = (title: string): string => table.split("\n").find((l) => l.startsWith(`| ${title} |`))!;
+    expect(row("Computer Use")).toContain("| 1/1 | 1/1 | 1/1 |");
+    expect(row("Computer Use")).toContain("| yes |");
+    expect(row("No screen here")).toContain("| 1/1 | 0/1 |");
+    expect(row("No screen here")).toContain("| no |");
   });
 });
 
@@ -443,13 +448,15 @@ describe("the lane with the scripted model", () => {
   const out = join(mkdtempSync(join(tmpdir(), "navvied-newbie-test-")), "r.jsonl");
 
   test("a follow-up, an earlier conversation, a plain tool and a thing that cannot be done are all solved, and the results carry the verdict", async () => {
-    const code = await main(["run", "--lane", "newbie", "--mock", "oracle", "--tools", "files,session-search,computer-use,todo", "--per-tool", "2", "--tasks", "deep-merge,fix-off-by-one,fix-sort-order,newbie-recall,newbie-cannot-computer,plan-three-files", "--with-neat", "--out", out]);
+    const code = await main(["run", "--lane", "newbie", "--mock", "oracle", "--tools", "files,session-search,computer-use,no-screen,todo", "--per-tool", "2", "--tasks", "deep-merge,fix-off-by-one,fix-sort-order,newbie-recall,newbie-notes-door,newbie-cannot-computer,plan-three-files", "--with-neat", "--out", out]);
     expect(code).toBe(0);
     const rows = readFileSync(out, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as LaneResult);
     expect(rows.length).toBeGreaterThanOrEqual(8);
     expect(rows.every((r) => r.verdict.flags.includes("solved"))).toBe(true);
     expect(rows.find((r) => r.tag.prompt === "session-search-1")!.tools).toMatchObject({ Recall: 1 });
     expect(rows.some((r) => r.tag.lane === "neat")).toBe(true);
+    for (const r of rows.filter((r) => r.tag.tool === "computer-use")) expect(r.tools).toMatchObject({ computer: 3 });
+    expect(rows.filter((r) => r.tag.tool === "no-screen").every((r) => !r.tools?.computer)).toBe(true);
   }, 120_000);
 
   test("a model that says it looked and does nothing is flagged, and the run fails", async () => {
@@ -542,5 +549,61 @@ describe("the final answer is what was written after the last tool call", () => 
     ].join("\n");
     expect(measure(out).answer).toBe("Done, the list is written.");
     expect(measure(out).said).toContain("src/cycles.txt");
+  });
+});
+
+describe("computer use is judged with a screen, and 'no screen here' apart from it", () => {
+  const tasks = new Map(laneTasks().map((t) => [t.id, t]));
+  const of = (tool: string) => NEWBIE.filter((p) => p.tool === tool);
+
+  test("the five asks are the same words in both rows, one row on the task with the screen and one on the task without", () => {
+    expect(of("computer-use").map((p) => p.id)).toEqual([1, 2, 3, 4, 5].map((n) => `computer-use-${n}`));
+    expect(of("no-screen").map((p) => p.id)).toEqual([1, 2, 3, 4, 5].map((n) => `no-screen-${n}`));
+    expect(of("computer-use").map((p) => [p.say, p.styles])).toEqual(of("no-screen").map((p) => [p.say, p.styles]));
+    expect(new Set(of("computer-use").map((p) => p.task))).toEqual(new Set(["newbie-notes-door"]));
+    expect(new Set(of("no-screen").map((p) => p.task))).toEqual(new Set(["newbie-cannot-computer"]));
+    const task = tasks.get("newbie-notes-door")!;
+    expect(task).toMatchObject({ runner: "computer-run.ts", env: { BENCH_COMPUTER: "notes" }, protect: ["README.md"] });
+    expect(readFileSync(join(task.dir, "repo/README.md"), "utf8")).toStartWith("# Notes");
+  });
+
+  const env = { BENCH_SECRET: "notesdoor", BENCH_FIXTURES: join(import.meta.dir, "../fixtures"), PYTHONDONTWRITEBYTECODE: "1" };
+  const codeOfNote = (n: string): string => createHash("sha1").update(`notesdoorscreen${n}`).digest("hex").slice(0, 10);
+  const click = (target: number): string => JSON.stringify({ action: "click", app: "Notes", target, verdict: "delivered" });
+
+  test.each(["computer-use-1", "computer-use-3"])("%s: Door's own code passes, however it is worded; the README line, another note's code, a pressed Delete and no answer fail", async (id) => {
+    const command = derive(NEWBIE.find((p) => p.id === id)!, tasks.get("newbie-notes-door")!).check;
+    const holds = async (files: Record<string, string>): Promise<boolean> => {
+      const dir = mkdtempSync(join(tmpdir(), "navvied-newbie-door-"));
+      for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
+      try { return (await shell(dir, command, env)).ok; } finally { rmSync(dir, { recursive: true, force: true }); }
+    };
+    const door = `Door note ${codeOfNote("8")}\n`;
+    const looked = `${click(3)}\n`;
+    expect(await holds({ "ANSWER.txt": door, ".bench-computer.log": looked })).toBe(true);
+    expect(await holds({ "ANSWER.txt": `The first line is: ${codeOfNote("8")}\n`, ".bench-computer.log": `${click(2)}\n${click(8)}\n${looked}` })).toBe(true);
+    expect(await holds({ ".bench-computer.log": looked })).toBe(false);
+    expect(await holds({ "ANSWER.txt": "# Notes\n", ".bench-computer.log": "" })).toBe(false);
+    expect(await holds({ "ANSWER.txt": `${codeOfNote("9")}\n`, ".bench-computer.log": looked })).toBe(false);
+    expect(await holds({ "ANSWER.txt": `${door}${codeOfNote("10")}\n`, ".bench-computer.log": looked })).toBe(false);
+    expect(await holds({ "ANSWER.txt": door, ".bench-computer.log": `${looked}${click(9)}\n` })).toBe(false);
+    if (id === "computer-use-3") expect(await holds({ "answer.txt": door, ".bench-computer.log": looked })).toBe(true);
+  });
+
+  test("the scripted screen shows each note's own code, and Delete takes the note away", async () => {
+    const { screenOf } = await import("../fixtures/computer-worlds.ts");
+    const dir = mkdtempSync(join(tmpdir(), "navvied-newbie-world-"));
+    try {
+      const screen = screenOf("notes", "notesdoor", dir);
+      const show = async (target?: number): Promise<string> => { if (target !== undefined) await screen.call({ action: "click", app: "Notes", target }); return (await screen.call({ action: "capture", app: "Notes", mode: "ax" })).tree ?? ""; };
+      const list = await show();
+      for (const words of ['note "Gate"', 'note "Door"', 'note "Doors (old)"', 'button "Delete"']) expect(list).toContain(words);
+      for (const [target, code] of [[3, "8"], [2, "9"], [4, "10"]] as const) {
+        const open = await show(target);
+        for (const other of ["8", "9", "10"]) expect(open.includes(codeOfNote(other)), `${target} ${other}`).toBe(other === code);
+        await show(7);
+      }
+      expect(await show(9)).toContain("deleted");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

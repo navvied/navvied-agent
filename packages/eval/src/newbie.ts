@@ -19,6 +19,8 @@ export type Flag = "solved" | "wrong-tool" | "no-tool";
 export interface Verdict { /** The task's own check held. */ outcome: boolean; /** The tools used include one the lane accepts: reported for every row, a flag only for the rows where the tool is the result. */ rightTool: boolean; flags: Flag[] }
 export type LaneResult = TaskResult & { tag: Tag; verdict: Verdict };
 
+export const LANE_ROWS: readonly { id: string; title: string }[] = [...TOOL_ROWS.map(({ id, title }) => ({ id, title })), { id: "no-screen", title: "No screen here" }];
+
 export const laneTasks = (): Task[] => [...loadTasks(TASKS), ...loadTasks(NEWBIE_TASKS)];
 
 /** The tasks the prompts are tied to, each once: what has to be fit to measure with (see validate.ts) for the lane to mean anything. */
@@ -60,7 +62,7 @@ export interface Selection { tools?: readonly string[]; /** At most this many pr
 /** The runs of the lane, the prompts first; with `neat`, the plain tasks the prompts are tied to, once for each tool. */
 export function laneJobs(sel: Selection = {}, tasks: readonly Task[] = laneTasks()): Job[] {
   const byId = new Map(tasks.map((t) => [t.id, t]));
-  const rows = TOOL_ROWS.map((r) => r.id).filter((id) => !sel.tools?.length || sel.tools.includes(id));
+  const rows = LANE_ROWS.map((r) => r.id).filter((id) => !sel.tools?.length || sel.tools.includes(id));
   const jobs: Job[] = [], neat: Job[] = [];
   for (const tool of rows) {
     const own = NEWBIE.filter((p) => p.tool === tool).slice(0, sel.perTool ?? Infinity);

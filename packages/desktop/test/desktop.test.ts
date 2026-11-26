@@ -140,7 +140,7 @@ test("the test key and the notice switch exist only in builds made for the windo
   const workflow = readFileSync(resolve(HERE, "../../.github/workflows/desktop.yml"), "utf8");
   const section = (name: string) => { const from = workflow.indexOf(`\n  ${name}:`); expect(from).toBeGreaterThan(-1); const rest = workflow.slice(from + 1); const next = rest.slice(1).search(/\n  [a-z]+:\n/); return next < 0 ? rest : rest.slice(0, next + 1); };
   expect(section("window")).toContain("--features test-hooks");
-  for (const name of ["core", "bundle", "publish"]) expect(section(name)).not.toContain("test-hooks");
+  for (const name of ["core", "bundle"]) expect(section(name)).not.toContain("test-hooks");
 });
 
 /** The source range of one top-level `fn <name>`'s body, braces included, found by counting from its opening `{`. */
@@ -189,11 +189,28 @@ test("every touch of the window or the tray runs on the GTK main thread", () => 
   expect(offenders).toEqual([]);
 });
 
-test("a macOS disk image is never made by attaching one: the bundler is asked for the app only, and the script that makes the image has no attach", () => {
+test("the macOS disk image is the bundler's own, made after the storage daemon is taken off", () => {
   const workflow = readFileSync(resolve(HERE, "../../.github/workflows/desktop.yml"), "utf8");
-  expect(workflow).not.toMatch(/bundles: "[^"]*dmg/);
-  expect(workflow).toContain("scripts/make-dmg.sh");
-  const script = readFileSync(join(HERE, "scripts/make-dmg.sh"), "utf8").split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
-  expect(script).toContain("hdiutil makehybrid");
-  expect(script).not.toMatch(/hdiutil (attach|create|mount)/);
+  expect(workflow).toContain('name: macos-x64, os: macos-15-intel, bundles: "app,dmg"');
+  expect(workflow).toContain('name: macos-arm64, os: macos-latest, bundles: "app,dmg"');
+  expect(workflow).toMatch(/storage-daemon\.sh\n[\s\S]*- name: Build the installer\n/);
+  expect(workflow).not.toContain("make-dmg");
+});
+
+test("a release has one writer: it publishes a draft only after the command line and every desktop job succeeded and every file is attached", () => {
+  const text = (p: string) => readFileSync(resolve(HERE, "../../.github/workflows", p), "utf8");
+  const release = text("release.yml"), desktop = text("desktop.yml");
+  for (const w of [release, desktop, text("ci.yml")]) expect(w).not.toContain("continue-on-error");
+  expect(desktop).toContain("  workflow_call:\n");
+  expect(desktop).not.toMatch(/action-gh-release|gh release|tags: \[/);
+  expect(release).toContain("uses: ./.github/workflows/desktop.yml");
+  const publish = release.slice(release.indexOf("\n  publish:\n"));
+  expect(publish).toContain("needs: [command-line, desktop]");
+  expect(publish).not.toMatch(/\n    if: /);
+  const steps = ["assemble-update-manifest.ts", "release-assets.ts check", "gh release create", "--draft ", "gh release view \"$GITHUB_REF_NAME\" --json assets", "gh release edit \"$GITHUB_REF_NAME\" --draft=false --latest"];
+  const at = steps.map((x) => publish.indexOf(x));
+  expect(at.every((i) => i > -1)).toBe(true);
+  expect([...at].sort((x, y) => x - y)).toEqual(at);
+  expect(publish.match(/release-assets\.ts check/g)).toHaveLength(2);
+  expect((release + desktop).match(/contents: write/g)).toHaveLength(1);
 });

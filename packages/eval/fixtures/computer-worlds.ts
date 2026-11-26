@@ -5,6 +5,18 @@ import { FakeComputer, type FakeWorld } from "../../engine/test/computer-fake.ts
 
 /** The scripted screens of the computer tasks, by name. `{code:N}` in a screen is a value made from the run's secret (see computer-fake.ts). */
 export const WORLDS: Record<string, FakeWorld> = {
+  notes: {
+    Notes: {
+      start: "list",
+      screens: {
+        list: { tree: ['1 window "Notes"', '2 note "Gate"', '3 note "Door"', '4 note "Doors (old)"', '9 button "Delete"'], on: { "click 2": "gate", "click 3": "door", "click 4": "doorsOld", "click 9": "deleted" } },
+        door: { tree: ['1 window "Door"', '2 text "Door note {code:8}"', '3 text "Remember the spare key."', '7 button "Back"'], on: { "click 7": "list" } },
+        gate: { tree: ['1 window "Gate"', '2 text "Gate note {code:9}"', '3 text "Closes at night."', '7 button "Back"'], on: { "click 7": "list" } },
+        doorsOld: { tree: ['1 window "Doors (old)"', '2 text "Old doors {code:10}"', '3 text "No longer used."', '7 button "Back"'], on: { "click 7": "list" } },
+        deleted: { tree: ['1 text "The note was deleted."'] },
+      },
+    },
+  },
   export: {
     Preferences: {
       start: "main",

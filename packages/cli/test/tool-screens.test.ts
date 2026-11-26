@@ -49,6 +49,20 @@ describe("a refusal on the screen", () => {
     expect(words("permission_missing", { which: "accessibility", app: "Notes" })!.said).toBe("Allow Accessibility for navvied in the system settings.");
     expect(words("blocked_by_policy", { app: "Passwords" })!.title).toBe("Could not open Passwords");
   });
+  test("an app that matches no open window: the web's row title for the action and one sentence, never the sentence about a changed window", () => {
+    const missing = (action: string, code: string) => refusalWords({ verdict: "refused", code, reason: "no_window", app: "Door" }, action)!;
+    for (const [action, title] of [["capture", "Could not look at Door"], ["click", "Could not click in Door"], ["type", "Could not type in Door"], ["key", "Could not press keys in Door"], ["scroll", "Could not scroll Door"], ["list", "Could not list the apps"], ["wait", "Could not wait"]] as const) {
+      for (const code of ["input_target_mismatch", "background_unavailable"]) expect(missing(action, code)).toEqual({ title, said: "No open window matches Door. Open it, then ask again." });
+    }
+  });
+  test("the terminal's row for it reads the same, with the action taken from the step", () => {
+    const r = rig();
+    r.send({ ev: "user", qid: "q", text: "read Door" }, { ev: "tool", id: "t", name: "computer", status: "running", input: { action: "capture", app: "Door" } },
+      { ev: "tool", id: "t", name: "computer", status: "done", output: "refused: input_target_mismatch", screen: { verdict: "refused", code: "input_target_mismatch", reason: "no_window", app: "Door" } });
+    expect(r.shown()).toContain("Could not look at Door");
+    expect(r.shown()).toContain("No open window matches Door. Open it, then ask again.");
+    expect(r.shown()).not.toContain("The window in front changed");
+  });
   test("a step that was delivered, or a reason without words, has none", () => {
     expect(refusalWords({ verdict: "delivered" })).toBeUndefined();
     expect(words("stale_target")).toBeUndefined();

@@ -53,6 +53,16 @@ describe("looking", () => {
     const { adapter } = make("bypass", { list_windows: () => ok({ windows: [] }) });
     expect(await adapter.call({ action: "capture", app: "Notes" })).toMatchObject({ verdict: "refused", code: "background_unavailable", next: expect.stringContaining("no open window") });
   });
+  test.each(["capture", "list"] as const)("%s of an app that matches no window says what is open, one line a window, as list does", async (action) => {
+    const other = { ...WINDOW, app_name: "Files", title: "Home", window_id: 71, z_index: 1 };
+    const { adapter } = make("bypass", { list_windows: () => ok({ windows: [WINDOW, other] }) });
+    const listed = await adapter.call({ action: "list" });
+    expect(await adapter.call({ action, app: "Door" })).toEqual({ verdict: "refused", reason: "no_window", code: "input_target_mismatch", app: "Door", tree: listed.tree!, next: "No open window matches Door. Capture one of the open ones below, or ask the person to open it." });
+  });
+  test.each(["capture", "list"] as const)("%s of an app when nothing is open asks the person to open it", async (action) => {
+    const { adapter } = make("bypass", { list_windows: () => ok({ windows: [] }) });
+    expect(await adapter.call({ action, app: "Door" })).toEqual({ verdict: "refused", reason: "no_window", code: "background_unavailable", app: "Door", next: "Door has no open window. Ask the person to open it, then capture again." });
+  });
   test("a window that is not on screen is not offered", async () => {
     const { adapter } = make("bypass", { list_windows: () => ok({ windows: [{ ...WINDOW, is_on_screen: false }] }) });
     expect((await adapter.call({ action: "capture", app: "Notes" })).verdict).toBe("refused");

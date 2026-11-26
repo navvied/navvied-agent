@@ -10,7 +10,7 @@ import type { SkillBook } from "./skill-book.ts";
 import type { Media } from "./media/media.ts";
 import type { MediaFile } from "./media/shelf.ts";
 import type { Need } from "./media/types.ts";
-import type { EngineEvent, PermMode, PictureInfo, QuestionItem, ScreenAsk, ScreenOutcome, UploadAsk } from "@navvied/protocol";
+import type { ScreenReason, EngineEvent, PermMode, PictureInfo, QuestionItem, ScreenAsk, ScreenOutcome, UploadAsk } from "@navvied/protocol";
 import type { Timing } from "./schedule-when.ts";
 import type { PeerAnswer } from "./a2a/client.ts";
 
@@ -142,6 +142,7 @@ export interface ComputerCall {
 export type ComputerCode = "background_unavailable" | "background_occluded" | "background_uipi_blocked" | "human_has_control" | "input_target_mismatch" | "permission_missing" | "blocked_by_policy";
 
 export interface ComputerResult {
+  reason?: ScreenReason;
   /** `unverified`: the input was sent and cannot be proven to have landed. */
   verdict: "delivered" | "unverified" | "refused";
   code?: ComputerCode;

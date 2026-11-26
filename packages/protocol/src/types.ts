@@ -394,8 +394,8 @@ export interface ApprovalOption {
 /** Why a tool did not do its work, when that is not a plain failure. */
 export type ToolOutcome = "denied" | "blocked" | "timeout" | "stopped" | "skipped" | "background" | "redirected";
 
-/** How a step on the screen ended, for a card that says it in words: `code` is a refusal's closed reason (the helper's, or `stale_target` from the engine), `which` what is missing, `app` the application it was about, `next` the exact next step. No capture or picture is ever in it. */
-export interface ScreenOutcome { verdict: "delivered" | "unverified" | "refused"; code?: string; which?: string; app?: string; next?: string }
+export type ScreenReason = "no_window";
+export interface ScreenOutcome { verdict: "delivered" | "unverified" | "refused"; code?: string; reason?: ScreenReason; which?: string; app?: string; next?: string }
 
 /** What a consent to use the screen is about: the application, what it is for (`capture`: look at its window; `input`: click, type or press keys in it; `foreground`: bring it in front of the person), and the lines of what the agent is about to do there (each an action as the model wrote it, such as `click 12` or `type: Hello`; secrets hidden, each at most 200 characters, at most 8). The options of the `approval` are the usual three; "do not ask again" holds for this application only. */
 export interface ScreenAsk { app: string; about: "capture" | "input" | "foreground"; lines: string[] }

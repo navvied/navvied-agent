@@ -1,6 +1,6 @@
 [package]
 name = "navvied-desktop"
-version = "0.3.8"
+version = "0.3.9"
 edition = "2021"
 license = "PolyForm-Noncommercial-1.0.0"
 description = "The navvied desktop app: a small window around the web UI, with the navvied program inside."

@@ -43,7 +43,7 @@ export { scanText, scanPrompt, clean as cleanText } from "./text-scan.ts";
 export { projectDirs } from "./instructions.ts";
 export { jsonIn, validate as validateJson } from "./json-schema.ts";
 export { browser, closeBrowser, findChrome } from "./tools/browser.ts";
-export { COMPUTER_TOOL, computer } from "./tools/computer.ts";
+export { COMPUTER_TOOL, computer, noWindowMatches } from "./tools/computer.ts";
 export { GIT_LOCAL_ENV, gitEnv } from "./git-env.ts";
 export { MANIFEST as PLUGIN_MANIFEST, PluginLock, expandCommand, findCommand, discard, installPlugin, loadPacks, packCommands, packDirs, plainSource, readPack, removePlugin, stagePlugin, treeHash, type InstallOptions, type InstallResult, type Pack, type PackCommand, type Run as PackRun } from "./plugin-pack.ts";
 export { checkOutdated, diffPlugins, isRemote, updatePlugin, type OutdatedRow, type PluginChange, type UpdateResult } from "./plugin-update.ts";

@@ -3,13 +3,12 @@ on:
   push:
     tags: ["v*"]
 permissions:
-  contents: write
+  contents: read
 jobs:
-  build:
+  command-line:
     if: github.repository == 'navvied/navvied-agent'
     runs-on: ubuntu-latest
     env:
-      # The runner's Ubuntu does not let an unprivileged program make the namespaces Chrome's own sandbox needs; the machine is a throw-away one.
       NAVVIED_BROWSER_NO_SANDBOX: "1"
     steps:
       - uses: actions/checkout@v4
@@ -27,15 +26,63 @@ jobs:
           exit $code
       - name: Build one executable per platform
         run: |
+          set -euo pipefail
           mkdir dist
-          for target in linux-x64 linux-x64-baseline linux-x64-musl linux-arm64 linux-arm64-musl darwin-arm64 darwin-x64 windows-x64 windows-x64-baseline; do
-            ext=""; case "$target" in windows-*) ext=".exe" ;; esac
-            bun build --compile --target=bun-$target packages/cli/src/main.ts --outfile dist/navvied-$target$ext
-          done
-          cd dist && sha256sum navvied-* > SHA256SUMS
-      - uses: softprops/action-gh-release@v2
+          bun packages/desktop/scripts/release-assets.ts targets > "$RUNNER_TEMP/targets"
+          while read -r target ext; do
+            bun build --compile --target="bun-$target" packages/cli/src/main.ts --outfile "dist/navvied-$target$ext"
+          done < "$RUNNER_TEMP/targets"
+          (cd dist && sha256sum navvied-* > SHA256SUMS)
+          cp install.sh install.ps1 dist/
+      - uses: actions/upload-artifact@v4
         with:
-          files: |
-            dist/*
-            install.sh
-            install.ps1
+          name: release-command-line
+          if-no-files-found: error
+          path: dist/*
+
+  desktop:
+    if: github.repository == 'navvied/navvied-agent'
+    uses: ./.github/workflows/desktop.yml
+    secrets: inherit
+
+  publish:
+    name: publish the release
+    needs: [command-line, desktop]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-command-line
+          path: release
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: navvied-desktop-*
+          merge-multiple: true
+          path: release
+      - name: Checksums of the installers and the update manifest
+        working-directory: release
+        run: |
+          sha256sum navvied-desktop-* > SHA256SUMS-desktop
+          bun ../packages/desktop/scripts/assemble-update-manifest.ts "$GITHUB_REF_NAME"
+      - name: Every file of the release is here
+        run: ls release | bun packages/desktop/scripts/release-assets.ts check "${GITHUB_REF_NAME#v}"
+      - name: A draft that holds the files
+        run: |
+          set -euo pipefail
+          state=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null || echo none)
+          case "$state" in
+            none) gh release create "$GITHUB_REF_NAME" release/* --draft --verify-tag --title "$GITHUB_REF_NAME" --notes "" ;;
+            true) gh release upload "$GITHUB_REF_NAME" release/* --clobber ;;
+            *) echo "::error::$GITHUB_REF_NAME is already published; a published release is not changed"; exit 1 ;;
+          esac
+      - name: Every file is attached to the draft
+        run: gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | bun packages/desktop/scripts/release-assets.ts check "${GITHUB_REF_NAME#v}"
+      - name: Publish it
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest

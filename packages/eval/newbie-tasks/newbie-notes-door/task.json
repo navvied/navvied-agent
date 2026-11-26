@@ -1,0 +1,15 @@
+{
+  "id": "newbie-notes-door",
+  "title": "Open one note in the Notes app and write down its first line",
+  "kind": "agent",
+  "level": 1,
+  "lang": "none",
+  "requires": ["bun"],
+  "prompt": "Open the Notes app on this computer, read the first line of the note called Door, and write it into ANSWER.txt.",
+  "check": "bun \"$BENCH_FIXTURES/computer-check.ts\" notes-door ANSWER.txt",
+  "protect": ["README.md"],
+  "maxSteps": 20,
+  "timeoutSeconds": 600,
+  "runner": "computer-run.ts",
+  "env": { "BENCH_COMPUTER": "notes" }
+}

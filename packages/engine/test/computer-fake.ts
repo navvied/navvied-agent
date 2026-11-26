@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { noWindowMatches } from "../src/tools/computer.ts";
 import type { ComputerCall, ComputerCode, ComputerHelper, ComputerResult } from "../src/types.ts";
 
 /**
@@ -39,11 +40,16 @@ export class FakeComputer implements ComputerHelper {
 
   constructor(private readonly world: FakeWorld, private readonly secret = "fixture-secret") {}
 
+  #open(): string[] {
+    return Object.keys(this.world).map((n, i) => `${i + 1} app "${n}"`);
+  }
+
   async call(c: ComputerCall): Promise<ComputerResult> {
     this.calls.push(structuredClone(c));
     if (c.action === "wait") return { verdict: "delivered" };
-    if (c.action === "list" && c.app) return this.world[c.app] ? { verdict: "delivered", tree: `1 window "${c.app}"` } : { verdict: "refused", code: "input_target_mismatch", app: c.app, next: `${c.app} is not running.` };
-    if (c.action === "list") return { verdict: "delivered", tree: Object.keys(this.world).map((n, i) => `${i + 1} app "${n}"`).join("\n") };
+    if (c.action === "list" && c.app) return this.world[c.app] ? { verdict: "delivered", tree: `1 window "${c.app}"` } : noWindowMatches(c.app, this.#open());
+    if (c.action === "list") return { verdict: "delivered", tree: this.#open().join("\n") };
+    if (c.action === "capture" && c.app && !this.world[c.app]) return noWindowMatches(c.app, this.#open());
     const name = c.app && this.world[c.app] ? c.app : c.app ? undefined : this.#app;
     const app = name ? this.world[name] : undefined;
     if (!name || !app) return { verdict: "refused", code: "input_target_mismatch", ...(c.app ? { app: c.app } : {}), next: c.app ? `${c.app} is not running. Capture another app.` : "Capture an app first." };

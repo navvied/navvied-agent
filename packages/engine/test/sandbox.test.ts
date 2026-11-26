@@ -1,11 +1,11 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_SANDBOX, Jobs, Sandbox, defaultTools, killTree, sandboxAbility, stopAllJobs, type SandboxSetting } from "../src/index.ts";
-import { denialIn, planFor, seatbeltProfile, seccompProgram, bubblewrapArgs } from "../src/sandbox/index.ts";
+import { GUARD_STDIO, denialIn, planFor, releaseFds, seatbeltProfile, seccompProgram, bubblewrapArgs } from "../src/sandbox/index.ts";
 import { DENIED_CALLS } from "../src/sandbox/seccomp.ts";
 import { SECRET_DIRS, isSecretPath } from "../src/secret-stores.ts";
 import type { ToolContext } from "../src/types.ts";
@@ -371,13 +371,37 @@ describe.skipIf(!works)("the Bash tool through the sandbox", () => {
 
   test("a program you type to runs confined in its terminal", async () => {
     const c = ctx();
-    const started = await bash.run({ command: "cat", interactive: true }, c);
+    const started = await bash.run({ command: "echo the-$((40+2))-program-runs; exec cat", interactive: true }, c);
     expect(started).toContain("a program you can type to");
     const typed = defaultTools().find((t) => t.name === "BashInput")!;
+    let seen = started;
+    const reads = async (done: () => boolean): Promise<void> => {
+      while (!done()) {
+        const more = await bashOutput.run({ job_id: "job1", wait: 5 }, c);
+        if (/\[job1: (failed|done|stopped)/.test(more)) throw new Error(`the program ended: ${seen}${more}`);
+        seen += more;
+      }
+    };
+    await reads(() => seen.includes("the-42-program-runs"));
     await typed.run({ job_id: "job1", text: "ping" }, c);
-    expect(await bashOutput.run({ job_id: "job1", wait: 5, until: "ping" }, c)).toContain("ping");
+    await reads(() => seen.split("ping").length > 2);
     await killShell.run({ job_id: "job1" }, c);
-  });
+  }, 20_000);
+
+  test.skipIf(!linux)("a program in a terminal that waits for the engine's answer is let go, and both of its pipes are closed afterwards", async () => {
+    const link = (fd: number): string => { try { return readlinkSync(`/proc/self/fd/${fd}`); } catch { return "closed"; } };
+    for (const late of ["0", "0.3"]) {
+      let out = "";
+      const child = Bun.spawn(["sh", "-c", `sleep ${late}; echo >&4; read -r answer <&5; echo "answered $answer"`], { stdio: [undefined, undefined, undefined, ...GUARD_STDIO] as never, terminal: { cols: 80, rows: 24, data: (_terminal, data) => { out += new TextDecoder().decode(data); } } });
+      const fds = (child as unknown as { stdio: number[] }).stdio.slice(4) as [number, number];
+      const pipes = fds.map(link);
+      releaseFds(fds);
+      await until(() => out.includes("answered go"), 10_000);
+      await child.exited;
+      await until(() => fds.every((fd, i) => link(fd) !== pipes[i]), 10_000);
+      child.terminal?.close();
+    }
+  }, 30_000);
 
   test("a command that goes on silent is handed on as a job, still confined", async () => {
     const out = await bash.run({ command: "echo first; sleep 30", timeout: 1 }, ctx());

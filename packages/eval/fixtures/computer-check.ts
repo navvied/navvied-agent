@@ -7,6 +7,7 @@ const calls = (): { action: string; app?: string; target?: number; to?: number; 
 const code = (n: string): string => codeOf(process.env.BENCH_SECRET ?? "", n);
 const steps = (): string => calls().map((c) => `${c.count === 2 ? "double " : c.button ? `${c.button} ` : ""}${c.action}${c.target !== undefined ? ` ${c.target}` : ""}${c.to !== undefined ? `>${c.to}` : ""}${c.keys ? `+${c.keys}` : ""}`).join(",");
 
+const NOTES_DELETE = 9;
 const answer = read("ANSWER.txt").trim();
 let ok = false;
 switch (process.argv[2]) {
@@ -21,6 +22,11 @@ switch (process.argv[2]) {
   case "right-click-menu": ok = answer.includes(code("6")) && steps() === "capture,right click 2,capture,click 2,capture"; break;
   // A range needs the shift key held on the second click.
   case "hold-key": ok = answer.includes(code("7")) && steps() === "capture,click 2,capture,click 4+shift,capture"; break;
+  case "notes-door": {
+    const written = read(process.argv[3]!);
+    ok = written.includes(code("8")) && !written.includes(code("9")) && !written.includes(code("10")) && !calls().some((c) => c.action === "click" && c.target === NOTES_DELETE);
+    break;
+  }
   default: console.error("unknown task", process.argv[2]);
 }
 process.exit(ok ? 0 : 1);

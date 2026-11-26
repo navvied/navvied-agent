@@ -1,21 +1,14 @@
 name: desktop
-# The desktop app: tests on the three systems, the real window on a virtual screen, and the installers.
-#   push to main (desktop, CLI or web files changed), pull requests, a tag v*, or by hand: test and build, keep the installers as artifacts.
-#   a tag v*: the installers are also attached to that release (unsigned until the signing accounts exist; see docs/DESKTOP.md).
-# No secrets are needed today. Signing and notarising are the commented variables on the "Build" step.
 on:
   push:
     branches: [main]
-    tags: ["v*"]
     paths: ["packages/desktop/**", "packages/cli/**", "packages/web/**", ".github/workflows/desktop.yml"]
   pull_request:
     paths: ["packages/desktop/**", "packages/cli/**", "packages/web/**", ".github/workflows/desktop.yml"]
   workflow_dispatch:
-# One group per commit, so a push never cancels another push's run. (With one group per branch GitHub keeps a single waiting run and
-# cancels the older waiting one whenever a newer push arrives: with frequent pushes nothing ever finished.) Only a newer commit on the
-# same pull request cancels the older run.
+  workflow_call:
 concurrency:
-  group: desktop-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  group: desktop-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   CARGO_TERM_COLOR: never
@@ -95,15 +88,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # On macOS the bundler makes the app (and, once signing is on, archives it for the updater: macOS's updater artifact is
-          # always a .tar.gz of the .app, never the .dmg); the disk image is made by scripts/make-dmg.sh, because the bundler's own way
-          # attaches a fresh image, and that is what macOS now and then refuses to let go of.
           - { name: linux-x64, os: ubuntu-22.04, bundles: "deb,appimage", updater_target: "appimage" }
-          - { name: macos-arm64, os: macos-latest, bundles: "app", updater_target: "app" }
-          - { name: macos-x64, os: macos-15-intel, bundles: "app", updater_target: "app" }
+          - { name: macos-arm64, os: macos-latest, bundles: "app,dmg", updater_target: "app" }
+          - { name: macos-x64, os: macos-15-intel, bundles: "app,dmg", updater_target: "app" }
           - { name: windows-x64, os: windows-latest, bundles: "nsis", updater_target: "nsis" }
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.name == 'windows-x64' || matrix.name == 'macos-x64' }}
     defaults:
       run:
         shell: bash
@@ -152,6 +141,9 @@ jobs:
       # public half of whatever key signed this (see the doc) — otherwise the app's own verification at update
       # time rejects every release's signature, update-or-not. The check right below refuses to build a signed
       # release with that placeholder still in place, rather than ship one silently nobody can ever update from.
+      - name: Take the storage daemon off the disk image (macOS only)
+        if: runner.os == 'macOS'
+        run: bash packages/desktop/scripts/ci-run.sh "storage daemon" bash packages/desktop/scripts/storage-daemon.sh
       - name: Build the installer
         id: build
         working-directory: packages/desktop/src-tauri
@@ -172,11 +164,9 @@ jobs:
             label="installer build (signed, updater artifacts on)"
           fi
           CI_RUN_LOG=/tmp/installer-build.log bash ../scripts/ci-run.sh "$label" "${cmd[@]}"
-      - name: The disk image, made from the app without attaching one (macOS only)
-        if: runner.os == 'macOS'
-        run: |
-          b=packages/desktop/target/release/bundle
-          bash packages/desktop/scripts/ci-run.sh "disk image" bash packages/desktop/scripts/make-dmg.sh "$b/macos/navvied.app" "$b/dmg/navvied-${{ matrix.name }}.dmg" navvied
+      - name: If the disk image could not be ejected, show what else was using it
+        if: failure() && steps.build.outcome == 'failure' && runner.os == 'macOS'
+        run: bash packages/desktop/scripts/dmg-diagnose.sh /tmp/installer-build.log
       - name: Name the installers, and their update signatures when this run signed them
         run: |
           ver=$(bun -p "require('./packages/desktop/package.json').version")
@@ -207,34 +197,3 @@ jobs:
           name: navvied-desktop-${{ matrix.name }}
           if-no-files-found: error
           path: out/*
-
-  publish:
-    name: attach the installers to the release
-    needs: [bundle]
-    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') && github.repository == 'navvied/navvied-agent' }}
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: navvied-desktop-*
-          merge-multiple: true
-          path: out
-      - name: Checksums
-        working-directory: out
-        run: |
-          ls -l
-          sha256sum navvied-desktop-* > SHA256SUMS-desktop
-          cat SHA256SUMS-desktop
-      # Only when at least one leg's "Build the installer" step was actually signed (a TAURI_SIGNING_PRIVATE_KEY
-      # secret present) did any `.sig` make it into `out/` — then, and only then, is there an update to offer;
-      # the script exits 0 with no latest.json otherwise, which is not a failure.
-      - name: Assemble the update manifest, if this release was signed
-        working-directory: out
-        run: bun ../packages/desktop/scripts/assemble-update-manifest.ts "$GITHUB_REF_NAME"
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: out/*

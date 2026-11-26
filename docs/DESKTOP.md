@@ -182,9 +182,9 @@ tested, and proven with real bytes reaching a real request.
 | Windows | NSIS installer, x64, per user (no administrator rights) | Embeds the WebView2 bootstrapper so it also works offline on Windows 10. ARM PCs run it through emulation, as the CLI already does. |
 | Linux | AppImage and `.deb`, x64 (arm64 later) | The `.deb` depends on `libwebkit2gtk-4.1-0` and `libayatana-appindicator3-1`; the AppImage carries them. Stock GNOME needs the AppIndicator extension for a tray icon to show at all. |
 
-The program inside each installer is compiled on the same runner as the app (`bun build --compile`) and named the way Tauri expects (`navvied-<rust target triple>`). The workflow is `.github/workflows/desktop.yml`: tests on the three systems, the real window on a virtual screen (Linux), one installer job per system, and on a tag `v*` a `publish` job that attaches the installers and `SHA256SUMS-desktop` to the release that carries the command-line binaries. Installers are named `navvied-desktop-<version>-<system>.<ext>`.
+The program inside each installer is compiled on the same runner as the app (`bun build --compile`) and named the way Tauri expects (`navvied-<rust target triple>`). The workflow is `.github/workflows/desktop.yml`: tests on the three systems, the real window on a virtual screen (Linux), and one installer job per system. It publishes nothing: on a tag `v*`, `.github/workflows/release.yml` runs it together with the command-line build, and is the only thing that writes a release. Its last job runs only after all of them succeeded: it gathers every file, makes `SHA256SUMS-desktop` and `latest.json`, creates a draft, checks the draft's files against the one list in `packages/desktop/scripts/release-assets.ts`, and only then publishes it, so a release is never published with a file missing. Installers are named `navvied-desktop-<version>-<system>.<ext>`.
 
-Updates: the Tauri updater with its own key pair (an ed25519 key made once with `tauri signer generate`; free). It reads a `latest.json` that the workflow attaches to the GitHub release. This key is separate from the Apple and Windows certificates.
+Updates: the Tauri updater with its own key pair (an ed25519 key made once with `tauri signer generate`; free). It reads the `latest.json` of the latest GitHub release, which names the signed update of all four systems; without one of them the release is not published. This key is separate from the Apple and Windows certificates.
 
 ### Accounts and money needed (nothing has been bought or registered)
 
@@ -196,7 +196,7 @@ Updates: the Tauri updater with its own key pair (an ed25519 key made once with 
 | The updater key | Free, made once by the maintainers | No updates. |
 | Linux | Nothing; an optional GPG key to sign the `.deb` repository later | n/a |
 
-**What the workflow reads once the accounts exist.** Nothing is read today: with no secret set, every installer is built unsigned (macOS gets an ad-hoc signature, which Apple silicon needs to start a program at all). Each name below is a GitHub repository secret; the build step already refers to them.
+**What the workflow reads once the accounts exist.** The Apple and Windows secrets do not exist yet, so every installer is built without a publisher's signature (macOS gets an ad-hoc signature, which Apple silicon needs to start a program at all). The update key is separate and in use: releases carry the signed update files. Each name below is a GitHub repository secret; the build step already refers to them.
 
 | Secret | What it is | Used for |
 |---|---|---|
@@ -233,18 +233,20 @@ Actions secrets.
    - `TAURI_SIGNING_PRIVATE_KEY` — the contents of `~/navvied-updater.key` (the whole file, exactly as written).
    - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the password chosen in step 1.
 
-The macOS disk image is not made by the bundler: it makes the app, and `scripts/make-dmg.sh` writes the image straight from it without ever
-attaching one (the bundler's own way attaches a fresh image, and macOS's storage daemon then keeps its device open, so the detach fails now and then
-with "Resource busy").
+The macOS disk image is the bundler's own (`app,dmg`). The bundler makes it by creating a volume, filling it and ejecting it, and macOS's storage
+daemon can hold the volume's raw device the moment it appears, so the eject is sometimes refused as "Resource busy". Before the build, the workflow
+removes that daemon's service from the build machine (`scripts/storage-daemon.sh`), prints what it saw before and after, and fails the job if the
+service cannot be removed or the daemon stays. Seen on the Intel runner: the daemon holding a new image's device, and not holding one once removed.
+On the Apple silicon runner no program was seen holding a device even with the daemon running, so there removing it has shown no harm and no
+benefit. The failure is rare, so no number of successful images proves that it is gone.
 
-Once both are set and the next tagged release runs, `desktop.yml`'s `bundle` job signs the installer (or, for
-macOS, a separate `.app.tar.gz` next to the `.dmg` — see the workflow's own comment on why) and the `publish` job
-assembles `latest.json` from the `.sig` files that run produced
-(`packages/desktop/scripts/assemble-update-manifest.ts`), attaching it to the release alongside the installers.
-Nothing changes in the workflow itself for this to start working — it already checks for the secret every run and
-builds unsigned, exactly as before, for as long as it is absent. If the secret is set but `tauri.conf.json`'s
-`pubkey` is still the placeholder, the `bundle` job fails loudly instead of quietly shipping a signed release
-that every copy of the app refuses to update from (see the workflow's own check for this).
+Making the image without a volume was tried and cannot be used: the system's other ways of writing it either mark every file in a way the app's
+signature check refuses, or lose the links inside the app.
+
+The `bundle` job of `desktop.yml` signs the installer (or, for macOS, a separate `.app.tar.gz` next to the `.dmg`), and the release's last job
+assembles `latest.json` from those `.sig` files (`packages/desktop/scripts/assemble-update-manifest.ts`). A release needs all of them, so the two
+secrets must be set before a tag is pushed. If the secret is set but `tauri.conf.json`'s `pubkey` is still the placeholder, the `bundle` job fails
+loudly instead of quietly shipping a signed release that every copy of the app refuses to update from.
 
 **What happens before this is done, what happens if it ever goes wrong:** every build is unsigned and
 `check_update()` is compiled out entirely (`#[cfg(feature = "updater")]` — the app never even asks); nothing
@@ -286,10 +288,10 @@ Written and compiled but not yet run on a person's screen or in CI: the Tauri wi
 
 ### What CI has shown so far (GitHub, not a person's computer)
 
-* Core tests pass on Linux, macOS and Windows (one fully green run so far; the Windows and macOS Intel installer jobs stay allowed to fail until a second one). The real window on a virtual screen passes all 16 key checks on Linux.
+* Core tests pass on Linux, macOS and Windows. No installer job is allowed to fail, and the job that attaches the installers to a release runs only when all four were built. The real window on a virtual screen passes all 16 key checks on Linux.
 * The installers build: Linux `.deb` and `.AppImage` (about 186 MB zipped together, the AppImage carries the WebKit library), Windows `-setup.exe` (about 46 MB), macOS Intel `.dmg` (about 46 MB), and the macOS Apple silicon `.dmg`.
 * **Nobody has installed or opened any installer on a real Mac or Windows computer yet.** The unsigned warning screens in INSTALL.md are described from how those systems behave, not seen on this project's files.
-* The step that attaches the files to a release (`publish`) has never run, because it only runs for a tag.
+* The release's last job, which creates the draft, checks it and publishes it, runs only for a tag.
 
 ## Test plan (runs in CI, no human)
 

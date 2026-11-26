@@ -1,23 +1,17 @@
-import { TOOL_ROWS } from "../../cli/src/tool-table.ts";
-import type { Job, LaneResult } from "./newbie.ts";
-import { LANE_TOOLS } from "./newbie-prompts.ts";
+import { LANE_ROWS, type Job, type LaneResult } from "./newbie.ts";
 import { rate } from "./stats.ts";
 
 const solved = (rs: readonly LaneResult[]): number => rs.filter((r) => r.verdict.flags.includes("solved")).length;
 const count = (rs: readonly LaneResult[], flag: "wrong-tool" | "no-tool"): number => rs.filter((r) => r.verdict.flags.includes(flag)).length;
 
-/**
- * One row for each tool of the Tools list: how its plain tasks went, how its newbie prompts went, and whether it is robust. A tool is
- * robust only when it passes both: every plain task and every newbie prompt solved, with the right tool.
- */
 export function laneTable(all: readonly LaneResult[]): string {
   const results = all.filter((r) => r.reason !== "skipped");
   const lines = ["| tool | plain tasks | newbie prompts | used the tool | wrong tool | no tool | robust |", "|---|---|---|---|---|---|---|"];
-  for (const row of TOOL_ROWS) {
+  for (const row of LANE_ROWS) {
     const mine = results.filter((r) => r.tag.tool === row.id);
     const neat = mine.filter((r) => r.tag.lane === "neat"), newbie = mine.filter((r) => r.tag.lane === "newbie");
     if (!mine.length) { lines.push(`| ${row.title} | - | - | - | - | - | not run |`); continue; }
-    const robust = LANE_TOOLS[row.id]?.proof ?? (!newbie.length || !neat.length ? "not measured" : solved(neat) === neat.length && solved(newbie) === newbie.length ? "yes" : "no");
+    const robust = (!newbie.length || !neat.length ? "not measured" : solved(neat) === neat.length && solved(newbie) === newbie.length ? "yes" : "no");
     lines.push(`| ${row.title} | ${neat.length ? `${solved(neat)}/${neat.length}` : "-"} | ${newbie.length ? `${solved(newbie)}/${newbie.length}` : "-"} | ${newbie.length ? `${newbie.filter((r) => r.verdict.rightTool).length}/${newbie.length}` : "-"} | ${count(newbie, "wrong-tool")} | ${count(newbie, "no-tool")} | ${robust} |`);
   }
   const newbie = results.filter((r) => r.tag.lane === "newbie");
@@ -34,10 +28,9 @@ export function laneTable(all: readonly LaneResult[]): string {
   return lines.join("\n");
 }
 
-/** Model calls a run is assumed to take, by tool, for a plain request; a messy one adds `MESSY`, each follow-up message `FOLLOW_UP`, an earlier conversation `EARLIER`. */
 export const CALLS: Readonly<Record<string, number>> = {
   files: 8, terminal: 10, code: 8, "web-search": 8, "web-fetch": 8, browser: 14, ask: 5, todo: 6, helpers: 6, schedule: 5, memory: 6, "session-search": 6, skills: 5, vision: 5,
-  "speech-to-text": 4, "text-to-speech": 4, image: 4, "video-generation": 3, "video-analysis": 4, "computer-use": 3,
+  "speech-to-text": 4, "text-to-speech": 4, image: 4, "video-generation": 3, "video-analysis": 4, "computer-use": 4, "no-screen": 3,
 };
 const MESSY = 2, FOLLOW_UP = 3, EARLIER = 2;
 /** What each step adds to the conversation (the call and what came back), by tool: the web and the browser send pages back. */
@@ -64,7 +57,7 @@ export function estimateLane(jobs: readonly Job[], first: Readonly<Record<string
 
 export function estimateTable(e: ReturnType<typeof estimateLane>, repeat: number): string {
   const lines = ["| tool | runs | model calls | tokens |", "|---|---|---|---|"];
-  for (const row of TOOL_ROWS) { const t = e.byTool[row.id]; if (t) lines.push(`| ${row.title} | ${t.jobs * repeat} | ${t.calls * repeat} | ${(t.tokens * repeat).toLocaleString("en-US")} |`); }
+  for (const row of LANE_ROWS) { const t = e.byTool[row.id]; if (t) lines.push(`| ${row.title} | ${t.jobs * repeat} | ${t.calls * repeat} | ${(t.tokens * repeat).toLocaleString("en-US")} |`); }
   lines.push("", `${e.total.jobs * repeat} runs, ${e.total.calls * repeat} model calls, about ${(e.total.tokens * repeat).toLocaleString("en-US")} tokens (${repeat} ${repeat === 1 ? "repeat" : "repeats"}).`);
   return lines.join("\n");
 }

@@ -1,9 +1,10 @@
-import type { ScreenOutcome } from "@navvied/protocol";
+import { noWindowSaid, screenStepTitle, type ScreenOutcome } from "@navvied/protocol";
 
 export interface Refusal { title: string; said: string }
 
-export function refusalWords(screen: ScreenOutcome): Refusal | undefined {
+export function refusalWords(screen: ScreenOutcome, action = ""): Refusal | undefined {
   if (screen.verdict !== "refused") return undefined;
+  if (screen.reason === "no_window") return { title: screenStepTitle(action, screen.app ?? "", true), said: noWindowSaid(screen.app || "the app") };
   const app = screen.app || "the app";
   switch (screen.code) {
     case "background_unavailable": return { title: `Could not work in ${app}`, said: `${app} is hidden. Let navvied bring it to the front.` };

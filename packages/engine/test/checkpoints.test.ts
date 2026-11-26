@@ -257,7 +257,7 @@ describe("in the engine", () => {
     const d = repo();
     const s = rig((req) => (req.messages.at(-1)?.role === "tool" || req.messages.some((m) => String(m.content).includes("steer")) ? { text: "ok" } : { calls: [{ name: "Bash", args: { command: "sleep 0.3" } }] }), { cwd: d, checkpoints: store("steer") });
     s.send(prompt("long task"));
-    await new Promise((res) => setTimeout(res, 100));
+    await s.when(() => s.of("tool").some((e) => e.status === "running" && e.input !== undefined));
     s.send(prompt("steer it"));
     await s.engine.idle();
     expect(((await s.turn({ cmd: "checkpoints" })).find((e) => e.ev === "checkpoints") as { items: unknown[] }).items).toHaveLength(1);
@@ -268,7 +268,7 @@ describe("in the engine", () => {
     const d = repo();
     const r = rig(() => ({ text: "slow", delayMs: 300 }), { cwd: d, checkpoints: store() });
     r.send(prompt("go"));
-    await new Promise((res) => setTimeout(res, 50));
+    await r.when(() => r.of("text").length > 0);
     r.send({ cmd: "restore", id: "x" });
     await r.engine.idle();
     expect(r.of("error").some((e) => /Wait for the current turn/.test(e.msg))).toBe(true);

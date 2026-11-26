@@ -24,10 +24,10 @@ test("packages depend only on each other, through the workspace", () => {
   }
 });
 
-test("the release workflow builds every build the installers can ask for", () => {
+test("the release workflow builds the targets of the one list of release files", () => {
   const workflow = readFileSync(join(ROOT, ".github/workflows/release.yml"), "utf8");
-  for (const target of ["linux-x64", "linux-x64-baseline", "linux-x64-musl", "linux-arm64", "linux-arm64-musl", "darwin-arm64", "darwin-x64", "windows-x64", "windows-x64-baseline"]) expect(workflow).toContain(target);
-  expect(workflow).toContain("install.sh");
-  expect(workflow).toContain("install.ps1");
-  expect(workflow).toContain("SHA256SUMS");
+  expect(workflow).toContain("release-assets.ts targets");
+  const targets = readFileSync(join(ROOT, "packages/desktop/scripts/release-assets.ts"), "utf8");
+  for (const target of ["linux-x64", "linux-x64-baseline", "linux-x64-musl", "linux-arm64", "linux-arm64-musl", "darwin-arm64", "darwin-x64", "windows-x64", "windows-x64-baseline"]) expect(targets).toContain(`"${target}"`);
+  for (const file of ["install.sh", "install.ps1", "SHA256SUMS"]) expect(workflow).toContain(file);
 });

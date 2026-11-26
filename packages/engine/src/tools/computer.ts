@@ -43,10 +43,34 @@ class Screen {
   app = "";
   fresh = false;
   unconfirmed = false;
+  elements: ReadonlyMap<number, string> = new Map();
   close(): void { /* nothing is held: the helper owns the screen */ }
 }
 
 const same = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+const nothingOpen = (app: string): string => `${app} has no open window. Ask the person to open it, then capture again.`;
+const noMatch = (app: string): string => `No open window matches ${app}. Capture one of the open ones below, or ask the person to open it.`;
+
+export function noWindowMatches(app: string, open: readonly string[]): ComputerResult {
+  const missing = { verdict: "refused", reason: "no_window", app } as const;
+  return open.length ? { ...missing, code: "input_target_mismatch", next: noMatch(app), tree: open.join("\n") } : { ...missing, code: "background_unavailable", next: nothingOpen(app) };
+}
+
+const NAMED_MOST = 200;
+const OPEN_KEPT_OUT = "[the open windows were shown to the model only]";
+const OPEN_KIND = "computer:open";
+const ACTED_KIND = "computer:acted";
+
+const elementsOf = (tree: string): Map<number, string> => new Map(tree.split("\n").flatMap((l): [number, string][] => { const found = /^\s*(\d+)\s+(.*)$/.exec(l); return found ? [[Number(found[1]), `${found[1]} ${found[2]!.slice(0, NAMED_MOST)}`]] : []; }));
+
+function acted(call: ComputerCall, elements: ReadonlyMap<number, string>): string | undefined {
+  const from = call.target === undefined ? undefined : elements.get(call.target);
+  if (!from) return undefined;
+  if (call.action === "click") return `clicked ${from}`;
+  const to = call.to === undefined ? undefined : elements.get(call.to);
+  return call.action === "drag" && to ? `dragged ${from} onto ${to}` : undefined;
+}
 
 const line = (verdict: string, next?: string): string => (next ? `${verdict}\nNext: ${next}` : verdict);
 
@@ -145,16 +169,24 @@ async function run(a: Record<string, unknown>, ctx: ToolContext): Promise<string
     const code = (r.code && r.code in NEXT ? r.code : "blocked_by_policy") as Refusal;
     const which = code === "permission_missing" ? r.which : undefined;
     const next = r.next?.trim() || NEXT[code];
-    ctx.report?.({ screen: { verdict: "refused", code, ...(which ? { which } : {}), ...where, next } });
-    return refuse(code, next, which);
+    ctx.report?.({ screen: { verdict: "refused", code, ...(r.reason ? { reason: r.reason } : {}), ...(which ? { which } : {}), ...where, next } });
+    const refusal = refuse(code, next, which), open = (r.tree ?? "").trim();
+    if (!open) return refusal;
+    ctx.keepOut?.(`${refusal}\n${OPEN_KEPT_OUT}`, OPEN_KIND);
+    return `${refusal}\n${framedTree(open, ctx)}`;
   }
   if (r.verdict === "unverified") { const next = r.next?.trim() || UNVERIFIED; ctx.report?.({ screen: { verdict: "unverified", ...where, next } }); return line("unverified", next); }
   ctx.report?.({ screen: { verdict: "delivered", ...where } });
-  if (kind !== "capture" && kind !== "list") return "delivered";
+  if (kind !== "capture" && kind !== "list") {
+    const what = acted(call, screen.elements);
+    if (!what) return "delivered";
+    ctx.keepOut?.("delivered", ACTED_KIND);
+    return `delivered\n${framedTree(what, ctx)}`;
+  }
 
   const tree = (r.tree ?? "").trim();
   const picture = kind === "capture" && mode !== "ax" && r.image && ctx.show;
-  if (kind === "capture") { screen.app = str(a.app).trim(); screen.fresh = true; screen.unconfirmed = false; }
+  if (kind === "capture") { screen.app = str(a.app).trim(); screen.fresh = true; screen.unconfirmed = false; screen.elements = elementsOf(tree); }
   if (picture) ctx.show!({ type: "image", mime: r.image!.mime, data: r.image!.data });
   if (tree || picture) ctx.keepOut?.(kind === "list" ? "[the list of apps was shown to the model only]" : `[a capture of ${str(a.app).trim()} was shown to the model only: ${tree ? `${tree.split("\n").length} lines` : "a picture"}]`);
   const wanted = str(a.mode);

@@ -5,13 +5,12 @@ import { join, resolve } from "node:path";
 import { agentsDir, listAdapters, loadAdapter, type Adapter } from "./adapter.ts";
 import { footprint } from "./footprint.ts";
 import { keptFolder, recheck } from "./kept.ts";
-import { TOOL_ROWS } from "../../cli/src/tool-table.ts";
 import { mediaDir, prepareMedia } from "./media-cache.ts";
 import { startMeter, type Meter } from "./meter.ts";
 import { startMock, type Behaviour, type Mock } from "./mock.ts";
 import { summarize } from "./report.ts";
 import { runTask, type TaskResult } from "./run.ts";
-import { laneBases, laneJobs, mockTasks, tagged, type Job, type LaneResult, type Tag } from "./newbie.ts";
+import { LANE_ROWS, laneBases, laneJobs, mockTasks, tagged, type Job, type LaneResult, type Tag } from "./newbie.ts";
 import { estimateLane, estimateTable, laneTable } from "./newbie-report.ts";
 import { loadTasks, type Task } from "./task.ts";
 import { validateTask } from "./validate.ts";
@@ -72,8 +71,8 @@ export async function main(argv: string[]): Promise<number> {
       const arms = lane ? (option(rest, "arms")[0] ?? "code").split(",").filter(Boolean) : [""];
       if (arms.some((a) => lane && a !== "base" && a !== "code") || new Set(arms).size !== arms.length) { process.stderr.write("error: --arms is a list of base, code, each once\n"); return 2; }
       let jobs: { task: Task; tag?: Tag }[];
-      const unknownTools = option(rest, "tools").flatMap((s) => s.split(",")).filter((id) => id && !TOOL_ROWS.some((r) => r.id === id));
-      if (lane && unknownTools.length) { process.stderr.write(`error: --tools is a list of ${TOOL_ROWS.map((r) => r.id).join(", ")}; not ${unknownTools.join(", ")}\n`); return 2; }
+      const unknownTools = option(rest, "tools").flatMap((s) => s.split(",")).filter((id) => id && !LANE_ROWS.some((r) => r.id === id));
+      if (lane && unknownTools.length) { process.stderr.write(`error: --tools is a list of ${LANE_ROWS.map((r) => r.id).join(", ")}; not ${unknownTools.join(", ")}\n`); return 2; }
       try {
         const picked = lane ? laneJobs({ tools: option(rest, "tools").flatMap((s) => s.split(",")).filter(Boolean), ...(option(rest, "per-tool")[0] ? { perTool: Math.max(1, Number(option(rest, "per-tool")[0]) || 1) } : {}), neat: rest.includes("--with-neat") }).filter((j) => (option(rest, "prompts").length ? (j.tag.prompt ? option(rest, "prompts").flatMap((x) => x.split(",")).includes(j.tag.prompt) : only.includes(j.task.id)) : !only.length || only.includes(j.task.id))) : chosen().map((task) => ({ task }));
         // An estimate looks at the first request of each task once, with the scripted model.

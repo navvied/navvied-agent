@@ -33,7 +33,6 @@ jobs:
   windows-install:
     if: github.repository == 'navvied/navvied-agent'
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - name: Install the latest release exactly as a user does
         shell: powershell
