@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_SANDBOX, Sandbox, sandboxAbility, type SandboxSetting } from "../src/index.ts";
 import { commandLine, quoteArg, useSandboxHelper, windowsLaunch, windowsLine } from "../src/sandbox/index.ts";
+import type { Shell } from "../src/platform.ts";
 import { ACTIVE_PROCESSES, DENY_ONLY_GROUPS, UI_RESTRICTIONS, jobLimits, parseRun, runConfined, startupInfo, uiLimits, wide } from "../src/sandbox/windows-run.ts";
 import { windowsAbility } from "../src/sandbox/windows.ts";
 import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
@@ -119,25 +120,40 @@ describe("the sandbox on Windows, with a faked computer", () => {
     expect(launch.line).toContain("no sandbox");
   });
 
-  test("the ability is what the helper did: success, its own reason on failure, or no helper at all", () => {
-    const ran = (status: number, stderr = ""): typeof spawnSync => (() => ({ status, stderr })) as unknown as typeof spawnSync;
-    expect(windowsAbility(helper, ran(0))).toEqual({ how: "jobobject", filter: false });
-    expect(windowsAbility(helper, ran(1, "sandbox: restricting the token failed (error 87)\n"))).toEqual({ how: "none", filter: false, why: "restricting the token failed (error 87)" });
-    expect(windowsAbility(helper, ran(1, "")).why).toBe("the Windows helper does not start");
+  const ran = (status: number | null, stdout = "", stderr = "", started: string[][] = []): typeof spawnSync => ((cmd: string, args: string[]) => { started.push([cmd, ...args]); return { status, stdout, stderr }; }) as unknown as typeof spawnSync;
+  const gitBash: Shell = { name: "bash", argv: (c) => ["C:\\Program Files\\Git\\bin\\bash.exe", "-c", c] };
+  const SEEN = "navvied-sandbox-probe\r\n";
+
+  test("it can confine only when the shell the commands use comes back through it with its words and its exit code", () => {
+    const started: string[][] = [];
+    expect(windowsAbility(helper, ran(7, SEEN, "", started), gitBash)).toEqual({ how: "jobobject", filter: false });
+    expect(started).toEqual([["navvied", "sandbox-run", "--", ...gitBash.argv("echo navvied-sandbox-probe | cat; exit 7")]]);
+    expect(windowsAbility(helper, ran(7, SEEN, "", started), { name: "cmd", argv: (c) => ["cmd.exe", "/d", "/s", "/c", c] }).how).toBe("jobobject");
+    expect(started.at(-1)!.at(-1)).toBe("echo navvied-sandbox-probe| findstr navvied-sandbox-probe& exit 7");
+    windowsAbility(helper, ran(7, SEEN, "", started), { name: "PowerShell", argv: (c) => ["pwsh", "-Command", c] });
+    expect(started.at(-1)!.at(-1)).toBe("echo navvied-sandbox-probe | findstr navvied-sandbox-probe; exit 7");
+    expect(windowsAbility(helper, ran(7), gitBash)).toEqual({ how: "none", filter: false, why: "a command run through the Windows helper does not come back as it is (bash: exit 7, its words lost)" });
+    expect(windowsAbility(helper, ran(1, "", "bash: couldn't create signal pipe\nmore\n"), gitBash).why).toBe("a command run through the Windows helper does not come back as it is (bash: exit 1, its words lost): bash: couldn't create signal pipe");
+    expect(windowsAbility(helper, ran(0, SEEN), gitBash).why).toBe("a command run through the Windows helper does not come back as it is (bash: exit 0)");
+  });
+
+  test("the helper's own reason is passed on; a helper that never ran, or none at all, is said", () => {
+    expect(windowsAbility(helper, ran(1, "", "sandbox: restricting the token failed (error 87)\n"), gitBash).why).toBe("restricting the token failed (error 87)");
+    expect(windowsAbility(helper, ran(null), gitBash).why).toBe("the Windows helper does not start");
     expect(windowsAbility(undefined).how).toBe("none");
   });
 });
 
 describe("the helper's calls into the system (runs everywhere: the system is a stand-in)", () => {
   const EXPORTED_BY: Record<string, string[]> = {
-    "kernel32.dll": ["AssignProcessToJobObject", "CloseHandle", "CreateJobObjectW", "GetCurrentProcess", "GetExitCodeProcess", "GetLastError", "GetStdHandle", "OpenProcess", "ResumeThread", "SetInformationJobObject", "TerminateJobObject", "WaitForMultipleObjects"],
+    "kernel32.dll": ["AssignProcessToJobObject", "CloseHandle", "CreateJobObjectW", "GetCurrentProcess", "GetExitCodeProcess", "GetLastError", "GetStdHandle", "OpenProcess", "ResumeThread", "SetHandleInformation", "SetInformationJobObject", "TerminateJobObject", "WaitForMultipleObjects"],
     "advapi32.dll": ["CreateProcessAsUserW", "CreateRestrictedToken", "CreateWellKnownSid", "OpenProcessToken"],
   };
-  const standIn = (answer: (name: string) => number) => async () => {
+  const standIn = (answer: (name: string, given: unknown[]) => number) => async () => {
     const real = await import("bun:ffi");
     const dlopen = (library: string, calls: Record<string, unknown>) => {
       for (const name of Object.keys(calls)) if (!EXPORTED_BY[library]?.includes(name)) throw new Error(`Symbol "${name}" not found in "${library}"`);
-      return { symbols: Object.fromEntries(Object.keys(calls).map((name) => [name, () => answer(name)])) };
+      return { symbols: Object.fromEntries(Object.keys(calls).map((name) => [name, (...given: unknown[]) => answer(name, given)])) };
     };
     return { dlopen: dlopen as unknown as typeof real.dlopen, FFIType: real.FFIType, ptr: real.ptr };
   };
@@ -148,11 +164,24 @@ describe("the helper's calls into the system (runs everywhere: the system is a s
     expect([code, said]).toEqual([1, "sandbox: reading the token failed (error 0)\n"]);
   });
 
+  test("the three standard handles are handed on to the command before it is started, so its words come back", async () => {
+    const made: string[] = [];
+    let said = "";
+    await runConfined(["--", "x"], (t) => { said += t; }, standIn((name, given) => {
+      if (name === "GetStdHandle") return 100 + (made.push("asked") - 1);
+      if (name === "SetHandleInformation") made.push(`inherit ${String(given[0])} ${String(given[1])} ${String(given[2])}`);
+      if (name === "CreateProcessAsUserW") { made.push("start"); return 0; }
+      return 1;
+    }));
+    expect(made.filter((step) => step !== "asked")).toEqual(["inherit 100 1 1", "inherit 101 1 1", "inherit 102 1 1", "start"]);
+    expect(said).toBe("sandbox: starting the command failed (error 1)\n");
+  });
+
   test("whatever stops the helper is said in its own line, which the sandbox passes on as the reason", async () => {
     let said = "";
     const code = await runConfined(["--", "x"], (t) => { said += t; }, async () => { throw new Error("the system library did not load\nat somewhere"); });
     expect([code, said]).toEqual([1, "sandbox: the system library did not load\n"]);
-    const ran = (() => ({ status: code, stderr: said })) as unknown as typeof spawnSync;
+    const ran = (() => ({ status: code, stdout: "", stderr: said })) as unknown as typeof spawnSync;
     expect(windowsAbility(helper, ran).why).toBe("the system library did not load");
   });
 });

@@ -41,6 +41,7 @@ export function parseRun(args: readonly string[]): { detached: boolean; argv: st
 
 const STD = [0xfffffff6, 0xfffffff5, 0xfffffff4] as const;
 const WAIT_OBJECT_0 = 0;
+const HANDLE_FLAG_INHERIT = 1;
 const INFINITE = 0xffffffff;
 
 type SystemLibrary = () => Promise<Pick<typeof import("bun:ffi"), "dlopen" | "FFIType" | "ptr">>;
@@ -63,7 +64,7 @@ async function confine(args: readonly string[], err: (text: string) => void, sys
     GetCurrentProcess: { args: [], returns: u64 }, GetStdHandle: { args: [u32], returns: u64 }, CloseHandle: { args: [u64], returns: i32 },
     CreateJobObjectW: { args: [P, P], returns: u64 }, SetInformationJobObject: { args: [u64, i32, P, u32], returns: i32 }, AssignProcessToJobObject: { args: [u64, u64], returns: i32 },
     TerminateJobObject: { args: [u64, u32], returns: i32 }, ResumeThread: { args: [u64], returns: u32 }, OpenProcess: { args: [u32, i32, u32], returns: u64 },
-    WaitForMultipleObjects: { args: [u32, P, i32, u32], returns: u32 }, GetExitCodeProcess: { args: [u64, P], returns: i32 }, GetLastError: { args: [], returns: u32 },
+    WaitForMultipleObjects: { args: [u32, P, i32, u32], returns: u32 }, SetHandleInformation: { args: [u64, u32, u32], returns: i32 }, GetExitCodeProcess: { args: [u64, P], returns: i32 }, GetLastError: { args: [], returns: u32 },
   }).symbols;
   const a = dlopen("advapi32.dll", {
     OpenProcessToken: { args: [u64, u32, P], returns: i32 },
@@ -94,6 +95,7 @@ async function confine(args: readonly string[], err: (text: string) => void, sys
   const line = wide(commandLine(asked.argv));
   const info = new Uint8Array(24);
   const std = STD.map((id) => BigInt(k.GetStdHandle(id)));
+  for (const handle of std) k.SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
   const started = a.CreateProcessAsUserW(restricted[0]!, null, ptr(line), null, null, 1, 0x4 | 0x08000000, null, null, ptr(startupInfo({ input: std[0]!, output: std[1]!, error: std[2]! })), ptr(info));
   if (!started) return fail("starting the command");
   const view = new DataView(info.buffer);

@@ -1,13 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { win32 } from "node:path";
 import type { Setting } from "./policy.ts";
+import { shellFor, type Shell } from "../platform.ts";
 
-/** What this program is called to start again as the helper that confines one command (set once by the program that knows its own command line). */
 let registered: string[] | undefined;
 export const useSandboxHelper = (words: string[] | undefined): void => { registered = words; };
 export const sandboxHelper = (): string[] | undefined => registered;
 
-/** One argument as the C runtime of a Windows program reads it back: quotes and the backslashes before them are the only special characters. */
 export function quoteArg(arg: string): string {
   if (arg !== "" && !/[\s"]/.test(arg)) return arg;
   let out = '"';
@@ -20,10 +19,6 @@ export function quoteArg(arg: string): string {
   return `${out}${"\\".repeat(slashes * 2)}"`;
 }
 
-/**
- * The command line a program is started with. `cmd.exe /s /c <text>` reads its text itself, not as arguments: quoting it would change what it runs,
- * so what follows `/c` is passed as it is (what Node does for cmd.exe too).
- */
 export function commandLine(argv: readonly string[]): string {
   const [program = "", ...args] = argv;
   const c = args.findIndex((a) => /^\/c$/i.test(a));
@@ -31,21 +26,37 @@ export function commandLine(argv: readonly string[]): string {
   return raw ? [...[program, ...args.slice(0, c + 1)].map(quoteArg), args.slice(c + 1).join(" ")].join(" ") : argv.map(quoteArg).join(" ");
 }
 
-/** The words that start `argv` through the helper. A detached job (meant to outlive this program) is not ended when this program is. */
 export const windowsLaunch = (helper: readonly string[], argv: readonly string[], o: { detached: boolean }): string[] => [...helper, "sandbox-run", ...(o.detached ? ["--detached"] : []), "--", ...argv];
 
-/** The one line that says what is and is not in force, built from what the helper does (see windows-run.ts), never from the configuration. */
 export function windowsLine(setting: Pick<Setting, "network">, o: { detached: boolean }): string {
   const parts = ["administrator rights removed", o.detached ? "a job keeps its own programs" : "its programs end with the command", "writes and secret folders are not confined", setting.network ? "network on" : "network cannot be switched off here"];
   return `[sandbox: ${parts.join("; ")}]`;
 }
 
-/** Whether the helper can confine a command on this computer: it is asked to run a trivial one, so what is reported is what happened. */
-export function windowsAbility(helper: readonly string[] | undefined = registered, run: typeof spawnSync = spawnSync): { how: "jobobject" | "none"; filter: false; why?: string } {
+const PROBE_WORDS = "navvied-sandbox-probe";
+const PROBE_CODE = 7;
+const MOST_WHY = 200;
+const PROBE_MS = 15_000;
+
+const throughAnotherProgram = (shell: Shell): string => {
+  const said = `echo ${PROBE_WORDS}`;
+  if (shell.name === "cmd") return `${said}| findstr ${PROBE_WORDS}& exit ${PROBE_CODE}`;
+  return `${said} | ${shell.name === "PowerShell" ? `findstr ${PROBE_WORDS}` : "cat"}; exit ${PROBE_CODE}`;
+};
+
+const firstLine = (text: string): string => text.split("\n").map((line) => line.trim()).find((line) => line !== "") ?? "";
+
+export function windowsAbility(helper: readonly string[] | undefined = registered, run: typeof spawnSync = spawnSync, shell: Shell = shellFor("win32")): { how: "jobobject" | "none"; filter: false; why?: string } {
   if (!helper) return { how: "none", filter: false, why: "navvied cannot start its own helper here" };
-  const [cmd, ...args] = windowsLaunch(helper, ["cmd.exe", "/d", "/c", "exit 0"], { detached: false });
-  const r = run(cmd!, args, { encoding: "utf8", timeout: 15_000, windowsHide: true });
-  if (r.status === 0) return { how: "jobobject", filter: false };
-  const said = String(r.stderr ?? "").split("\n").map((l) => l.trim()).find((l) => l.startsWith("sandbox:"));
-  return { how: "none", filter: false, why: said ? said.slice("sandbox:".length).trim().slice(0, 120) : "the Windows helper does not start" };
+  const [cmd, ...args] = windowsLaunch(helper, shell.argv(throughAnotherProgram(shell)), { detached: false });
+  const r = run(cmd!, args, { encoding: "utf8", timeout: PROBE_MS, windowsHide: true });
+  const heard = String(r.stdout ?? "").includes(PROBE_WORDS);
+  if (r.status === PROBE_CODE && heard) return { how: "jobobject", filter: false };
+  const errors = String(r.stderr ?? "");
+  const own = errors.split("\n").map((line) => line.trim()).find((line) => line.startsWith("sandbox:"));
+  const said = firstLine(errors);
+  const why = own ? own.slice("sandbox:".length).trim()
+    : r.status === null ? "the Windows helper does not start"
+    : `a command run through the Windows helper does not come back as it is (${shell.name}: exit ${r.status}${heard ? "" : ", its words lost"})${said ? `: ${said}` : ""}`;
+  return { how: "none", filter: false, why: why.slice(0, MOST_WHY) };
 }
