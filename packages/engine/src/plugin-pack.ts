@@ -337,6 +337,9 @@ async function download(url: string, doFetch: typeof fetch): Promise<Buffer | st
   return Buffer.concat(chunks);
 }
 
+const MOST_OF_TAR = 200;
+const whatTarSaid = (ran: { status: number | null; stderr: string | Buffer | null; error?: Error }): string => (String(ran.stderr ?? "").split("\n").map((line) => line.trim()).find((line) => line !== "") ?? ran.error?.message ?? `tar ended with ${ran.status}`).slice(0, MOST_OF_TAR);
+
 function unpack(archive: Buffer, into: string): string | undefined {
   if (archive.length > LIMITS.archive) return `the archive is larger than ${LIMITS.archive / 1024 / 1024} MB`;
   if (isZip(archive)) return unzipTo(archive, into, LIMITS);
@@ -345,12 +348,12 @@ function unpack(archive: Buffer, into: string): string | undefined {
     try { tar = gunzipSync(archive, { maxOutputLength: LIMITS.unpacked }); } catch { return `the archive is damaged or larger than ${LIMITS.unpacked / 1024 / 1024} MB when unpacked`; }
   }
   const listed = spawnSync("tar", ["-tf", "-"], { input: tar, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
-  if (listed.status !== 0) return "the archive cannot be read";
+  if (listed.status !== 0) return `the archive cannot be read: ${whatTarSaid(listed)}`;
   const names = listed.stdout.split("\n").filter(Boolean);
   if (names.length > LIMITS.files * 2) return `the archive has more than ${LIMITS.files * 2} entries`;
   if (names.some((n) => n.startsWith("/") || n.startsWith("\\") || /^[A-Za-z]:/.test(n) || n.split(/[\\/]/).includes(".."))) return "the archive has a path that leaves its folder";
   const out = spawnSync("tar", ["-xf", "-", "-C", into, "--no-same-owner", "--no-same-permissions"], { input: tar, encoding: "utf8" });
-  return out.status === 0 ? undefined : "the archive cannot be unpacked";
+  return out.status === 0 ? undefined : `the archive cannot be unpacked: ${whatTarSaid(out)}`;
 }
 
 function clone(address: string, into: string): Promise<string | undefined> {

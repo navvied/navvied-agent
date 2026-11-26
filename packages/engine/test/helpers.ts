@@ -82,6 +82,8 @@ export const cleanupAll = hook("the engine tests remove their folders", async ()
   await removeTrees(made.splice(0));
 });
 
+const lastEvents = (events: readonly EngineEvent[]): string => events.slice(-8).map((e) => (e.ev === "tool" ? `tool ${e.name} ${e.status}` : e.ev)).join(", ") || "no event at all";
+
 export function rig(script: (req: ModelRequest, n: number, dir: string) => Step, opts: Partial<EngineOptions> = {}): Rig {
   const dir = mkdtempSync(join(tmpdir(), "navvied-engine-"));
   made.push(dir);
@@ -98,7 +100,7 @@ export function rig(script: (req: ModelRequest, n: number, dir: string) => Step,
   const turn = async (cmd: Command, timeoutMs = 10_000) => {
     const from = events.length;
     engine.handle(cmd);
-    await Promise.race([engine.idle(), new Promise((_, rej) => setTimeout(() => rej(new Error("turn timed out")), timeoutMs))]);
+    await Promise.race([engine.idle(), new Promise((_, rej) => setTimeout(() => rej(new Error(`turn timed out\n${cmd.cmd} had got to: ${lastEvents(events.slice(from))}`)), timeoutMs))]);
     return events.slice(from);
   };
   const of = <K extends EngineEvent["ev"]>(ev: K, from = 0) => events.slice(from).filter((e): e is Extract<EngineEvent, { ev: K }> => e.ev === ev);

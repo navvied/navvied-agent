@@ -9,7 +9,7 @@ import { GUARD_STDIO, denialIn, planFor, releaseFds, seatbeltProfile, seccompPro
 import { DENIED_CALLS } from "../src/sandbox/seccomp.ts";
 import { SECRET_DIRS, isSecretPath } from "../src/secret-stores.ts";
 import type { ToolContext } from "../src/types.ts";
-import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
+import { HOOK_MS, hook, removeTree, stragglers } from "../../protocol/test/support/cleanup.ts";
 import { run } from "../src/tools/util.ts";
 import { cleanupAll, prompt, rig, until, wait } from "./helpers.ts";
 import { outsideFolder } from "./outside.ts";
@@ -254,7 +254,7 @@ describe.skipIf(!works)("a confined command, for real (bubblewrap)", () => {
   const MOST_LEFT_COMMAND = 200;
   const processesOf = (tags: readonly string[]): string => spawnSync("ps", ["-eo", "pid=,ppid=,stat=,args="], { encoding: "utf8" }).stdout.split("\n").filter((line) => tags.some((t) => line.includes(`sleep 3${t}`))).map((line) => line.trim().slice(0, MOST_LEFT_COMMAND)).join(" | ");
 
-  async function standIn(how: "foreground" | "interactive" | "detached"): Promise<{ tag: string; kill(): Promise<void> }> {
+  async function standIn(how: "foreground" | "interactive" | "detached" | "shell" | "own session"): Promise<{ tag: string; kill(): Promise<void> }> {
     const t = tag();
     const parent = spawn("bun", [join(import.meta.dir, "sandbox-parent.ts"), project, t, how], { stdio: ["ignore", "pipe", "inherit"] });
     const ended = new Promise<void>((resolve) => parent.once("exit", () => resolve()));
@@ -269,6 +269,37 @@ describe.skipIf(!works)("a confined command, for real (bubblewrap)", () => {
       await job.kill();
       expect(alive(job.tag)).toBe(true);
     } finally { await job.kill(); endTagged(job.tag); }
+  }, 30_000);
+
+  const running = (start: "3" | "4", t: string): number => spawnSync("pgrep", ["-f", `^sleep ${start}${t}$`], { encoding: "utf8" }).stdout.split("\n").filter(Boolean).length;
+
+  test("when the program is ended while a command runs, what the command's shell started goes with it", async () => {
+    const program = await standIn("shell");
+    try {
+      await until(() => running("3", program.tag) === 2, GONE_WITHIN_MS);
+      await program.kill();
+      await until(() => running("3", program.tag) === 0, GONE_WITHIN_MS).catch((e: Error) => { throw new Error(`${e.message}; still running (pid parent state command): ${processesOf([program.tag])}`); });
+    } finally { await program.kill(); endTagged(program.tag); }
+  }, 30_000);
+
+  test("what watches for the program's end does not sit in the folder the program works in", async () => {
+    const worked = mkdtempSync(join(base, "worked-in-"));
+    const t = tag();
+    const program = spawn("bun", [join(import.meta.dir, "sandbox-parent.ts"), project, t, "foreground"], { cwd: worked, stdio: ["ignore", "pipe", "inherit"] });
+    try {
+      await until(() => running("3", t) === 1, GONE_WITHIN_MS);
+      expect(stragglers(worked).filter((line) => !line.startsWith(`${program.pid} `) && line.includes("while read"))).toEqual([]);
+    } finally { program.kill("SIGKILL"); endTagged(t); }
+  }, 30_000);
+
+  test("what a command put in a session of its own on purpose stays, as before", async () => {
+    const program = await standIn("own session");
+    try {
+      await until(() => running("3", program.tag) === 1 && running("4", program.tag) === 1, GONE_WITHIN_MS);
+      await program.kill();
+      await until(() => running("3", program.tag) === 0, GONE_WITHIN_MS);
+      expect(running("4", program.tag)).toBe(1);
+    } finally { await program.kill(); endTagged(program.tag); }
   }, 30_000);
 
   test("a command whose parent dies right after it started never outlives it, however early", async () => {

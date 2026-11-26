@@ -40,9 +40,7 @@ describe("every task can be solved by an agent run, not only by the validator", 
   test("the scripted model that does what the reference solution does solves all of them, through the real program", async () => {
     for (const task of tasks) {
       const r = await run(task, "oracle");
-      expect(r, task.id).toMatchObject({ passed: true, reason: "solved" });
-      // A model that is not small is shown every tool that is set up for it, whatever the task says: the first request is bounded, not tight.
-      // The caps for a small model (about 3,500 characters, at most 8 tools) are tested on the engine, where the model is marked small.
+      if (!r.passed || r.reason !== "solved") throw new Error([`${task.id}: ${r.reason}`, r.error, ...(r.why?.printed ?? []), r.why?.check].filter(Boolean).join("\n"));
       expect(r.prompt!.systemChars + r.prompt!.toolChars, task.id).toBeLessThanOrEqual(NOT_SMALL_CHARS + PATH_ROOM);
       expect(r.prompt!.tools, task.id).toBeLessThanOrEqual(NOT_SMALL_TOOLS);
     }

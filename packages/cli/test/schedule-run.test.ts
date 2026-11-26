@@ -45,7 +45,7 @@ describe("the file lock", () => {
     writeFileSync(`${file}.lock`, "1");
     let t = Date.now();
     const clock = (): number => (t += 4_000);
-    expect(withFileLock(file, () => "got it", clock)).toBe("got it");
+    expect(withFileLock(file, () => "got it", { now: clock })).toBe("got it");
   });
 
   test("six programs adding tasks to one file at the same time lose none", async () => {

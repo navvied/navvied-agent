@@ -119,7 +119,7 @@ describe("installing", () => {
     const { root, lock } = places();
     const done = await installPlugin({ from: source, root, lock });
     delete process.env.MARKER;
-    expect(done.ok).toBe(true);
+    expect(done.ok ? "" : done.error).toBe("");
     if (!done.ok) return;
     expect(existsSync(marker)).toBe(false);
     expect(existsSync(join(root, "lint-helper", "hooks", "check.js"))).toBe(true);
@@ -160,13 +160,20 @@ describe("installing", () => {
     expect(readdirNames(root)).toEqual([]);
   });
 
+  test("an archive that cannot be read is refused with what the unpacking program said", async () => {
+    const broken = join(fresh("archive"), "broken.tar");
+    writeFileSync(broken, Buffer.alloc(2_048, 7));
+    const refused = await installPlugin({ from: broken, ...places() });
+    expect(refused.ok ? "" : refused.error).toMatch(/^the archive cannot be read: \S.{3,}/);
+  });
+
   test("from an archive, with or without a top folder; a path that leaves the folder, a link and a bomb are refused", async () => {
     const source = makePlugin();
     const { root, lock } = places();
     const file = join(fresh("archive"), "plugin.tar.gz");
     writeFileSync(file, gzipSync(packTree(source)));
     const done = await installPlugin({ from: file, root, lock });
-    expect(done.ok).toBe(true);
+    expect(done.ok ? "" : done.error).toBe("");
     expect(done.ok && done.pack.hash).toBe(readPack(source, "user").hash);
 
     const evil = join(fresh("archive"), "evil.tar");
@@ -192,7 +199,8 @@ describe("installing", () => {
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (req) => (new URL(req.url).pathname === "/p.tgz" ? new Response(body) : new Response("no", { status: 404 })) });
     try {
       const a = places();
-      expect((await installPlugin({ from: `http://127.0.0.1:${server.port}/p.tgz`, ...a })).ok).toBe(true);
+      const fetched = await installPlugin({ from: `http://127.0.0.1:${server.port}/p.tgz`, ...a });
+      expect(fetched.ok ? "" : fetched.error).toBe("");
       const missing = await installPlugin({ from: `http://127.0.0.1:${server.port}/q.tgz`, ...a });
       expect(!missing.ok && missing.error).toContain("answered 404");
     } finally { server.stop(true); }
@@ -202,7 +210,7 @@ describe("installing", () => {
     git("init", "-q", "-b", "main"); git("add", "."); git("commit", "-q", "-m", "x"); git("tag", "v1");
     const b = places();
     const done = await installPlugin({ from: `file://${repo.replaceAll("\\", "/")}#v1`, ...b });
-    expect(done.ok).toBe(true);
+    expect(done.ok ? "" : done.error).toBe("");
     expect(existsSync(join(b.root, "from-git", ".git"))).toBe(false);
     expect((await installPlugin({ from: `file://${repo.replaceAll("\\", "/")}#nope`, ...b })).ok).toBe(false);
     const option = await installPlugin({ from: "--upload-pack=touch /tmp/x#.git", ...b });

@@ -7,6 +7,7 @@ import { denialIn, type Denial } from "./denial.ts";
 import { planFor, type Plan, type Setting } from "./policy.ts";
 import { seatbeltProfile } from "./seatbelt.ts";
 import { lookout } from "./lookout.ts";
+import { endsWithThisProgram } from "./ends-with-us.ts";
 import { UserNamespace } from "./userns.ts";
 import { seccompProgram } from "./seccomp.ts";
 import { windowsAbility, windowsLaunch, windowsLine, sandboxHelper } from "./windows.ts";
@@ -105,7 +106,6 @@ export class Sandbox {
     return abilityOf(this.o.platform);
   }
 
-  /** `argv` as it must be started so that it works in `root` and writes only where the plan allows; unchanged, with the reason, where it cannot be. */
   confine(argv: string[], at: { root: string; cwd: string; /** A job that is meant to outlive this program (a restart takes it back): it is not ended with its parent. */ detached?: boolean }): Launch {
     if (!this.setting().on) return { confined: false };
     const ability = this.ability();
@@ -132,6 +132,7 @@ export class Sandbox {
       const inside = guard ? guarded(argv) : argv;
       if (filtered) { this.#file ??= filterFile(seccompProgram()!); started = withFilter(this.#file, bwrap, inside); } else started = ["bwrap", ...bwrap, ...inside];
       if (space) started = joinUserns(space, started);
+      if (guard) started = endsWithThisProgram(started);
     }
     const parts = ["writes only in the project, temp and caches", ...(plan.hiddenDirs.length + plan.hiddenFiles.length ? ["secret folders hidden"] : []), `network ${setting.network ? "on" : "off"}`, ...(filtered ? ["risky system calls blocked"] : [])]
     const look = ability.how === "bubblewrap" ? lookout.start(this) : undefined;

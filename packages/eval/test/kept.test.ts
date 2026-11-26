@@ -59,9 +59,11 @@ describe("a run that did not solve its task is kept", () => {
   const outside = join(made("outside", { "bench.key": KEY }), "bench.key");
   const run = (name: string, env: Record<string, string> = {}, keep = true): Promise<TaskResult> => runTask(task, { command: [process.execPath, agent], key: KEY, env: { NAVVIED_API_KEY: KEY, SOME_SERVICE_TOKEN: OTHER, KEY_FILE_AT: outside, ...env }, trace: join(root, name, "trace"), ...(keep ? { keepFailed: join(root, name, "failed") } : {}) });
 
+  const agentSaid = (name: string, r: TaskResult): string => (r.reason === "agent failed" ? readFileSync(join(root, name, "trace", `${task.id}.stderr.txt`), "utf8").split("\n").filter((line) => line.trim() !== "").slice(0, 8).join("\n") : "");
+
   test("with its workspace, check and secret, and with no key anywhere in what was written", async () => {
     const r = await run("fail", { COMMIT: "notes/key.txt" });
-    expect(r.reason).toBe("check failed");
+    expect([r.reason, agentSaid("fail", r)]).toEqual(["check failed", ""]);
     const kept = r.kept!;
     expect(readdirSync(kept).sort()).toEqual(["check.json", "secret", "workspace"]);
     const written = [...all(join(root, "fail")), { path: "the result", text: JSON.stringify(r) }];

@@ -6,6 +6,14 @@ import { openWithRetry } from "./launch.ts";
 export interface Dialog { type: string; message: string; defaultPrompt?: string }
 
 /** A dialog is open: the page does nothing until it is answered, so no other command is sent. */
+const TOOK_TOO_LONG = /took too long$/;
+const MOST_WAITED_FOR = 3;
+
+export const stillWaitedFor = (addresses: Iterable<string>): string => {
+  const shown = [...addresses].slice(0, MOST_WAITED_FOR).map((address) => { try { const url = new URL(address); return `${url.host}${url.pathname}`; } catch { return "an address that cannot be read"; } });
+  return shown.length ? `still waiting for an answer from ${shown.join(", ")}` : "the page asked the network for nothing that is still unanswered";
+};
+
 export class DialogOpen extends Error { constructor(readonly dialog: Dialog) { super("a dialog is open"); } }
 /** A number that no longer stands for anything on the page; the text says why, and what to do. */
 export class RefError extends Error { constructor(message: string, readonly why: Extract<BrowserNote, { what: "ref" }>["why"]) { super(message); } }
@@ -297,7 +305,8 @@ export class Tab {
     this.#refusals.clear();
     this.#documents.clear();
     this.#documents.add(hostOf(url));
-    const error = await openWithRetry(async () => ((await this.send<{ errorText?: string }>("Page.navigate", { url })).errorText));
+    const ask = async (): Promise<string | undefined> => (await this.send<{ errorText?: string }>("Page.navigate", { url })).errorText;
+    const error = await openWithRetry(ask).catch((e: unknown) => { throw e instanceof Error && TOOK_TOO_LONG.test(e.message) ? new Error(`${e.message}; ${stillWaitedFor(this.#urls.values())}`) : e; });
     if (error) throw new Error(this.refusal && /ACCESS_DENIED/.test(error) ? `the page was not opened: ${this.refusal}` : `the page could not be opened (${error})`);
     await this.settle();
   }
