@@ -65,11 +65,10 @@ describe("NotebookEdit", () => {
     await read.run({ file_path: join(d, "bad.ipynb") }, c);
     expect(await nb.run({ file_path: join(d, "bad.ipynb"), cell_id: "0", new_source: "x" }, c)).toMatch(/not a valid notebook/);
   });
-  test("another program's name for the path is understood, and it is offered when the request is about a notebook", () => {
+  test("another program's name for the path is understood, and it is listed for a model with room, named in the prompt for a small one", () => {
     expect(nb.fixArgs!({ notebook_path: "a.ipynb", cell_id: "c1" })).toEqual({ notebook_path: "a.ipynb", cell_id: "c1", file_path: "a.ipynb" });
-    const s = { small: true, jobs: 0 };
-    expect(nb.offeredWhen!({ ...s, userText: "fix the bug in src/a.ts" })).toBe(false);
-    expect(nb.offeredWhen!({ ...s, userText: "change the plot in analysis.ipynb" })).toBe(true);
+    expect(nb.offeredWhen!({ small: false, jobs: 0 })).toBe(true);
+    expect(nb.offeredWhen!({ small: true, jobs: 0 })).toBe(false);
   });
 });
 
@@ -161,7 +160,7 @@ describe("apply_patch", () => {
   });
   test("the argument another program calls input is understood; it is offered by the switch in the configuration", () => {
     expect(patch.fixArgs!({ input: "x" })).toEqual({ patch: "x" });
-    const s = { userText: "", jobs: 0 };
+    const s = { jobs: 0 };
     expect(tool("apply_patch", "auto").offeredWhen!({ ...s, small: true })).toBe(false);
     expect(tool("apply_patch", "auto").offeredWhen!({ ...s, small: false })).toBe(true);
     expect(tool("apply_patch", "on").offeredWhen!({ ...s, small: true })).toBe(true);

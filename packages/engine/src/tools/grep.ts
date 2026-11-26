@@ -37,6 +37,8 @@ export function shortened(all: string[], partial: boolean, page: Page = { offset
   return `${kept.join("\n")}\n[${partial ? "at least " : ""}${more} more ${page.noun}${inFiles} were not shown: narrow the pattern, add a glob, search one file, or continue with offset ${next}]`;
 }
 
+/** A result longer than this ends with its own total. */
+const COUNTED_FROM = 5;
 const MODES = ["content", "files_with_matches", "count"] as const;
 type Mode = (typeof MODES)[number];
 
@@ -46,7 +48,7 @@ const ALIASES: Record<string, string> = { "-i": "ignore_case", "-C": "context", 
 export const grep: Tool = {
   name: "Grep",
   readOnly: true,
-  description: "Search files (ripgrep regex): file:line:text",
+  description: "Search files (ripgrep regex): file:line:text. Count many files by script.",
   parameters: {
     type: "object",
     properties: {
@@ -105,6 +107,12 @@ export const grep: Tool = {
       const total = lines.reduce((n, l) => n + Number(/:(\d+)$/.exec(l)?.[1] ?? 0), 0);
       return clip(`${shortened(lines, partial, page)}\n[${total} matching lines in ${lines.length} files]${note}`);
     }
-    return clip(shortened(lines, partial, page) + note);
+    // A long list is counted by the tool, not by eye: a model that counts lines of a search result gets the number wrong. One that is cut already says how many are left.
+    const shown = shortened(lines, partial, page);
+    const where = (l: string): string => /^(.+?):\d+:/.exec(l)?.[1] ?? "";
+    const files = mode === "files_with_matches" ? lines.length : new Set(lines.map(where)).size;
+    const counted = partial || page.context || page.offset > 0 || page.limit !== undefined || lines.length <= COUNTED_FROM || shown.includes("were not shown");
+    const total = counted ? "" : mode === "files_with_matches" ? `\n[${files} files]` : `\n[${lines.length} matching lines in ${files} file${files === 1 ? "" : "s"}]`;
+    return clip(shown + total + note);
   },
 };

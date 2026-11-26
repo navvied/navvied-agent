@@ -4,10 +4,15 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { agentsDir, listAdapters, loadAdapter, type Adapter } from "./adapter.ts";
 import { footprint } from "./footprint.ts";
+import { keptFolder, recheck } from "./kept.ts";
+import { TOOL_ROWS } from "../../cli/src/tool-table.ts";
+import { mediaDir, prepareMedia } from "./media-cache.ts";
 import { startMeter, type Meter } from "./meter.ts";
 import { startMock, type Behaviour, type Mock } from "./mock.ts";
 import { summarize } from "./report.ts";
 import { runTask, type TaskResult } from "./run.ts";
+import { laneBases, laneJobs, mockTasks, tagged, type Job, type LaneResult, type Tag } from "./newbie.ts";
+import { estimateLane, estimateTable, laneTable } from "./newbie-report.ts";
 import { loadTasks, type Task } from "./task.ts";
 import { validateTask } from "./validate.ts";
 import { CLI, TASKS, agentWorld, codeTool, option } from "./world.ts";
@@ -18,12 +23,15 @@ const USAGE = `navvied-eval — measure a coding agent on real tasks
   navvied-eval validate [--tasks a,b] [--slow]      every task must fail untouched and pass with its reference solution
   navvied-eval run --model <name> [--model <name> …] [--tasks a,b] [--repeat n] [--out results.jsonl] [--cli "<command>"]
   navvied-eval run --mock oracle|code|lazy|tamper|leave|crash|hang [--tasks a,b] …   a scripted model: tries the tasks and the harness
-  navvied-eval run --upstream <base address> --upstream-model <id> [--upstream-key-file <file>] [--upstream-window <tokens>] [--trace <folder>] …   a real model, seen through the counter
+  navvied-eval run --upstream <base address> --upstream-model <id> [--upstream-key-file <file>] [--upstream-window <tokens>] [--upstream-api chat|messages|responses] [--trace <folder>] …   a real model, seen through the counter
                                                                 the key is read from the file into the environment, never shown or put on a command line
   navvied-eval run --agent <label|file> …                      another agent, described by a file of yours (docs/EVAL.md): it needs --upstream or --mock to be counted
-  navvied-eval agents                                          the agent files found in your folder
+  navvied-eval run --lane newbie [--tools a,b] [--per-tool n] [--prompts id,id] [--with-neat] [--arms code|base,code] [--media real|stub] [--estimate] [--max-tokens n --yes-spend] …   the tasks asked the way a beginner asks (docs/EVAL.md)
+  navvied-eval validate --lane newbie                          the tasks of the newbie lane
+  navvied-eval agents                                        the agent files found in your folder
   navvied-eval footprint [--cli "<command>"] [--install <path>] [--runs n]   size on disk and start time of a program
   navvied-eval report <results.jsonl>
+  navvied-eval recheck <kept folder>                           the check of a run that did not solve its task, again, on what was kept of it
 `;
 
 async function validate(tasks: Task[]): Promise<number> {
@@ -42,9 +50,9 @@ export async function main(argv: string[]): Promise<number> {
   const chosen = (): Task[] => loadTasks(TASKS, only).filter((t) => only.length || rest.includes("--slow") || !t.slow);
   switch (command) {
     case "list": for (const t of loadTasks(TASKS)) process.stdout.write(`${t.id.padEnd(30)} ${t.kind.padEnd(9)} L${t.level} ${t.lang.padEnd(4)} ${t.title}${t.slow ? "  (slow)" : ""}\n`); return 0;
-    case "validate": return validate(chosen());
+    case "validate": return validate(option(rest, "lane")[0] === "newbie" ? laneBases() : chosen());
     case "run": {
-      const mockName = option(rest, "mock")[0], upstream = option(rest, "upstream")[0];
+      const mockName = option(rest, "mock")[0] ?? (rest.includes("--estimate") && option(rest, "lane")[0] ? "oracle" : undefined), upstream = option(rest, "upstream")[0];
       const BEHAVIOURS = ["oracle", "code", "lazy", "tamper", "leave", "leak", "stall", "crash", "hang"];
       if (mockName && !BEHAVIOURS.includes(mockName)) { process.stderr.write(`error: --mock is one of ${BEHAVIOURS.join(", ")}\n`); return 2; }
       const agentName = option(rest, "agent")[0];
@@ -58,8 +66,29 @@ export async function main(argv: string[]): Promise<number> {
       const models = mockName || upstream ? [] : option(rest, "model");
       if (!models.length && !mockName && !upstream) { process.stderr.write(`error: give at least one --model, or --mock, or --upstream\n\n${USAGE}`); return 2; }
       if (upstream && !option(rest, "upstream-model")[0]) { process.stderr.write("error: --upstream needs --upstream-model\n"); return 2; }
-      const repeat = Math.max(1, Number(option(rest, "repeat")[0] ?? 1) || 1);
+      const lane = option(rest, "lane")[0];
+      if (lane && lane !== "newbie") { process.stderr.write("error: --lane is newbie\n"); return 2; }
+      const estimating = !!lane && rest.includes("--estimate");
+      const arms = lane ? (option(rest, "arms")[0] ?? "code").split(",").filter(Boolean) : [""];
+      if (arms.some((a) => lane && a !== "base" && a !== "code") || new Set(arms).size !== arms.length) { process.stderr.write("error: --arms is a list of base, code, each once\n"); return 2; }
+      let jobs: { task: Task; tag?: Tag }[];
+      const unknownTools = option(rest, "tools").flatMap((s) => s.split(",")).filter((id) => id && !TOOL_ROWS.some((r) => r.id === id));
+      if (lane && unknownTools.length) { process.stderr.write(`error: --tools is a list of ${TOOL_ROWS.map((r) => r.id).join(", ")}; not ${unknownTools.join(", ")}\n`); return 2; }
+      try {
+        const picked = lane ? laneJobs({ tools: option(rest, "tools").flatMap((s) => s.split(",")).filter(Boolean), ...(option(rest, "per-tool")[0] ? { perTool: Math.max(1, Number(option(rest, "per-tool")[0]) || 1) } : {}), neat: rest.includes("--with-neat") }).filter((j) => (option(rest, "prompts").length ? (j.tag.prompt ? option(rest, "prompts").flatMap((x) => x.split(",")).includes(j.tag.prompt) : only.includes(j.task.id)) : !only.length || only.includes(j.task.id))) : chosen().map((task) => ({ task }));
+        // An estimate looks at the first request of each task once, with the scripted model.
+        jobs = estimating ? [...new Map(picked.map((j) => [j.task.id, j])).values()] : picked;
+      } catch (e) { process.stderr.write(`error: ${e instanceof Error ? e.message : String(e)}\n`); return 2; }
+      const repeat = estimating ? 1 : Math.max(1, Number(option(rest, "repeat")[0] ?? 1) || 1);
+      const maxTokens = Number(option(rest, "max-tokens")[0]) || undefined;
+      if (lane && upstream) {
+        // A real model costs tokens: nothing is sent without a limit and a yes.
+        if (!maxTokens) { process.stderr.write("error: a real run of the lane needs --max-tokens <n>\n"); return 2; }
+        if (!rest.includes("--yes-spend")) { process.stderr.write(`nothing was sent. This would run ${jobs.length * arms.length * repeat} runs (${arms.join(" and ")}, ${repeat} repeats) against a real model, up to ${maxTokens.toLocaleString("en-US")} tokens. Add --yes-spend to do it; --estimate says what it is expected to cost.\n`); return 2; }
+      }
       const out = option(rest, "out")[0];
+      const trace = option(rest, "trace")[0];
+      const keepFailed = keptFolder(trace, out);
       const cli = option(rest, "cli")[0];
       const command = cli ? cli.split(/\s+/) : ["bun", CLI];
       if (out) writeFileSync(out, "");
@@ -68,33 +97,61 @@ export async function main(argv: string[]): Promise<number> {
       const label = agent ? `${agent.label}:${mockName ? `mock:${mockName}` : option(rest, "upstream-model")[0]}` : mockName ? `mock:${mockName}` : option(rest, "upstream-model")[0];
       const modelId = mockName ? "scripted" : option(rest, "upstream-model")[0];
       if (mockName || upstream) {
-        mock = mockName ? startMock(loadTasks(TASKS), mockName as Behaviour) : undefined;
-        meter = startMeter(mock?.url ?? upstream!);
+        mock = mockName ? startMock(lane ? mockTasks(jobs as Job[]) : loadTasks(TASKS), mockName as Behaviour) : undefined;
+        meter = startMeter(mock?.url ?? upstream!, lane && maxTokens && !mock ? { maxTokens } : {});
         home = mkdtempSync(join(tmpdir(), "navvied-eval-home-"));
       }
       const keyFile = option(rest, "upstream-key-file")[0];
       const key = keyFile ? readFileSync(resolve(keyFile), "utf8").trim() : option(rest, "upstream-key")[0];
       const window = String(Number(option(rest, "upstream-window")[0] ?? 100000) || 100000);
-      const world = home ? agentWorld(home, modelId!, Number(window), key) : {};
-      if (home) codeTool(world, mockName === "code", true);
-      const results: TaskResult[] = [];
-      let broken = 0;
+      const world = home ? agentWorld(home, modelId!, Number(window), key, option(rest, "upstream-api")[0]) : {};
+      if (home && !lane) codeTool(world, mockName === "code", true);
+      // The speech, picture and video tools are measured with the real engines when a real model is: installed once into a folder kept between runs, on the processor alone.
+      const engines = option(rest, "media")[0] ?? (lane && upstream ? "real" : "stub");
+      if (engines !== "real" && engines !== "stub") { process.stderr.write("error: --media is real or stub\n"); return 2; }
+      let media: Record<string, unknown> | undefined;
+      if (lane && engines === "real" && !estimating) {
+        const got = await prepareMedia(mediaDir(), (line) => process.stderr.write(`media: ${line}\n`));
+        if (typeof got === "string") { process.stderr.write(`error: ${got}\n`); meter?.stop(); mock?.stop(); if (home) rmSync(home, { recursive: true, force: true }); return 2; }
+        media = got;
+        world.CUDA_VISIBLE_DEVICES = "";
+      }
+      const results: TaskResult[] = [], laneResults: LaneResult[] = [];
+      let broken = 0, stopped = false;
       try {
-        for (const task of chosen()) {
+        runs: for (const { task, tag } of jobs) {
           // A model that answers with a server error or not at all, twice in a row, is not asked again: that is for a person to look at.
-          if (broken >= 2) { process.stderr.write("stopped: the model failed on two runs in a row (server errors or no answer); not asked again\n"); break; }
-          for (const model of label && meter ? [label] : models) {
-            for (let i = 0; i < repeat; i++) {
-              const r = await runTask(task, { command, ...(meter ? { label: model, ...(agent ? { model: modelId! } : {}), env: world, meter, key: key ?? "none", ...(option(rest, "trace")[0] ? { trace: resolve(option(rest, "trace")[0]!) } : {}), ...(agent ? { agent } : { agentEnv: (base: string) => ({ NAVVIED_BASE_URL: base }) }) } : { model }) });
-              results.push(r);
-              broken = r.modelErrors || r.reason === "timeout" ? broken + 1 : 0;
-              if (out) appendFileSync(out, `${JSON.stringify(r)}\n`);
-              process.stderr.write(`${r.reason === "skipped" ? "skip" : r.passed ? "pass" : "FAIL"}  ${task.id}  ${model}  ${(r.ms / 1000).toFixed(1)}s  ${r.modelCalls} calls${r.passed ? "" : `  (${r.reason})`}\n`);
+          if (broken >= 2) { process.stderr.write("stopped: the model failed on two runs in a row (server errors or no answer); not asked again\n"); stopped = true; break; }
+          for (const arm of arms) {
+            // The two arms of the lane run the same program: the code tool is switched on and offered from the first request, or left off.
+            if (lane && home) codeTool(world, arm !== "base", arm === "code");
+            for (const model of label && meter ? [label] : models) {
+              const name = arms.length > 1 ? `${model}:${arm}` : model;
+              for (let i = 0; i < repeat; i++) {
+                const run = await runTask(task, { command, ...(keepFailed ? { keepFailed } : {}), ...(media ? { media } : {}), ...(meter ? { label: name, ...(agent ? { model: modelId! } : {}), env: world, meter, key: key ?? "none", ...(trace ? { trace: resolve(trace) } : {}), ...(tag?.prompt ? { traceName: tag.prompt } : {}), ...(agent ? { agent } : { agentEnv: (base: string) => ({ NAVVIED_BASE_URL: base }) }) } : { model }) });
+                // A run cut off by the limit on tokens is not a measurement of the model.
+                if (meter?.exhausted()) { process.stderr.write(`stopped: the limit of ${maxTokens?.toLocaleString("en-US")} tokens was reached during ${task.id}; that run is not counted\n`); stopped = true; break runs; }
+                const r = tag ? tagged(tag, run) : run;
+                results.push(r);
+                if (tag) laneResults.push(r as LaneResult);
+                broken = r.modelErrors || r.reason === "timeout" ? broken + 1 : 0;
+                if (out) appendFileSync(out, `${JSON.stringify(r)}\n`);
+                const solved = tag ? (r as LaneResult).verdict.flags.includes("solved") : r.passed;
+                process.stderr.write(`${r.reason === "skipped" ? "skip" : solved ? "pass" : "FAIL"}  ${tag?.prompt ?? task.id}  ${name}  ${(r.ms / 1000).toFixed(1)}s  ${r.modelCalls} calls${tag ? `  [${(r as LaneResult).verdict.flags.join(" ") || "-"}]` : ""}${r.passed ? "" : `  (${r.reason})`}\n`);
+              }
             }
           }
         }
       } finally { meter?.stop(); mock?.stop(); if (home) rmSync(home, { recursive: true, force: true }); }
-      process.stdout.write(`\n${summarize(results)}\n`);
+      if (estimating) {
+        // Each task once, the first request as the real program sends it: what a run costs is that, times the calls it takes (assumed, see newbie-report.ts).
+        const first = Object.fromEntries(results.map((r) => [r.task, Math.ceil((r.prompt?.requestBytes ?? 0) / 4)]));
+        const all = laneJobs({ ...(option(rest, "tools").length ? { tools: option(rest, "tools").flatMap((s) => s.split(",")) } : {}), ...(option(rest, "per-tool")[0] ? { perTool: Number(option(rest, "per-tool")[0]) } : {}), neat: rest.includes("--with-neat") });
+        process.stdout.write(`${estimateTable(estimateLane(all, first), Math.max(1, Number(option(rest, "repeat")[0] ?? 1) || 1))}\n`);
+        return stopped ? 1 : 0;
+      }
+      process.stdout.write(`\n${summarize(results)}\n${lane ? `\n${laneTable(laneResults)}\n` : ""}`);
+      if (lane) return !stopped && laneResults.every((r) => r.reason === "skipped" || r.verdict.flags.includes("solved")) ? 0 : 1;
       return results.every((r) => r.passed || r.reason === "skipped") ? 0 : 1;
     }
     case "agents": {
@@ -117,8 +174,19 @@ export async function main(argv: string[]): Promise<number> {
     case "report": {
       const file = rest[0];
       if (!file) { process.stderr.write(USAGE); return 2; }
-      process.stdout.write(`${summarize(readFileSync(resolve(file), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as TaskResult))}\n`);
+      const all = readFileSync(resolve(file), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as TaskResult | LaneResult);
+      const lane = all.filter((r): r is LaneResult => "tag" in r);
+      process.stdout.write(`${summarize(all)}\n${lane.length ? `\n${laneTable(lane)}\n` : ""}`);
       return 0;
+    }
+    case "recheck": {
+      if (!rest[0]) { process.stderr.write(USAGE); return 2; }
+      try {
+        const r = await recheck(resolve(rest[0]));
+        process.stdout.write(`${r.output}${r.output && !r.output.endsWith("\n") ? "\n" : ""}${r.kept.task}: the check ${r.ok ? "passes" : "fails"} (the run ended: ${r.kept.reason})\n`);
+        if (r.kept.skipped.length) process.stdout.write(`not in the copy: ${r.kept.skipped.length + r.kept.more}, listed in check.json\n`);
+        return r.ok ? 0 : 1;
+      } catch (e) { process.stderr.write(`error: ${e instanceof Error ? e.message : String(e)}\n`); return 2; }
     }
     default: process.stderr.write(USAGE); return command ? 2 : 0;
   }

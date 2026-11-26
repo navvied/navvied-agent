@@ -63,7 +63,6 @@ describe("setting a tool up", () => {
   const entry = { id: "browser", title: "Browser Automation", about: "Drive a real browser." } as ToolEntry;
   const steps = (states: ("waiting" | "active" | "done" | "failed")[]) => ["Download the browser (about 150 MB)", "Check the download", "Start it once to test"].map((name, i) => ({ name, state: states[i]!, bytes: 0, total: 0 }));
   const event = (state: Setup["state"], over: Partial<Setup> = {}): EngineEvent => ({ ev: "tool.setup", id: "browser", state, ...over });
-  /** A hub that answers the setup commands the way the engine does. */
   class Hub extends FakeLink {
     constructor(private script: Record<string, EngineEvent[]>) { super(() => undefined); }
     override send(cmd: object): void {
@@ -86,6 +85,12 @@ describe("setting a tool up", () => {
     expect(t.shown[1]!.frame.body).toEqual(["✓  Download the browser (about 150 MB)", "✓  Check the download", "✓  Start it once to test"]);
     expect(t.shown[0]!.items.map((i) => i.label)).toEqual(["Start setup", "Not now"]);
     expect(t.shown.at(-1)).toBeDefined();
+  });
+  test("a step that has not started is marked with the small dot of the page", async () => {
+    const l = new Hub({ "tool.setup": [event("failed", { steps: steps(["done", "failed", "waiting"]), error: "x" })] });
+    const t = scripted(["Not now"]);
+    await toolSetup(t.kit(l), entry);
+    expect(t.shown[0]!.frame.body![2]).toBe("•  Start it once to test");
   });
   test("Not now stops it and keeps what was fetched", async () => {
     const l = new Hub({ "tool.setup": [event("ask", { steps: steps(["waiting", "waiting", "waiting"]) })] });
@@ -132,7 +137,8 @@ describe("turning Computer Use on", () => {
     await computerScreen(k, { title: "Computer Use" });
     expect(t.shown[0]!.frame.body!.join("\n")).toContain("It asks before it uses an app, and you can stop it at any time.");
     const perms = t.shown.find((s) => s.title === "Two permissions")!;
-    expect(perms.items.map((i) => `${i.label}|${i.hint}`)).toEqual(["✓  Accessibility|undefined", "·  Screen Recording|undefined"]);
+    expect(perms.frame.body).toEqual(["Only you can answer the system's questions."]);
+    expect(perms.items.map((i) => `${i.label}|${i.hint}`)).toEqual(["Accessibility  Granted|undefined", "Screen Recording  Allow|undefined"]);
     expect(l.commands("computer.permission")).toEqual([{ cmd: "computer.permission", id: "screen-recording" }]);
     expect(t.shown.find((s) => s.title === "Screen Recording")!.frame.body![1]).toBe("Switch navvied on there, then come back. navvied waits.");
     expect(l.commands("computer.on")).toEqual([{ cmd: "computer.on", on: true }]);

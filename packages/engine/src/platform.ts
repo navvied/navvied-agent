@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { win32 } from "node:path";
 
 export type Which = (command: string) => string | null;
@@ -78,13 +78,57 @@ export function killTree(child: Pick<ChildProcess, "pid" | "kill">, platform: No
   }
 }
 
+/** What Linux writes down about a process, from its state on (the name before it may hold spaces); it throws when the process is not there. */
+function statOf(pid: number): { state: string; group: number; start: string } {
+  const stat = readFileSync(`/proc/${pid}/stat`, "utf8"), f = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  return { state: f[0]!, group: Number(f[2]), start: f[19]! };
+}
+
+/** A process that still runs: a zombie has ended and only waits for its parent to take note. */
+function running(pid: number): ReturnType<typeof statOf> | undefined {
+  try { const s = statOf(pid); return "ZXx".includes(s.state) ? undefined : s; } catch { return undefined; }
+}
+
+const startedWith = (pid: number, entry: string): boolean => {
+  try { return readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").includes(entry); } catch { return false; }
+};
+
+/**
+ * Stops a program that may start helpers outside its group (a browser's crash reporter makes a session of its own and is taken over by the
+ * system), and returns only when none of it runs any more, or after `waitMs`, with what still does. The whole of it is the child's group and
+ * every process started with `mark` (`NAME=value`, set in the child's environment and handed on to all it starts). They are looked for
+ * before the kill, while all of them can still be read: a process that is ending has no environment left. It does not return to the event
+ * loop, so it also works while this program is exiting. Only Linux lists processes this way: elsewhere this is {@link killTree}.
+ */
+export function endAll(child: Pick<ChildProcess, "pid" | "kill">, mark: string, waitMs = 2000, platform: NodeJS.Platform = process.platform): number[] {
+  const leader = child.pid;
+  if (platform !== "linux" || leader === undefined) { killTree(child, platform); return []; }
+  const members = new Map<number, string>();
+  const find = (): number[] => readdirSync("/proc").flatMap((name) => {
+    const pid = Number(name);
+    const now = Number.isInteger(pid) && pid !== process.pid ? running(pid) : undefined;
+    if (!now || !(members.get(pid) === now.start || now.group === leader || startedWith(pid, mark))) return [];
+    members.set(pid, now.start);
+    return [pid];
+  });
+  find();
+  killTree(child, platform);
+  const until = Date.now() + waitMs, pause = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    const left = find();
+    if (!left.length || Date.now() >= until) return left;
+    for (const pid of left) { try { process.kill(pid, "SIGKILL"); } catch { /* ended in between */ } }
+    Atomics.wait(pause, 0, 0, 2);
+  }
+}
+
 /**
  * When a process started, as the system writes it down: a process number alone is not the process (numbers are used again), the number
  * with its start time is. Nothing on Windows, where a program is not taken back after a restart.
  */
 export function processStart(pid: number, platform: NodeJS.Platform = process.platform): string | undefined {
   try {
-    if (platform === "linux") { const stat = readFileSync(`/proc/${pid}/stat`, "utf8"); return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]; }
+    if (platform === "linux") return statOf(pid).start;
     if (platform === "darwin") { const r = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" }); return r.status === 0 ? r.stdout.trim() || undefined : undefined; }
   } catch { /* it is not there */ }
   return undefined;

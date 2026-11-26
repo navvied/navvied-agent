@@ -18,7 +18,7 @@ export const offeredIn = (all: readonly Tool[], situation: Situation): Tool[] =>
 export const inMode = (mode: PermMode, offered: readonly Tool[]): Tool[] => (mode === "plan" ? [...offered.filter((t) => t.readOnly || t.inPlan), exitPlanMode] : [...offered]);
 
 /** The tools offered to the model in a mode. */
-export const toolsFor = (mode: PermMode, all: readonly Tool[], situation: Situation = { small: false, userText: "", jobs: 0 }): Tool[] => inMode(mode, offeredIn(all, situation));
+export const toolsFor = (mode: PermMode, all: readonly Tool[], situation: Situation = { small: false, jobs: 0 }): Tool[] => inMode(mode, offeredIn(all, situation));
 
 /** Tools that change files: what the "edits" mode lets through. */
 const EDITS = FILE_WRITERS;

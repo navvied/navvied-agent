@@ -4,6 +4,9 @@ import { findChrome } from "../../engine/src/tools/browser.ts";
 import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";
 import { dirname, join, sep, win32 } from "node:path";
+import { skillTrustPath } from "../../cli/src/config.ts";
+import { SkillTrust, projectSkillDirs } from "../../cli/src/plugins.ts";
+import { loadSkills } from "../../engine/src/skills.ts";
 import { repoFiles, solutionFiles, type Task } from "./task.ts";
 
 /** A file that starts with `#!` is a program: it is made executable, as it would be in a checkout of the project. */
@@ -51,19 +54,26 @@ export const FIXTURES = join(import.meta.dir, "..", "fixtures");
 /** The environment of a task's own scripts: this run's secret and the fixtures. */
 export const scriptEnv = (secret: Record<string, string>): Record<string, string> => ({ ...secret, BENCH_FIXTURES: FIXTURES });
 
+/** What the scripts of a task are told about real engines: the speech program and its voice, so that a setup can make a recording that a real engine can hear. */
+export function mediaEnv(media: Record<string, unknown> | undefined): Record<string, string> {
+  const tts = media?.tts as { bin?: string; model?: string } | undefined;
+  return tts?.bin && tts.model ? { BENCH_TTS_BIN: tts.bin, BENCH_TTS_MODEL: tts.model } : {};
+}
+
 /**
   * The configuration of an agent for a task that declares MCP servers, hooks, stand-ins for media programs or other agents to ask, in a folder of its own outside the workspace: the agent starts each
  * server itself, runs each hook, from this file, and stops the servers when the run ends. `NAVVIED_CONFIG` points at it, so the person's own configuration is
  * never read or written. For other agents to ask, their address is the port the setup left in the workspace `where`, and their path. Nothing is written for a task with none of them.
  */
-export function agentConfig(task: Task, where?: string): { env: Record<string, string>; remove(): void } {
+export function agentConfig(task: Task, where?: string, real?: Record<string, unknown>): { env: Record<string, string>; remove(): void } {
   if (!task.mcp && !task.hooks && !task.media?.length && !task.a2a && !task.embeddings) return { env: {}, remove: () => undefined };
   const dir = mkdtempSync(join(tmpdir(), "navvied-eval-config-"));
   const mcp = task.mcp ? Object.fromEntries(Object.entries(task.mcp).map(([name, s]) => [name, { command: process.execPath, args: [join(FIXTURES, s.fixture)], ...(s.sampling ? { sampling: s.sampling } : {}), ...(s.elicitation ? { elicitation: s.elicitation } : {}) }])) : undefined;
   const hooks = Object.fromEntries(Object.entries(task.hooks ?? {}).map(([event, list]) => [event, list.map((h) => ({ ...(h.matcher ? { matcher: h.matcher } : {}), command: `"${process.execPath.replaceAll("\\", "/")}" "${join(FIXTURES, h.fixture).replaceAll("\\", "/")}"` }))]));
   const program = (name: string): string => join(FIXTURES, "media", name);
   const engines = { stt: { bin: program("whisper-cli"), model: program("model.bin") }, tts: { bin: program("piper"), model: program("model.bin") }, image: { bin: program("sd"), model: program("model.bin") } };
-  const media = task.media?.length ? { ...Object.fromEntries(task.media.map((k) => [k, engines[k]])), ffmpeg: program("ffmpeg") } : undefined;
+  const stand = task.media?.filter((k): k is "stt" | "tts" | "image" => k !== "vision") ?? [];
+  const media = real && task.media?.length ? real : stand.length ? { ...Object.fromEntries(stand.map((k) => [k, engines[k]])), ffmpeg: program("ffmpeg") } : undefined;
   const port = where && existsSync(join(where, ".bench-port")) ? readFileSync(join(where, ".bench-port"), "utf8").trim() : "";
   const peers = task.a2a ? Object.fromEntries(Object.entries(task.a2a).map(([name, path]) => [name, { url: `http://127.0.0.1:${port}${path}` }])) : undefined;
   const memory = task.embeddings ? { embeddings: { baseUrl: `http://127.0.0.1:${port}${task.embeddings.api === "chat" ? "/v1" : ""}`, model: "fixture-embed", api: task.embeddings.api } } : undefined;
@@ -109,6 +119,16 @@ export function killProcesses(pids: number[]): void {
   for (const pid of pids) { try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
 }
 
+/**
+ * Whether a protected file was changed: one of them is different, gone, or new. A new file that the prompt left a place for (`mayAdd`, names compared
+ * without case) is not a change: what the person asked for may be made in a folder that holds their inputs. Every other file of it stays protected.
+ */
+export function protectedChanged(before: Record<string, string>, after: Record<string, string>, mayAdd: readonly string[] = []): boolean {
+  const allowed = new Set(mayAdd.map((n) => n.toLowerCase()));
+  const kept = Object.fromEntries(Object.entries(after).filter(([name]) => name in before || !allowed.has(name.toLowerCase())));
+  return JSON.stringify(Object.entries(before).sort()) !== JSON.stringify(Object.entries(kept).sort());
+}
+
 export function protectedHashes(dir: string, patterns: readonly string[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (const pattern of patterns) {
@@ -149,4 +169,17 @@ export async function shell(dir: string, command: string, env: Record<string, st
   return { ok: (await p.exited) === 0, output: `${out}${err}`.slice(-4000), ms: Date.now() - started };
 }
 
-export const check = (dir: string, task: Task, timeoutMs = 120_000, env: Record<string, string> = {}): Promise<CheckResult> => shell(dir, task.check, env, timeoutMs);
+/** The skills of the project are accepted in the state of the agent, by name and text, as a person says yes once: until then a project skill is held back and the model is not offered it. */
+export function trustSkills(dir: string, env: Record<string, string | undefined>): void {
+  const trust = new SkillTrust(skillTrustPath(env));
+  for (const s of loadSkills({ project: projectSkillDirs(dir), trusted: () => true })) trust.answer(s, true);
+}
+
+export async function check(dir: string, task: Pick<Task, "check">, timeoutMs = 120_000, env: Record<string, string> = {}, finalAnswer = ""): Promise<CheckResult> {
+  const outsideWorkspace = mkdtempSync(join(tmpdir(), "navvied-eval-answer-"));
+  try {
+    const answerFile = join(outsideWorkspace, "answer.txt");
+    writeFileSync(answerFile, finalAnswer, { mode: 0o600 });
+    return await shell(dir, task.check, { ...env, BENCH_ANSWER_FILE: answerFile }, timeoutMs);
+  } finally { rmSync(outsideWorkspace, { recursive: true, force: true }); }
+}

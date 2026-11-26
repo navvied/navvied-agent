@@ -1,4 +1,4 @@
-import { AccountError, fetchModels, pollDevice, signOut, type DeviceRequest } from "./account-client.ts";
+import { AccountError, awaitDevice, fetchModels, signOut, type DeviceRequest } from "./account-client.ts";
 import { clearAccount, forgetHostedModels, writeAccount, writeHostedModels, type Account, type HostedModels } from "./account.ts";
 
 /** Where an account is kept on this computer, and what joining and leaving it does besides (the computer joins the account's computers, or leaves them). */
@@ -14,27 +14,33 @@ export const pause = (ms: number, signal: AbortSignal): Promise<void> => new Pro
 
 export type Approval = { state: "approved"; account: Account; listing: HostedModels } | { state: "denied" | "expired" | "stopped" } | AccountError;
 
-/**
- * Waits for the person to approve a code in their browser (the password never comes here), and then keeps the account the way every sign-in does: the account file,
- * the list of hosted models, and what joining the account does. One shared way, for the terminal's `/login` and for the pages.
- */
-export async function awaitApproval(send: typeof fetch, server: string, request: DeviceRequest, paths: AccountPaths, signal: AbortSignal, wait: typeof pause = pause, now: () => number = Date.now): Promise<Approval> {
-  const until = now() + request.expiresIn * 1000;
+const RECONNECT_AFTER_MS = [1_000, 2_000, 5_000, 10_000];
+const MOST_LOST_CONNECTIONS = 8;
+
+export async function awaitApproval(send: typeof fetch, server: string, request: DeviceRequest, paths: AccountPaths, signal: AbortSignal, wait: typeof pause = pause): Promise<Approval> {
+  const waiting = AbortSignal.any([signal, AbortSignal.timeout(request.expiresIn * 1000)]);
+  const over = (): Approval => ({ state: signal.aborted ? "stopped" : "expired" });
   try {
-    while (!signal.aborted && now() < until) {
-      await wait(request.interval * 1000, signal);
-      if (signal.aborted) break;
-      const polled = await pollDevice(send, server, request.deviceCode);
-      if (polled.state === "pending") continue;
-      if (polled.state !== "approved") return { state: polled.state };
-      const listing = await fetchModels(send, polled.account);
-      writeAccount(paths.account, polled.account);
+    for (let lost = 0; !waiting.aborted;) {
+      const told = await awaitDevice(send, server, request.deviceCode, waiting);
+      if (waiting.aborted) break;
+      if (told.state === "lost") {
+        if (++lost > MOST_LOST_CONNECTIONS) return new AccountError("The connection to the server kept closing. Try again in a moment.");
+        await wait(RECONNECT_AFTER_MS[Math.min(lost, RECONNECT_AFTER_MS.length) - 1]!, waiting);
+        continue;
+      }
+      if (told.state !== "approved") return { state: told.state };
+      const listing = await fetchModels(send, told.account);
+      writeAccount(paths.account, told.account);
       writeHostedModels(paths.models, listing);
-      await paths.onSignedIn?.(polled.account).catch(() => undefined);
-      return { state: "approved", account: polled.account, listing };
+      await paths.onSignedIn?.(told.account).catch(() => undefined);
+      return { state: "approved", account: told.account, listing };
     }
-    return { state: signal.aborted ? "stopped" : "expired" };
-  } catch (e) { return e instanceof AccountError ? e : new AccountError("Something went wrong. Try again in a moment."); }
+    return over();
+  } catch (e) {
+    if (waiting.aborted) return over();
+    return e instanceof AccountError ? e : new AccountError("Something went wrong. Try again in a moment.");
+  }
 }
 
 /** Signs this computer out: it leaves the account's computers, the token is cancelled on the server, and everything of the account is forgotten here. */

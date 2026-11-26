@@ -27,8 +27,8 @@ describe("stopping a command", () => {
   test.skipIf(process.platform === "win32")("it is stopped for the person even when something it started got away and keeps its output open", async () => {
     const { events, jobs } = rig();
     const pidFile = join(dir, "escaper.pid");
-    // The escaper lives for ten minutes and holds the output open: the job must be reported as stopped without waiting for it, whatever the clock says.
-    const job = jobs.start(["sh", "-c", `setsid sleep 600 & echo $! > "${pidFile}"; sleep 30`], dir, "escaper");
+    const saysItIsOut = `echo $$ > "$1"; exec sleep 600`;
+    const job = jobs.start(["sh", "-c", `setsid sh -c '${saysItIsOut}' sh "${pidFile}" & sleep 30`], dir, "escaper");
     await until(() => existsSync(pidFile) && readFileSync(pidFile, "utf8").trim() !== "", 20_000);
     const escaper = Number(readFileSync(pidFile, "utf8").trim());
     const alive = (): boolean => { try { process.kill(escaper, 0); return true; } catch { return false; } };
@@ -102,7 +102,7 @@ describe("the Bash tools for background work", () => {
   });
   test("the read and stop tools are offered only while something runs, and stop never in plan mode", () => {
     const all = defaultTools();
-    const names = (mode: "auto" | "plan", jobs: number) => toolsFor(mode, all, { small: false, userText: "", jobs }).map((t) => t.name);
+    const names = (mode: "auto" | "plan", jobs: number) => toolsFor(mode, all, { small: false, jobs }).map((t) => t.name);
     expect(names("auto", 0)).not.toContain("BashOutput");
     expect(names("auto", 1)).toEqual(expect.arrayContaining(["BashOutput", "KillShell"]));
     expect(names("plan", 1)).toContain("BashOutput");

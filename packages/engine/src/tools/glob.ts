@@ -10,7 +10,7 @@ const MOST_FILES = 100;
 export const glob: Tool = {
   name: "Glob",
   readOnly: true,
-  description: 'Find files by pattern: "src/**/*.ts".',
+  description: 'Find files: "src/**/*.ts".',
   parameters: {
     type: "object",
     properties: { pattern: { type: "string" }, path: { type: "string" } },

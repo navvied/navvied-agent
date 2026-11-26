@@ -9,7 +9,7 @@ export async function doctorCommand(options: Options, io: IO): Promise<number> {
   let problems = 0;
   const line = (ok: boolean | "note", name: string, detail: string): void => {
     if (ok === false) problems += 1;
-    io.stderr.write(`${ok === true ? "✓" : ok === "note" ? "·" : "✗"} ${name.padEnd(9)} ${detail}\n`);
+    io.stderr.write(`${ok === true ? "✓" : ok === "note" ? "○" : "✗"} ${name.padEnd(9)} ${detail}\n`);
   };
 
   const path = configPath(io.env, options.config);

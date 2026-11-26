@@ -94,6 +94,6 @@ describe("navvied run and the agent's questions", () => {
   test("without them nobody can answer: the agent is told to assume and go on, at once", async () => {
     const r = await run([]);
     expect(r.code).toBe(0);
-    expect(r.out).toContain("Nobody can answer now: make a reasonable assumption, say it in your answer, and go on.");
+    expect(r.out).toContain("Nobody can answer now: pick the most reasonable option, say what you assumed, and do the work.");
   });
 });

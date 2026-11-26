@@ -36,7 +36,7 @@ describe("the counters", () => {
     const c = new CodeOffer();
     c.begin("x");
     c.count("WebFetch", "y".repeat(CODE_AFTER.chars));
-    expect(c.note()).toContain("1 calls and 20,000 characters");
+    expect(c.note()).toContain("1 call and 20,000 characters");
     c.begin("x");
     expect(c.offered).toBe(false);
     c.count("Grep", "y");
@@ -55,8 +55,8 @@ describe("the counters", () => {
 
 describe("what a request says up front", () => {
   test.each([
-    "for each of the 40 files in src/ add a header",
-    "baca setiap 25 halaman di docs/ lalu rangkum",
+    "for each of the 40 files in src/*.ts add a header",
+    "baca 25 halaman di docs/*.md lalu rangkum",
     "为 30 个文件 逐个检查 *.ts",
     "check 12 pages: https://a.io/1 https://a.io/2 https://a.io/3",
     "update src/a.ts src/b.ts src/c.ts src/d.ts src/e.ts src/f.ts src/g.ts src/h.ts src/i.ts src/j.ts",
@@ -69,6 +69,8 @@ describe("what a request says up front", () => {
     "set the timeout to 30",
     "upgrade to v10.2 in 2026",
     "update every file in this folder",
+    "ubah 40 file di folder ini",
+    "FIX ALL 40 FILES PLS",
     "at 10:30 look at src/a.ts",
     "read src/a.ts and src/b.ts and src/c.ts",
     "",
@@ -116,9 +118,32 @@ describe("the tool in the list of an engine that has it switched on", () => {
     b.cleanup();
   });
 
+  test("one search that lists many files is enough: the tool is offered on the next request, with the note", async () => {
+    const r = rig((_q, n) => (n === 0 ? { calls: [{ name: "Grep", args: { pattern: "import", output_mode: "content" } }] } : { text: "ok" }), tools());
+    for (let i = 0; i < 60; i++) writeFileSync(join(r.dir, `m${String(i).padStart(2, "0")}.ts`), "import a from 'x';\nimport b from 'y';\n");
+    await r.turn(prompt("which modules import each other in a cycle?"));
+    expect(offered(r, 0)).toBe(false);
+    expect(offered(r, 1)).toBe(true);
+    expect(lastTool(r, 1)).toContain("ExecuteCode runs them as one script");
+    r.cleanup();
+  });
+
+  test("a few files listed do not bring it, and a small model is never offered it", async () => {
+    const few = rig((_q, n) => (n === 0 ? { calls: [{ name: "Glob", args: { pattern: "*.ts" } }] } : { text: "ok" }), tools());
+    for (let i = 0; i < 5; i++) writeFileSync(join(few.dir, `m${i}.ts`), "x");
+    await few.turn(prompt("list the modules"));
+    expect(offered(few, 1)).toBe(false);
+    few.cleanup();
+    const small = rig((_q, n) => (n === 0 ? { calls: [{ name: "Grep", args: { pattern: "import", output_mode: "content" } }] } : { text: "ok" }), { ...tools(), window: SMALL_WINDOW, small: true });
+    for (let i = 0; i < 60; i++) writeFileSync(join(small.dir, `m${i}.ts`), "import a from 'x';\nimport b from 'y';\n");
+    await small.turn(prompt("which modules import each other?"));
+    expect(offered(small, 1)).toBe(false);
+    small.cleanup();
+  });
+
   test("a request that says it up front has it from the first step, and no note is added", async () => {
     const r = rig((_q, n) => (n < 7 ? { calls: [call(n)] } : { text: "ok" }), tools(records()));
-    await r.turn(prompt("for each of the 40 records in src/ get it"));
+    await r.turn(prompt("for each of the 40 records in src/*.ts get it"));
     expect(offered(r, 0)).toBe(true);
     expect(lastTool(r, 7)).not.toContain("ExecuteCode runs them");
     r.cleanup();

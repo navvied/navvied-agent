@@ -1,0 +1,15 @@
+{
+  "id": "newbie-watch-clip",
+  "title": "Read the label shown in a short video",
+  "kind": "agent",
+  "level": 2,
+  "lang": "none",
+  "requires": ["bun", "ffmpeg"],
+  "media": ["vision"],
+  "setup": "bun \"$BENCH_FIXTURES/make-chart.ts\" frame.png && ffmpeg -y -v error -loop 1 -i frame.png -t 3 -r 5 -pix_fmt yuv420p clip.mp4 && rm frame.png",
+  "prompt": "clip.mp4 is a short video with a label shown in it. Write the text of the label into answer.txt.",
+  "check": "grep -qiE 'revenue ?42' answer.txt",
+  "protect": ["README.md", "clip.mp4"],
+  "maxSteps": 20,
+  "timeoutSeconds": 600
+}

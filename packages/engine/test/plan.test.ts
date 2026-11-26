@@ -95,10 +95,8 @@ describe("TodoWrite", () => {
   });
 
   test("it is offered to every model with room for it, whatever the request says, and not to a small one", () => {
-    const offered = (userText: string, small = false): boolean => todo.offeredWhen!({ small, userText, jobs: 0 });
-    expect(offered("fix it")).toBe(true);
-    expect(offered("In app.py, line 3, change the name")).toBe(true);
-    expect(offered("")).toBe(true);
-    expect(offered("1. a\n2. b", true)).toBe(false);
+    const offered = (small = false): boolean => todo.offeredWhen!({ small, jobs: 0 });
+    expect(offered()).toBe(true);
+    expect(offered(true)).toBe(false);
   });
 });

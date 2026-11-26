@@ -272,7 +272,7 @@ export interface Tool extends ToolSpec {
   /** Its calls are asked about, even in Auto, once the turn has read text from outside: a tool that starts something for later or sends something away. */
   askAfterOutside?: true;
   /** Whether to offer this tool now. A small model is easily led astray by tools it does not need, so some are offered only when the conversation calls for them. */
-  offeredWhen?(situation: { small: boolean; userText: string; jobs: number; /** A conversation, not work on a project. */ chat?: boolean; /** Running commands that can be typed to. */ typable?: number; skills?: number; /** Earlier conversations can be looked through. */ recall?: boolean; /** Notes can be kept. */ memory?: boolean; /** Jobs can be scheduled here. */ schedule?: boolean; /** Computer use is on. */ computer?: boolean; /** The turn has shown that a script would pay (see `code-offer.ts`). */ code?: boolean }): boolean;
+  offeredWhen?(situation: { small: boolean; jobs: number; /** A conversation, not work on a project. */ chat?: boolean; /** Running commands that can be typed to. */ typable?: number; skills?: number; /** Earlier conversations can be looked through. */ recall?: boolean; /** Notes can be kept. */ memory?: boolean; /** Jobs can be scheduled here. */ schedule?: boolean; /** Skills can be changed here. */ skillBook?: boolean; /** Computer use is on. */ computer?: boolean; /** The turn has shown that a script would pay (see `code-offer.ts`). */ code?: boolean }): boolean;
   /** Puts the arguments a model wrote in other words into the ones this tool has, before they are checked. */
   fixArgs?(args: Record<string, unknown>): Record<string, unknown>;
   title(args: Record<string, unknown>): string;

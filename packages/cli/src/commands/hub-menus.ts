@@ -30,7 +30,6 @@ export interface MenuContext {
   busy: () => boolean;
   /** The other computers of the account (empty when signed out or the list cannot be had). */
   computers: () => Promise<{ id: string; name: string }[]>;
-  /** The bottom bar should be drawn again (what it says changed). */
   refresh?: () => void;
   /** A model is about to be switched to: the screen says so when the hub confirms it. */
   switching: (handover: boolean) => void;
@@ -110,7 +109,6 @@ export function hubMenus(c: MenuContext) {
     send({ cmd: how === 0 ? "move" : "copy", id: s.id, to: to.id });
   };
 
-  /** Whether the agent holds the screen of this computer or the person does, as the hub last said. */
   let screen: { on: boolean; control?: "agent" | "person" } | undefined;
 
   const parse = (arg: string): string[] => arg.trim().split(/\s+/).filter(Boolean);
@@ -147,13 +145,11 @@ export function hubMenus(c: MenuContext) {
       c.say(`${paint(io.color, "cyan", "✓")} A new conversation starts in ${paint(io.color, "bold", f.path ?? f.name)}.`);
     },
 
-    /** `/plugins`: skills, tool servers, hooks and plugins; connect, trust, install. */
     async plugins(): Promise<void> {
       await pluginsScreen(new Kit(io, link, c.say, c.switching));
       c.marker();
     },
 
-    /** `/tools`: every tool with its own switch, under its heading, and where commands run. */
     async tools(): Promise<void> {
       await toolsScreen(new Kit(io, link, c.say, c.switching));
       c.marker();
@@ -175,13 +171,10 @@ export function hubMenus(c: MenuContext) {
       // A file that cannot be shown comes back as an error: the terminal's own error line says why.
     },
 
-    /** The rows of /memory that come from the computer's own notes. */
     memoryRows(): ReturnType<typeof memoryHubRows> { return memoryHubRows(new Kit(io, link, c.say, c.switching)); },
 
-    /** Who holds the screen: the person has taken it (the agent waits), or the agent has it, or Computer Use is not on. */
     screenControl(): "agent" | "person" | undefined { return screen?.on ? screen.control ?? "agent" : undefined; },
 
-    /** `/screen`: take the screen over, give it back, or stop. */
     async screen(stop: () => void): Promise<void> {
       const k = new Kit(io, link, c.say, c.switching);
       const now = await link.call("computer.state", { cmd: "computer.state" });
@@ -194,13 +187,11 @@ export function hubMenus(c: MenuContext) {
       c.marker();
     },
 
-    /** `/agents`: the other agents that may ask this one. */
     async agents(): Promise<void> {
       await agentsScreen(new Kit(io, link, c.say, c.switching));
       c.marker();
     },
 
-    /** `/schedule`: the tasks, each with when it runs next, and what can be done to one; New task adds one. */
     async schedule(): Promise<void> {
       await scheduleScreen(new Kit(io, link, c.say, c.switching));
       c.marker();

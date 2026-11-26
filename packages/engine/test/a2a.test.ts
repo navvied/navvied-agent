@@ -129,14 +129,12 @@ describe("the AskAgent tool", () => {
     expect(defaultTools().some((t) => t.name === "AskAgent")).toBe(false);
   });
 
-  test("a small model is offered it only when the request speaks of agents or names one; plan mode never offers it", () => {
+  test("a small model is never offered it, whatever the request says; plan mode never offers it", () => {
     const all = [...defaultTools(), askAgentTool(["docs"])];
-    const names = (mode: "auto" | "plan", small: boolean, userText: string) => toolsFor(mode, all, { small, userText, jobs: 0 }).map((t) => t.name);
-    expect(names("auto", true, "fix the failing test")).not.toContain("AskAgent");
-    expect(names("auto", true, "ask the docs about the port")).toContain("AskAgent");
-    expect(names("auto", true, "ask another agent")).toContain("AskAgent");
-    expect(names("auto", false, "fix the failing test")).toContain("AskAgent");
-    expect(names("plan", false, "ask the docs agent")).not.toContain("AskAgent");
+    const names = (mode: "auto" | "plan", small: boolean) => toolsFor(mode, all, { small, jobs: 0 }).map((t) => t.name);
+    expect(names("auto", true)).not.toContain("AskAgent");
+    expect(names("auto", false)).toContain("AskAgent");
+    expect(names("plan", false)).not.toContain("AskAgent");
   });
 
   test("the answer comes back framed as another agent's words, with the context to go on with, and the message that leaves is scrubbed of secrets", async () => {

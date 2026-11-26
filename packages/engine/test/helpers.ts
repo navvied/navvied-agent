@@ -64,6 +64,11 @@ export interface Rig {
   send(cmd: Command): void;
   of<K extends EngineEvent["ev"]>(ev: K, from?: number): Extract<EngineEvent, { ev: K }>[];
   text(from?: number): string;
+  /**
+   * Settles with the event that makes `pred` true (at once when it already is). No clock of its own: how long a program takes to start
+   * and print is the computer's business, and only the test's own limit ends a wait for something that never comes.
+   */
+  when(pred: () => boolean): Promise<void>;
   cleanup(): void;
 }
 
@@ -82,7 +87,13 @@ export function rig(script: (req: ModelRequest, n: number, dir: string) => Step,
   made.push(dir);
   const events: EngineEvent[] = [];
   const provider = new ScriptedProvider((req, n) => script(req, n, dir));
-  const engine = new Engine({ provider, cwd: dir, window: 100_000, emit: (e) => events.push(e), heartbeatMs: 0, ...opts });
+  const waiting = new Set<() => void>();
+  const engine = new Engine({ provider, cwd: dir, window: 100_000, emit: (e) => { events.push(e); for (const check of waiting) check(); }, heartbeatMs: 0, ...opts });
+  const when = (pred: () => boolean): Promise<void> => new Promise((resolve) => {
+    const check = (): void => { if (!pred()) return; waiting.delete(check); resolve(); };
+    waiting.add(check);
+    check();
+  });
   open.push(engine);
   const turn = async (cmd: Command, timeoutMs = 10_000) => {
     const from = events.length;
@@ -92,7 +103,7 @@ export function rig(script: (req: ModelRequest, n: number, dir: string) => Step,
   };
   const of = <K extends EngineEvent["ev"]>(ev: K, from = 0) => events.slice(from).filter((e): e is Extract<EngineEvent, { ev: K }> => e.ev === ev);
   return {
-    engine, provider, events, dir, turn, of,
+    engine, provider, events, dir, turn, of, when,
     send: (cmd) => engine.handle(cmd),
     text: (from = 0) => of("text", from).map((e) => e.text).join(""),
     // The folder is removed now when it can be; when a program of the engine still holds it (Windows), `cleanupAll` removes it once that has exited.

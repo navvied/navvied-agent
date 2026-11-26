@@ -146,13 +146,8 @@ describe("what the agent writes is scanned", () => {
 });
 
 describe("the tool", () => {
-  test("is offered on the word skill, never in a chat, and otherwise named in the prompt where skills can be changed", () => {
-    const all = defaultTools();
-    const names = (situation: Parameters<typeof toolsFor>[2]) => toolsFor("auto", all, situation).map((t) => t.name);
-    expect(names({ small: false, userText: "turn this into a skill", jobs: 0 })).toContain("SkillManage");
-    expect(names({ small: true, userText: "make a skill for it", jobs: 0 })).toContain("SkillManage");
-    expect(names({ small: false, userText: "fix the bug", jobs: 0 })).not.toContain("SkillManage");
-    expect(names({ small: false, userText: "make a skill", jobs: 0, chat: true })).not.toContain("SkillManage");
+  test("is never in the list, whatever the request says: it is named in the prompt where skills can be changed", () => {
+    for (const chat of [false, true]) expect(toolsFor("auto", defaultTools(), { small: false, jobs: 0, chat }).map((t) => t.name)).not.toContain("SkillManage");
   });
   test("without a book it says so; list shows the names", async () => {
     expect(await tool.run({ action: "list" }, { cwd: ".", signal: new AbortController().signal, emit: () => {}, allowPrivateNetwork: false, jobs })).toBe("Error: skills cannot be changed here.");

@@ -6,7 +6,7 @@ export const MOST_QUESTIONS_PER_TURN = 3;
 export const DEFAULT_ASK_WAIT_S = 600;
 
 /** What the model is told when nobody can answer: it must go on, and say what it assumed. */
-export const NOBODY_ANSWERS = "Nobody can answer now: make a reasonable assumption, say it in your answer, and go on.";
+export const NOBODY_ANSWERS = "Nobody can answer now: pick the most reasonable option, say what you assumed, and do the work.";
 
 /** The questions of one call that wait for the person, by id. */
 export class QuestionBroker {

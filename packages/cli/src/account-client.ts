@@ -62,28 +62,40 @@ export async function fetchGuestModels(send: typeof fetch, server: string, signa
   return { ...(typeof body.default === "string" ? { default: body.default } : {}), models, ...(typeof body.tokensPerDay === "number" ? { tokensPerDay: body.tokensPerDay } : {}) };
 }
 
-export interface DeviceRequest { deviceCode: string; userCode: string; verificationUrl: string; expiresIn: number; interval: number }
-export type DevicePoll = { state: "pending" } | { state: "approved"; account: Account } | { state: "denied" } | { state: "expired" };
+export interface DeviceRequest { deviceCode: string; userCode: string; verificationUrl: string; expiresIn: number }
+export type DeviceAnswer = { state: "approved"; account: Account } | { state: "denied" | "expired" | "lost" };
 
-/** Asks the server for a code the person can approve in the browser. */
 export async function startDevice(send: typeof fetch, server: string, label: string): Promise<DeviceRequest> {
   const res = await ask(send, server, "/api/account/device", { method: "POST", headers: json, body: JSON.stringify({ name: label }) });
   if (!res.ok) throw await problem(res);
   const body = await res.json() as Partial<DeviceRequest>;
   if (typeof body.deviceCode !== "string" || typeof body.userCode !== "string" || typeof body.verificationUrl !== "string") throw new AccountError("The server did not give a code. Try again in a moment.");
-  return { deviceCode: body.deviceCode, userCode: body.userCode, verificationUrl: body.verificationUrl, expiresIn: Number(body.expiresIn) || 600, interval: Math.max(1, Number(body.interval) || 2) };
+  return { deviceCode: body.deviceCode, userCode: body.userCode, verificationUrl: body.verificationUrl, expiresIn: Number(body.expiresIn) || 600 };
 }
 
-/** Asks whether the person has approved yet. A server that says "too often" is simply asked again later. */
-export async function pollDevice(send: typeof fetch, server: string, deviceCode: string): Promise<DevicePoll> {
-  const res = await ask(send, server, "/api/account/device/token", { method: "POST", headers: json, body: JSON.stringify({ deviceCode }) });
-  if (res.status === 400 || res.status === 429) return { state: "pending" };
+export async function awaitDevice(send: typeof fetch, server: string, deviceCode: string, signal: AbortSignal): Promise<DeviceAnswer> {
+  const res = await ask(send, server, "/api/account/device/token", { method: "POST", headers: json, body: JSON.stringify({ deviceCode }), signal });
   if (res.status === 403) return { state: "denied" };
   if (res.status === 410) return { state: "expired" };
   if (!res.ok) throw await problem(res);
-  const body = await res.json() as { user?: { email?: string }; token?: string };
-  if (typeof body.token !== "string") throw new AccountError("The server did not give a sign-in. Try again in a moment.");
-  return { state: "approved", account: { server: base(server), token: body.token, email: body.user?.email ?? "your account" } };
+  let heard = "";
+  const decoder = new TextDecoder();
+  try {
+    const reader = res.body?.getReader();
+    for (let chunk = await reader?.read(); chunk && !chunk.done; chunk = await reader!.read()) {
+      heard += decoder.decode(chunk.value, { stream: true });
+      let end: number;
+      while ((end = heard.indexOf("\n")) >= 0) {
+        const line = heard.slice(0, end).trim();
+        heard = heard.slice(end + 1);
+        if (!line.startsWith("data:")) continue;
+        const told = JSON.parse(line.slice(5)) as { ev?: string; user?: { email?: string }; token?: unknown };
+        if (told.ev === "denied" || told.ev === "expired") return { state: told.ev };
+        if (told.ev === "approved" && typeof told.token === "string") return { state: "approved", account: { server: base(server), token: told.token, email: told.user?.email ?? "your account" } };
+      }
+    }
+  } catch { return { state: "lost" }; }
+  return { state: "lost" };
 }
 
 /** Tells the account this computer is one of its computers, with the secret a signed-in page needs to reach it through the relay. */

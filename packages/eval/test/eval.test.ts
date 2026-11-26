@@ -3,8 +3,8 @@ import { gitEnv } from "../../engine/src/git-env.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { asksAboutProgram } from "../../engine/src/prompt.ts";
-import { applySolution, check, findBash, shell, loadTask, loadTasks, planKept, prepare, protectedHashes, repoFiles, runTask, solutionFiles, summarize, validateTask, type Task, type TaskResult } from "../src/index.ts";
+import { applySolution, check, findBash, leftovers, shell, loadTask, loadTasks, planKept, prepare, protectedHashes, repoFiles, runTask, solutionFiles, summarize, validateTask, type Task, type TaskResult } from "../src/index.ts";
+import { killProcesses } from "../src/workspace.ts";
 import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
 const TASKS = join(import.meta.dir, "../tasks");
@@ -51,10 +51,6 @@ describe("the task set", () => {
       expect(good.ok).toBe(true);
       expect(existsSync(join(dir, "config.ini"))).toBe(true);
     } finally { rmSync(dir, { recursive: true, force: true }); }
-  });
-
-  test("no task asks about the program itself, so none is sent the long reference about it (a path such as src/age.ts is not a command)", () => {
-    for (const t of tasks) expect(asksAboutProgram(t.prompt), t.id).toBe(false);
   });
 
   test("a task filter selects, and an unknown id is an error", () => {
@@ -118,6 +114,20 @@ describe.skipIf(findBash() === undefined)("validating a task", () => {
   test("a solution that changes a protected file, or whose script fails, is refused", async () => {
     expect((await validateTask(made({ check: "test -f done", protect: ["keep/**"] }, { "keep/t": "x" }, { "keep/t": "y", "done": "" }))).problems).toEqual(["the solution changes protected files"]);
     expect((await validateTask(made({ check: "test -f done" }, { "a": "x" }, { "apply.sh": "echo broken >&2; exit 3\n" }))).problems[0]).toContain("apply.sh failed: broken");
+  });
+  test("a check that fails after the solution says what it printed last", async () => {
+    expect((await validateTask(made({ check: 'test -f done && echo "the answer is wrong" >&2; false' }, { "a": "x" }, { "done": "" }))).problems).toEqual(["fails with its solution: the answer is wrong"]);
+  });
+  // A port a server binds later must be one nobody is given in between: no port 0 and no connection of any program takes one below the system's own range.
+  test.each(["term-wait-for-server", "term-port-in-use"])("%s: the port its setup names for a later server is below the range the system hands out by itself", async (id) => {
+    const task = loadTask(join(TASKS, id));
+    const dir = prepare(task);
+    try {
+      expect((await shell(dir, task.setup!)).ok).toBe(true);
+      const port = Number(readFileSync(join(dir, "port.txt"), "utf8"));
+      expect(port).toBeGreaterThanOrEqual(20_000);
+      expect(port).toBeLessThan(30_000);
+    } finally { killProcesses(leftovers(dir)); await removeTree(dir); }
   });
   test("a task whose program is missing here is skipped, not failed", async () => {
     expect(await validateTask(made({ requires: ["navvied-no-such-program"] }, { "a": "x" }, { "a": "y" }))).toEqual({ task: "made", status: "skipped", problems: ["needs navvied-no-such-program"] });

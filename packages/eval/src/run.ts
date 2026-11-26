@@ -1,13 +1,14 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { gitEnv } from "../../engine/src/git-env.ts";
 import { join } from "node:path";
 import { LineSplitter, parseEvent, type PlanEntry } from "@navvied/protocol";
 import type { Adapter } from "./adapter.ts";
+import { secretsOf, snapshot, without, writeKept } from "./kept.ts";
 import { instantiate } from "./adapter.ts";
-import { watchMemory } from "./memory.ts";
+import { watchMemory, type MemoryPeak } from "./memory.ts";
 import type { Meter } from "./meter.ts";
 import type { Task } from "./task.ts";
-import { FIXTURES, check, killProcesses, leftovers, missingPrograms, newSecret, prepare, protectedHashes, agentConfig, scriptEnv, shell, taskEnv, taskPrompt } from "./workspace.ts";
+import { FIXTURES, mediaEnv, trustSkills, check, killProcesses, leftovers, missingPrograms, newSecret, prepare, protectedChanged, protectedHashes, agentConfig, scriptEnv, shell, taskEnv, taskPrompt } from "./workspace.ts";
 
 export interface RunOptions {
   /** The program that runs a task, as an argument list (for example `["bun", "packages/cli/src/main.ts"]`). */
@@ -23,10 +24,16 @@ export interface RunOptions {
   agentEnv?: (baseUrl: string) => Record<string, string>;
   /** Another agent, described as data (see adapter.ts): started with its own command instead of ours. */
   agent?: Adapter;
+  /** The engines of the media tools as installed on this computer (see media-cache.ts), given to the tasks that use them in place of the stand-ins. */
+  media?: Record<string, unknown>;
   /** The key the agent is given for the counter, where it takes one. */
   key?: string;
   /** A folder to keep what the agent printed (its events) and what it said on its error output, one pair of files per run, for reading why a run went as it did. A key is cut out of it. */
   trace?: string;
+  /** What the files of the trace are called, where one task is run for more than one prompt (the file of a later run would replace the earlier one). */
+  traceName?: string;
+  /** A folder for what is kept of a run that did not solve its task, one folder per run (see kept.ts). */
+  keepFailed?: string;
 }
 
 /** How the agent misused the terminal: calls the tools refused as wrong, waits that only polled, and a `cd` put in front of a command that could have used `cwd`. */
@@ -107,8 +114,7 @@ export interface TaskResult {
   waitedMs?: number;
   /** From the start of the agent to its first request to the model. */
   firstRequestMs?: number;
-  /** For a run that did not solve the task: what the agent last said, the steps it took, and the tail of what the check printed. */
-  why?: { said: string; steps: string[]; check: string };
+  why?: { said: string; steps: string[]; printed: string[]; check: string; changes?: string };
   /** When the time ran out: whether the check passed all the same (the task was done, the agent was still waiting for its last answer). */
   checkedAtTimeout?: boolean;
   /** How the agent misused the terminal tools (ours only: another agent is measured from outside). */
@@ -117,6 +123,10 @@ export interface TaskResult {
   web?: WebUse;
   /** The calls the model made, by tool, and the calls scripts made from inside the code tool (shown under it, not counted in `toolCalls`). */
   tools?: Record<string, number>;
+  /** The addresses the agent asked the web tool for, each with how it ended (an error shows its first words): what a page that was "not found" was asked for. */
+  fetched?: { url: string; ended: string }[];
+  /** What the agent said in words at the end (the last 3000 characters of what it wrote), for the lane that judges what it told the person. */
+  said?: string;
   nestedCalls?: number;
   /** How many requests the model answered with a server error or not at all. */
   modelErrors?: number;
@@ -129,9 +139,14 @@ export interface TaskResult {
   peakTreeMb?: number;
   error?: string;
   workspace?: string;
+  /** The folder with this run's workspace and what its check needs, for a run that did not solve its task. */
+  kept?: string;
 }
 
-interface Metrics { tools?: Record<string, number>; nested?: number; /** Every task list the agent sent. */ plans?: PlanEntry[][]; misuse?: Misuse; web?: WebUse; modelCalls: number; toolCalls: number; outTokens: number; peakContext: number; error?: string; /** What the agent said in its last turn. */ said?: string; /** The tools it used, in order, with how each ended. */ steps?: string[] }
+const PRINTED_CALLS = 3;
+const PRINTED_CHARS = 400;
+
+interface Metrics { printed?: string[]; answer?: string; fetched?: { url: string; ended: string }[]; tools?: Record<string, number>; nested?: number; /** Every task list the agent sent. */ plans?: PlanEntry[][]; misuse?: Misuse; web?: WebUse; modelCalls: number; toolCalls: number; outTokens: number; peakContext: number; error?: string; /** What the agent said in its last turn. */ said?: string; /** The tools it used, in order, with how each ended. */ steps?: string[] }
 
 export function measure(stdout: string, known = ""): Metrics {
   const m: Metrics = { modelCalls: 0, toolCalls: 0, outTokens: 0, peakContext: 0 };
@@ -145,17 +160,30 @@ export function measure(stdout: string, known = ""): Metrics {
     if (e.ev === "usage") { m.modelCalls += 1; m.outTokens += e.out; m.peakContext = Math.max(m.peakContext, e.ctx); }
     else if (e.ev === "tool" && e.parent) { if (names.get(e.parent) === CODE_TOOL && !seenNested.has(e.id)) { seenNested.add(e.id); m.nested = (m.nested ?? 0) + 1; } }
     else if (e.ev === "tool") {
+      m.answer = "";
       if (!seenTools.has(e.id)) { seenTools.add(e.id); names.set(e.id, e.name); m.toolCalls += 1; m.tools = { ...m.tools, [e.name]: (m.tools?.[e.name] ?? 0) + 1 }; }
       if (e.input !== undefined) inputs.set(e.id, e.input);
       if (e.status !== "running") { (m.steps ??= []).push(e.status === "error" ? `${e.name}:error: ${(e.output ?? "").split("\n")[0]!.slice(0, 160)}` : `${e.name}:${e.status}`); ended.push({ name: e.name, status: e.status, input: inputs.get(e.id), ...(e.output !== undefined ? { output: e.output } : {}) }); }
     }
     else if (e.ev === "plan") (m.plans ??= []).push(e.entries);
     else if (e.ev === "error" && !m.error) m.error = e.msg;
-    else if (e.ev === "text") m.said = `${m.said ?? ""}${e.text}`;
+    else if (e.ev === "text") { m.said = `${m.said ?? ""}${e.text}`; m.answer = `${m.answer ?? ""}${e.text}`; }
   }
   m.misuse = misuseOf(ended);
+  if (ended.length) m.printed = ended.slice(-PRINTED_CALLS).map((s) => `${s.name}: ${(s.output ?? "").slice(-PRINTED_CHARS)}`);
   if (ended.some((s) => WEB_TOOLS.has(s.name))) m.web = webOf(ended, known);
+  const fetched = ended.filter((s) => s.name === "WebFetch").slice(0, 20).map((s) => ({ url: String((s.input as { url?: unknown } | undefined)?.url ?? "").slice(0, 200), ended: s.status === "error" ? (s.output ?? "").slice(0, 60) : s.status }));
+  if (fetched.length) m.fetched = fetched;
   return m;
+}
+
+/** The files the agent wrote or changed in the workspace (not what the harness keeps there), each with its first 200 characters: what a check that failed was looking at. */
+export function changesOf(dir: string): string {
+  const listed = Bun.spawnSync(["git", "status", "--porcelain", "-uall"], { cwd: dir, env: gitEnv(), stdout: "pipe", stderr: "ignore" }).stdout.toString();
+  const files = listed.split("\n").filter(Boolean).map((l) => l.slice(3)).filter((f) => !f.startsWith(".bench-") && !f.startsWith(".state/")).slice(0, 6);
+  return files.map((f) => {
+    try { return statSync(join(dir, f)).size > 20_000 ? `${f}: (large)` : `${f}: ${JSON.stringify(readFileSync(join(dir, f), "utf8").slice(0, 200))}`; } catch { return `${f}: (not a file)`; }
+  }).join("\n");
 }
 
 const about = (t: Task): Pick<TaskResult, "kind" | "level" | "lang"> => ({ kind: t.kind, level: t.level, lang: t.lang });
@@ -166,13 +194,14 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
   const missing = missingPrograms(task);
   if (missing.length) return { ...about(task), task: task.id, model, passed: false, reason: "skipped", error: `needs ${missing.join(", ")}`, ...none };
   const secret = { BENCH_SECRET: newSecret() };
+  const scripts = scriptEnv({ ...secret, ...mediaEnv(opts.media) });
   const dir = prepare(task);
   if (task.setup) {
-    const setup = await shell(dir, task.setup, scriptEnv(secret));
+    const setup = await shell(dir, task.setup, scripts);
     if (!setup.ok) { killProcesses(leftovers(dir)); rmSync(dir, { recursive: true, force: true }); return { ...about(task), task: task.id, model, passed: false, reason: "setup failed", error: setup.output.trim().split("\n").at(-1)?.slice(0, 300) ?? "", ...none }; }
   }
   const before = protectedHashes(dir, task.protect);
-  const config = agentConfig(task, dir);
+  const config = agentConfig(task, dir, opts.media);
   const prompt = taskPrompt(dir, task);
   const started = Date.now();
   const [program, ...base] = task.runner ? [process.execPath, join(FIXTURES, task.runner)] : opts.command;
@@ -180,45 +209,66 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
   const counted = opts.meter && opts.agentEnv ? opts.agentEnv(opts.meter.url(runId)) : {};
   // Another agent is started as its file says, in the workspace; ours is started with its own `run`.
   const other = opts.agent ? instantiate(opts.agent, { prompt, dir, ...(opts.model ? { model: opts.model } : {}), ...(opts.meter && opts.agent.pointable ? { baseUrl: opts.meter.url(runId) } : {}), ...(opts.key ? { key: opts.key } : {}) }) : undefined;
-  const proc = Bun.spawn(
-    other ? other.argv : [program!, ...base, "run", prompt, "--cwd", dir, "--json", "--mode", "auto", "--max-steps", String(task.maxSteps), ...(task.answers ? ["--answers", JSON.stringify(task.answers)] : []), ...(opts.model ? ["--model", opts.model] : [])],
-    { cwd: dir, env: { ...gitEnv(), ...secret, NAVVIED_TERMINAL_ENV: "BENCH_SECRET", ...opts.env, ...config.env, ...taskEnv(dir, task), ...counted, ...other?.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
-  );
-  const memory = watchMemory(proc.pid);
-  let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; proc.kill("SIGKILL"); }, task.timeoutSeconds * 1000);
-  const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-  const exitCode = await proc.exited;
+  // What the person said, message by message: other days' conversations first (each its own), then the task, then what follows it in the same conversation.
+  const same = crypto.randomUUID();
+  const said = other ? [{ text: prompt }] : [...(task.earlier ?? []).map((text) => ({ text, session: crypto.randomUUID() })), { text: prompt, ...(task.then?.length ? { session: same } : {}) }, ...(task.then ?? []).map((text) => ({ text, session: same }))];
+  const env = { ...gitEnv(), ...secret, NAVVIED_TERMINAL_ENV: "BENCH_SECRET", ...opts.env, ...config.env, ...taskEnv(dir, task), ...counted, ...other?.env };
+  if (task.trust) trustSkills(dir, env);
+  let timedOut = false, current: ReturnType<typeof Bun.spawn> | undefined;
+  const timer = setTimeout(() => { timedOut = true; current?.kill("SIGKILL"); }, task.timeoutSeconds * 1000);
+  let stdout = "", stderr = "", exitCode: number | null = null;
+  const peaks: (ReturnType<ReturnType<typeof watchMemory>["stop"]>)[] = [];
+  for (const turn of said) {
+    if (timedOut) break;
+    const proc = Bun.spawn(
+      other ? other.argv : [program!, ...base, "run", turn.text, "--cwd", dir, "--json", "--mode", "auto", "--max-steps", String(task.maxSteps), ...(task.answers ? ["--answers", JSON.stringify(task.answers)] : []), ...(opts.model ? ["--model", opts.model] : []), ...("session" in turn ? ["--session", turn.session!] : [])],
+      { cwd: dir, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+    );
+    current = proc;
+    const memory = watchMemory(proc.pid);
+    const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    exitCode = await proc.exited;
+    peaks.push(memory.stop());
+    stdout += out;
+    stderr += err;
+    if (exitCode !== 0) break;
+  }
   config.remove();
+  // A secret the agent was given never reaches a result, a trace or a kept folder, whatever the agent or the model printed.
+  const secrets = secretsOf([opts.env?.NAVVIED_API_KEY, opts.key], process.env, opts.env ?? {});
+  const clean = without(secrets);
   if (opts.trace) {
-    const hide = [opts.env?.NAVVIED_API_KEY, opts.key].filter((k): k is string => !!k && k.length >= 8 && k !== "none");
-    const clean = (t: string): string => hide.reduce((x, k) => x.split(k).join("[key]"), t);
     mkdirSync(opts.trace, { recursive: true });
-    writeFileSync(join(opts.trace, `${task.id}.events.jsonl`), clean(stdout));
-    writeFileSync(join(opts.trace, `${task.id}.stderr.txt`), clean(stderr));
+    writeFileSync(join(opts.trace, `${opts.traceName ?? task.id}.events.jsonl`), clean(stdout));
+    writeFileSync(join(opts.trace, `${opts.traceName ?? task.id}.stderr.txt`), clean(stderr));
   }
   clearTimeout(timer);
   // What the agent printed is left in the workspace for the check: a task about a secret asserts that it is in no event.
   writeFileSync(join(dir, ".bench-events.jsonl"), stdout);
-  const peak = memory.stop();
+  const peak = peaks.reduce<MemoryPeak | undefined>((a, p) => (p ? { agentMb: Math.max(a?.agentMb ?? 0, p.agentMb), treeMb: Math.max(a?.treeMb ?? 0, p.treeMb) } : a), undefined);
   const hits = opts.meter ? await opts.meter.take(runId) : [];
 
   const ms = Date.now() - started;
   // What an agent says about itself is read only for ours: another agent is measured from outside.
   const metrics = opts.agent ? { modelCalls: 0, toolCalls: 0, outTokens: 0, peakContext: 0 } as Metrics : measure(stdout, `${prompt}\n${["docs-url.txt", "addresses.txt"].map((f) => { try { return readFileSync(join(dir, f), "utf8"); } catch { return ""; } }).join("\n")}`);
   const after = protectedHashes(dir, task.protect);
-  const tampered = JSON.stringify(Object.entries(before).sort()) !== JSON.stringify(Object.entries(after).sort());
+  const tampered = protectedChanged(before, after, task.mayAdd);
+  // Read before the check, which may write in the workspace: what is kept is what the check was given.
+  const copy = opts.keepFailed ? snapshot(dir, secrets) : undefined;
   // The check is made also when time ran out: an agent that had done the task and was only waiting for its last answer is told apart.
-  const result = await check(dir, task, 120_000, scriptEnv(secret));
+  const finalAnswer = without(secrets)(metrics.answer ?? "");
+  const result = await check(dir, task, 120_000, scripts, finalAnswer);
   const left = leftovers(dir);
   killProcesses(left);
-  if (task.teardown) await shell(dir, task.teardown, scriptEnv(secret)).catch(() => undefined);
+  if (task.teardown) await shell(dir, task.teardown, scripts).catch(() => undefined);
 
   const reason: TaskResult["reason"] = timedOut ? "timeout" : tampered ? "protected files changed" : !result?.ok ? (exitCode !== 0 && exitCode !== null ? "agent failed" : "check failed") : left.length ? "left a process running" : task.plan && !opts.agent && planKept(metrics.plans ?? []) ? "task list not kept" : "solved";
   const error = metrics.error ?? (reason === "agent failed" ? stderr.trim().split("\n").at(-1) : reason === "task list not kept" ? planKept(metrics.plans ?? []) : undefined);
-  // A secret the agent was given never reaches a result, whatever the agent or the model printed.
-  const secrets = [opts.env?.NAVVIED_API_KEY, opts.key].filter((k): k is string => !!k && k.length >= 8 && k !== "none");
-  const clean = (text: string): string => secrets.reduce((t, k) => t.split(k).join("[key]"), text);
+  // Named after the prompt or the task, with the run's own ending: a repeat keeps its own folder.
+  const kept = copy && reason !== "solved" ? join(opts.keepFailed!, `${opts.traceName ?? task.id}${runId.slice(task.id.length)}`) : undefined;
+  // A copy that cannot be written (a full disk) is said, and never costs the result of the run.
+  let keptError: string | undefined;
+  if (kept) try { writeKept(kept, copy!, { task: task.id, reason, check: task.check, answer: finalAnswer }, secret.BENCH_SECRET); } catch (e) { keptError = clean(e instanceof Error ? e.message : String(e)); process.stderr.write(`not kept: ${keptError}\n`); }
   const out: TaskResult = {
     ...about(task), task: task.id, model, passed: reason === "solved", reason, ms,
     modelCalls: hits.length || metrics.modelCalls, toolCalls: metrics.toolCalls, outTokens: hits.length ? hits.reduce((n, h) => n + h.outTokens, 0) : metrics.outTokens, peakContext: metrics.peakContext, exitCode,
@@ -228,14 +278,17 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
       prompt: { systemChars: hits[0]!.systemChars, tools: hits[0]!.tools, toolChars: hits[0]!.toolChars, requestBytes: hits[0]!.requestBytes },
     } : {}),
     ...(timedOut ? { checkedAtTimeout: result.ok } : {}),
+    ...(metrics.said ? { said: clean(metrics.said).slice(-3000) } : {}),
     ...(metrics.tools ? { tools: metrics.tools } : {}),
     ...(metrics.nested ? { nestedCalls: metrics.nested } : {}),
     ...(metrics.misuse ? { misuse: metrics.misuse } : {}),
     ...(metrics.web ? { web: metrics.web } : {}),
+    ...(metrics.fetched ? { fetched: metrics.fetched } : {}),
     ...(peak ? { peakMb: peak.agentMb, peakTreeMb: peak.treeMb } : {}),
-    ...(reason !== "solved" ? { why: { said: clean(metrics.said ?? "").slice(-300), steps: (metrics.steps ?? []).slice(0, 40), check: clean(result?.output ?? "").slice(-400) } } : {}),
+    ...(reason !== "solved" ? { why: { said: clean(metrics.said ?? "").slice(-300), steps: (metrics.steps ?? []).slice(0, 40), printed: (metrics.printed ?? []).map(clean), check: clean(result?.output ?? "").slice(-400), changes: clean(changesOf(dir)) } } : {}),
     ...(error ? { error: clean(error).slice(0, 300) } : {}),
     ...(opts.keep ? { workspace: dir } : {}),
+    ...(kept && !keptError ? { kept } : {}),
   };
   if (!opts.keep) rmSync(dir, { recursive: true, force: true });
   return out;

@@ -19,7 +19,6 @@ export function shortPath(path: string, cwd: string): string {
   return home ? `~/${p.slice(home[0].length)}` : p;
 }
 
-/** The page a browser step is about, the way the web page words it: "example.com/pricing". */
 const pageOf = (url: string): string => { try { const u = new URL(url); return `${u.host}${u.pathname === "/" ? "" : u.pathname}`; } catch { return url; } };
 
 const BROWSER: Record<string, [string, string]> = {
@@ -28,7 +27,6 @@ const BROWSER: Record<string, [string, string]> = {
   dialog: ["Answering a dialog", "Answered a dialog"], upload: ["Filling in a form", "Filled in a form"], wait: ["Waiting for the page", "Waited for the page"],
 };
 
-/** `app` is the application the last look at the screen named: a click or a key names no app of its own. */
 export function describeStep(name: string, input: unknown, cwd: string, app = ""): Step {
   const a = (typeof input === "object" && input !== null ? input : {}) as Input;
   const file = shortPath(str(a.file_path), cwd);

@@ -4,6 +4,9 @@ import { applySolution, check, killProcesses, leftovers, missingPrograms, newSec
 
 export interface Validation { task: string; status: "ok" | "fail" | "skipped"; problems: string[] }
 
+/** A problem with the last line the script printed: what names the cause of a failure that does not happen again. */
+const withLast = (problem: string, output: string): string => { const last = output.trim().split("\n").at(-1); return last ? `${problem}: ${last}` : problem; };
+
 /**
  * A task is fit to measure with when it fails untouched, passes with its reference solution, the solution leaves the protected files
  * alone and leaves nothing running. A task that needs a program this computer lacks is skipped, never failed.
@@ -15,13 +18,14 @@ export async function validateTask(task: Task): Promise<Validation> {
   const dir = prepare(task);
   const problems: string[] = [];
   try {
-    if (task.setup) { const r = await shell(dir, task.setup, env); if (!r.ok) problems.push(`its setup fails: ${r.output.trim().split("\n").at(-1) ?? ""}`); }
+    if (task.setup) { const r = await shell(dir, task.setup, env); if (!r.ok) problems.push(withLast("its setup fails", r.output)); }
     if (!problems.length) {
       const before = protectedHashes(dir, task.protect);
-      if ((await check(dir, task, 120_000, env)).ok) problems.push("passes before any change");
+      if (!task.idle && (await check(dir, task, 120_000, env)).ok) problems.push("passes before any change");
       try { await applySolution(dir, task, env); } catch (e) { problems.push(e instanceof Error ? e.message : String(e)); }
       if (!problems.length) {
-        if (!(await check(dir, task, 120_000, env)).ok) problems.push("fails with its solution");
+        const solved = await check(dir, task, 120_000, env);
+        if (!solved.ok) problems.push(withLast("fails with its solution", solved.output));
         if (JSON.stringify(Object.entries(before).sort()) !== JSON.stringify(Object.entries(protectedHashes(dir, task.protect)).sort())) problems.push("the solution changes protected files");
         const left = leftovers(dir);
         if (left.length) problems.push("the solution leaves a process running");

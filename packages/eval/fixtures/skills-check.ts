@@ -22,14 +22,25 @@ switch (what) {
     ok = notes.length === 2 && notes.some((n) => n.id === "k1a002" && n.text === "Indent with tabs") && notes.some((n) => n.text.includes("beta.example.test")) && !notes.some((n) => n.text.includes("alpha.example.test"));
     break;
   }
+  case "replaced-said": {
+    // For a prompt that gave the new command and not the sentence of the note: the corrected note holds the new command, the others are as they were.
+    const notes = parseEntries(readFileSync(".navvied/memory.md", "utf8"));
+    ok = notes.length === 3 && !!notes.find((n) => n.id === "k3a002")?.text.includes("bun test --timeout 30000") && notes.find((n) => n.id === "k3a001")?.text === "The api lives in src/api" && notes.find((n) => n.id === "k3a003")?.origin === "user";
+    break;
+  }
   case "replaced": {
     const notes = parseEntries(readFileSync(".navvied/memory.md", "utf8"));
     ok = notes.length === 3 && notes.find((n) => n.id === "k3a002")?.text === "Run tests with bun test --timeout 30000" && notes.find((n) => n.id === "k3a001")?.text === "The api lives in src/api" && notes.find((n) => n.id === "k3a003")?.origin === "user";
     break;
   }
-  case "typo-forgotten": {
+  case "typo-forgotten":
+  case "typo-forgotten-note-optional": {
     const notes = parseEntries(readFileSync(".navvied/memory.md", "utf8"));
-    ok = notes.length === 3 && notes.some((n) => n.id === "k4a002") && notes.some((n) => n.id === "k4a003") && notes.some((n) => n.text.includes("beta.example.test")) && !notes.some((n) => n.text.includes("alpha.example.test"));
+    const names = (text: string, host: "alpha" | "beta"): boolean => text.toLowerCase().includes(`${host}.example.test`);
+    const kept = notes.some((n) => n.id === "k4a002") && notes.some((n) => n.id === "k4a003");
+    const stale = notes.some((n) => names(n.text, "alpha") && !names(n.text, "beta"));
+    const moved = notes.length === 3 && notes.some((n) => names(n.text, "beta"));
+    ok = kept && !stale && (moved || (what === "typo-forgotten-note-optional" && notes.length === 2));
     break;
   }
   case "cjk-found": {

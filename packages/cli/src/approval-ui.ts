@@ -48,7 +48,6 @@ export interface Answer { optionId: string; input?: string; pattern?: string }
 
 type Row = { choice: Choice } & ({ option: Approval["options"][number] } | { pattern: string });
 
-/** The consent to use one application on the screen, in the words of the page: the question, one line of why, and what each answer means. */
 export function screenRequest(screen: NonNullable<Approval["screen"]>): { title: string; body: string; labels: { once: string; always?: string; no: string } } {
   const app = screen.app;
   if (screen.about === "foreground") return { title: `Let navvied bring ${app} to the front?`, body: `${app} is hidden. To work in it, navvied has to show it on top of what you are doing.`, labels: { once: "Allow once", no: "Do not allow" } };
@@ -56,7 +55,6 @@ export function screenRequest(screen: NonNullable<Approval["screen"]>): { title:
   return { title: `Let navvied use ${app}?`, body: `It wants to look at the window of ${app}.`, labels: { once: "Allow for this task", always: `Always allow ${app}`, no: "Do not allow" } };
 }
 
-/** The question about one application on the screen: the options are the ones the engine offers, with the page's labels. */
 async function askScreen(io: IO, e: Approval & { screen: NonNullable<Approval["screen"]> }, deny: Answer): Promise<Answer> {
   const words = screenRequest(e.screen);
   const rows = e.options.map((o) => ({ option: o, label: o.kind === "reject_once" || o.kind === "reject_always" ? words.labels.no : o.kind === "allow_always" ? (words.labels.always ?? words.labels.once) : words.labels.once }));

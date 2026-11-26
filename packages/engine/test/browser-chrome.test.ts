@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { QuestionItem } from "@navvied/protocol";
@@ -300,11 +300,21 @@ describe.skipIf(!chrome)("every connection the browser makes is looked at, WebSo
   }, 30_000);
 });
 
+/** The processes of every browser whose profile is under `under` (stop() relies on this mark reaching all a browser starts). */
+const processesOf = (under: string): { pid: number; group: number }[] => readdirSync("/proc").flatMap((name) => {
+  try {
+    if (!readFileSync(`/proc/${name}/environ`, "utf8").includes(`NAVVIED_BROWSER_PROFILE=${under}/`)) return [];
+    const stat = readFileSync(`/proc/${name}/stat`, "utf8"), f = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return "ZXx".includes(f[0]!) ? [] : [{ pid: Number(name), group: Number(f[2]) }];
+  } catch { return []; }
+});
+
+// What this Chrome still asks for by itself after every switch that turns its background traffic off was tried (the component updater, the
+// list of signed-in accounts, the eligibility of its search-box assistant): none has a switch of its own in this version. A host that is
+// not in this list is new traffic, and fails here.
+const OWN = ["update.googleapis.com", "accounts.google.com", "www.google.com"];
+
 describe.skipIf(!chrome)("a browser nobody has asked anything of", () => {
-  // What this Chrome still asks for by itself after every switch that turns its background traffic off was tried (the component updater, the
-  // list of signed-in accounts, the eligibility of its search-box assistant): none has a switch of its own in this version. A host that is
-  // not in this list is new traffic, and fails here.
-  const OWN = ["update.googleapis.com", "accounts.google.com", "www.google.com"];
 
   test("asks nothing of the network by itself in the first seconds, apart from the few services of its own that have no switch", async () => {
     const was = { addresses: web.addresses, dial: web.dial };
@@ -315,6 +325,61 @@ describe.skipIf(!chrome)("a browser nobody has asked anything of", () => {
     const launched = await launch(chrome!, proxy.port);
     try { await new Promise((r) => setTimeout(r, 6_000)); } finally { launched.stop(); proxy.close(); web.addresses = was.addresses; web.dial = was.dial; }
     expect([...new Set(reached)].filter((h) => !OWN.includes(h))).toEqual([]);
+  }, 60_000);
+});
+
+describe.skipIf(!chrome)("a session in which the person's page has a form", () => {
+  // The form is what makes this browser ask its vendor about the fields; the wait is longer than the moment that question is asked at.
+  test("connects to the page's own address and nothing else but the few known, and its crash handler writes only inside the browser's own folder", async () => {
+    closeBrowser();
+    const under = realpathSync(mkdtempSync(join(tmpdir(), "navvied-session-test-")));
+    const was = { tmp: process.env.TMPDIR, addresses: web.addresses, dial: web.dial };
+    const reached = new Set<string>(), databases: string[] = [];
+    // Nothing leaves this computer: a name is not looked up and only the test's own site is dialled.
+    web.addresses = async (host: string) => { reached.add(host); throw new Error("cannot be looked up"); };
+    web.dial = (address, port, socket, data) => { reached.add(address); return address === "127.0.0.1" ? was.dial(address, port, socket, data) : Promise.reject(new Error("not let out")); };
+    try {
+      process.env.TMPDIR = under;
+      const form = await run({ action: "open", url: at("form") });
+      await run({ action: "type", ref: refOf(form, /textbox "Name"/), text: "ann" });
+      await run({ action: "click", ref: refOf(form, /checkbox "Terms"/) });
+      await new Promise((r) => setTimeout(r, 4_000));
+      if (process.platform === "linux") for (const { pid } of processesOf(under)) {
+        const cmd = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+        const database = cmd.find((a) => a.startsWith("--database="));
+        if (/crashpad_handler$/.test(cmd[0]!) && database) databases.push(database.slice("--database=".length));
+      }
+      expect(databases.filter((d) => !d.startsWith(`${under}/`))).toEqual([]);
+      closeBrowser();
+      if (process.platform === "linux") expect(processesOf(under)).toEqual([]);
+      expect(databases.filter((d) => existsSync(d))).toEqual([]);
+      expect([...reached].filter((h) => h !== "127.0.0.1" && !OWN.includes(h))).toEqual([]);
+    } finally {
+      closeBrowser();
+      if (was.tmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = was.tmp;
+      web.addresses = was.addresses; web.dial = was.dial;
+      rmSync(under, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
+describe.skipIf(!chrome || process.platform !== "linux")("stopping this computer's browser", () => {
+  test("leaves none of it running when it returns, its helpers outside its process group included", async () => {
+    const under = realpathSync(mkdtempSync(join(tmpdir(), "navvied-stop-test-")));
+    const was = process.env.TMPDIR;
+    const proxy = startGuardProxy(() => false, () => undefined);
+    try {
+      process.env.TMPDIR = under;
+      const launched = await launch(chrome!, proxy.port);
+      const before = processesOf(under);
+      launched.stop();
+      expect(before.length).toBeGreaterThan(1);
+      expect(processesOf(under)).toEqual([]);
+    } finally {
+      if (was === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = was;
+      proxy.close();
+      rmSync(under, { recursive: true, force: true });
+    }
   }, 60_000);
 });
 
@@ -329,8 +394,11 @@ describe.skipIf(!chrome)("reaching more of a page", () => {
     const t0 = Date.now();
     await run({ action: "hover", ref: refOf(out, /button "Outer button"/) });
     expect(Date.now() - t0).toBeLessThan(4_000);
-    const [same, other] = allRefs(out, /button "Inner button"/);
-    expect(same).toBeDefined();
+    const buttons = allRefs(out, /button "Inner button"/);
+    // A frame read without its button was seen once and not again: what names the cause is which frame it was, what it held then, and whether a later reading has it.
+    const why = buttons.length === 2 ? "" : `the first reading:\n${out}\n\nthe same page read again:\n${await run({ action: "read" })}\n\n${await run({ action: "console" })}`;
+    expect(buttons.length, why).toBe(2);
+    const [same, other] = buttons;
     expect(other).toBeGreaterThan(same!);
     const clicked = await run({ action: "click", ref: other! });
     // The text lands under the frame of the other site, and the frame of the same site is as it was.

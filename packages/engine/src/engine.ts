@@ -41,9 +41,11 @@ import { DEFAULT_SETTING, Sandbox, type Denial, type Setting } from "./sandbox/i
 import { isConfined, profileTools } from "./profiles.ts";
 import { hardBlock, nativePaths, type Paths, type Rules } from "./rules.ts";
 import { homeFrom } from "./where.ts";
-import { asksAboutProgram, systemPrompt } from "./prompt.ts";
+import { systemPrompt } from "./prompt.ts";
 import { PLAN_TOOL_NAME, defaultTools } from "./tools/index.ts";
 import { EXECUTE_CODE_TOOL } from "./tools/execute-code.ts";
+import { PROMPTS, RESOURCES } from "./mcp-extras.ts";
+import { browserHere } from "./tools/browser.ts";
 import { COMPUTER_TOOL, computer } from "./tools/computer.ts";
 import { changedPaths, FILE_WRITERS, mapText, textOf } from "./tools/changed.ts";
 import { FileState } from "./tools/file-state.ts";
@@ -205,8 +207,13 @@ function exampleArguments(schema: Record<string, unknown>): string {
 const ALIASES: Record<string, string> = { ...WEB_ALIASES, bash: "Bash", shell: "Bash", terminal: "Bash", run: "Bash", execute_bash: "Bash", run_command: "Bash", exec: "Bash", sh: "Bash" };
 const squash = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/g, "");
 
+/** What the model is told when it ends its turn in words right after a question, with nothing done. */
+const ANSWERED = "[The person answered. Do it.]";
+const NOBODY_NOTE = "[Nobody can answer. Pick the most reasonable option, say what you assumed, and do it.]";
+/** What the model is told when it ends its turn with steps of its task list still open. */
+const TODO_OPEN = "[The task list still has open steps. Do them, or say what blocks you.]";
 /** Tools that are named in the prompt, without their definitions, when the request has not brought them in. */
-const EXTRA = new Set(["WebSearch", "WebFetch", "Agent", "Remember", "Recall", "SkillManage", "TodoWrite", "Schedule", "Transcribe", "Speak", "MakeImage", "MakeVideo", "LookAt", "Watch", COMPUTER_TOOL, ASK_AGENT_TOOL_NAME]);
+const EXTRA = new Set(["WebSearch", "WebFetch", "Agent", "Remember", "Recall", "SkillManage", "TodoWrite", "Schedule", "Transcribe", "Speak", "MakeImage", "MakeVideo", "LookAt", "Watch", "Browser", "NotebookEdit", RESOURCES, PROMPTS, COMPUTER_TOOL, ASK_AGENT_TOOL_NAME]);
 
 /** A model that runs on this computer with a window this small, or smaller, is a small one (see `smallModel`). */
 export const SMALL_WINDOW = 40_000;
@@ -295,6 +302,13 @@ export class Engine implements AgentEngine {
   /** The task list the model keeps, and the model's steps since it last touched it. */
   #todos: PlanEntry[] = [];
   #sinceTodo = 0;
+  /** The turn has already been sent back to work once (see {@link Engine.#unfinishedTurn}). */
+  #continued = false;
+  /** The model has put a question to the person in this turn (answered or not). */
+  #questioned = false;
+  /** What the last question of this turn came to (the person answered, or nobody could), and the tool calls the model has made since. */
+  #questionEnd: "none" | "answered" | "nobody" = "none";
+  #sinceAnswer = 0;
   /** Helpers at work: how many hold a place, who waits for one, and the ones started in the background (to stop them). */
   #helpersBusy = 0;
   readonly #helperQueue: (() => void)[] = [];
@@ -367,8 +381,6 @@ export class Engine implements AgentEngine {
   readonly #shell: ShellState = {};
   /** What `~` is for every tool, rule and risk of this conversation: the home of the environment the engine was given. */
   readonly #paths: Paths;
-  /** What the person had written when the first request of the conversation went out: the words that bring a tool in are read from this once, so the list does not change with every message. */
-  #opening: string | undefined;
   /** The tools offered so far in this conversation. A tool is added only by a need that is plain (a program connected, a command running, a tool switched on), never taken out, so the list the model gets, and the prompt's prefix with it, stays as it was. */
   readonly #offered = new Set<string>();
   readonly #closing = new AbortController();
@@ -756,7 +768,7 @@ export class Engine implements AgentEngine {
     const saved = this.#o.store?.load(id);
     if (!saved) { this.#emit({ ev: "error", msg: "That session was not found." }); return; }
     this.#messages = saved;
-    this.#opening = undefined; this.#offered.clear();
+    this.#offered.clear();
     this.#restoreTodos();
     this.sessionId = id;
     this.#emit({ ev: "loaded", id, items: historyOf(saved) });
@@ -844,7 +856,7 @@ export class Engine implements AgentEngine {
 
   #take(q: Queued, startsTurn = false): void {
     for (const v of secretsIn(q.text)) this.#typed.add(v);
-    if (startsTurn) { this.#codeOffer.begin(q.text); this.#asked = 0; this.#mcpAnswers.newTurn(); this.#outside.reset(); this.#outside.say(q.text); if (this.#o.outside === true) this.#outside.note(""); this.#turnQid = q.qid; this.#turnTokens = { in: 0, out: 0, calls: 0 }; }
+    if (startsTurn) { this.#codeOffer.begin(q.text); this.#asked = 0; this.#continued = false; this.#questioned = false; this.#questionEnd = "none"; this.#sinceAnswer = 0; this.#mcpAnswers.newTurn(); this.#outside.reset(); this.#outside.say(q.text); if (this.#o.outside === true) this.#outside.note(""); this.#turnQid = q.qid; this.#turnTokens = { in: 0, out: 0, calls: 0 }; }
     if (startsTurn && this.#kind === "agent") this.#checkpoint = attempt(() => this.#o.checkpoints?.begin(q.text || "Message", [this.#o.cwd, ...this.#written]));
     if (q.qid) {
       this.#emit({ ev: "user", qid: q.qid, text: q.text, ...(q.images.length ? { images: q.images.length } : {}), ...(q.files?.length ? { files: q.files } : {}), ...(q.from ? { from: q.from } : {}) });
@@ -895,9 +907,17 @@ export class Engine implements AgentEngine {
     return !m ? "" : typeof m.content === "string" ? m.content : (m.content ?? []).map((p) => (p.type === "text" ? p.text : "")).join(" ");
   }
 
-  /** Everything the person has written so far, to decide which tools are worth offering. */
-  #userText(): string {
-    return this.#messages.filter((m) => m.role === "user").map((m) => (typeof m.content === "string" ? m.content : (m.content ?? []).map((p) => (p.type === "text" ? p.text : "")).join(" "))).join("\n");
+  /**
+   * What a turn that is ending in words is told so that it goes on, if anything: at most once per turn whatever the reason, and never when
+   * the person stopped it or wrote to it, or in plan mode. The reasons, in order:
+   * the model's own task list was left open (a model that wrote its plan and then asked for leave to start);
+   * it put a question, got its answer (or was told nobody could answer), and called no tool afterwards: it offered to do what it was asked.
+   */
+  #unfinishedTurn(): string | undefined {
+    if (this.#continued || this.#cancelled || this.#mode === "plan" || this.#queue.length) return undefined;
+    if (!this.#questioned && this.#todos.some((e) => e.status !== "completed")) return TODO_OPEN;
+    if (this.#questionEnd !== "none" && this.#sinceAnswer === 0) return this.#questionEnd === "answered" ? ANSWERED : NOBODY_NOTE;
+    return undefined;
   }
 
   async #steps(): Promise<void> {
@@ -910,8 +930,7 @@ export class Engine implements AgentEngine {
 
       const small = this.#small;
       const skills = modelSkills(attempt(() => this.#o.skills?.()) ?? []);
-      this.#opening ??= this.#userText();
-      for (const t of offeredIn(this.#on, { small, userText: this.#opening, jobs: this.#jobs.running, chat: this.#kind === "chat", typable: this.#jobs.typable, skills: skills.length, recall: (this.#o.recall?.recent(1).length ?? 0) > 0, memory: this.#o.memory !== undefined, schedule: this.#o.schedule !== undefined, computer: this.#computer !== undefined, code: this.#codeOffer.offered })) this.#offered.add(t.name);
+      for (const t of offeredIn(this.#on, { small, jobs: this.#jobs.running, chat: this.#kind === "chat", typable: this.#jobs.typable, skills: skills.length, recall: (this.#o.recall?.recent(1).length ?? 0) > 0, memory: this.#o.memory !== undefined, schedule: this.#o.schedule !== undefined, skillBook: this.#o.skillBook !== undefined, computer: this.#computer !== undefined, code: this.#codeOffer.offered })) this.#offered.add(t.name);
       // The ones that are not offered are named in the prompt, and a call to one of them is run, not refused: the words that bring a tool
       // in (the web, a helper) are a guess about the request, and a guess can be wrong.
       const allowedNow = (t: Tool): boolean => this.#mode !== "plan" || t.readOnly || t.inPlan === true;
@@ -919,7 +938,7 @@ export class Engine implements AgentEngine {
       const news = this.#jobs.news();
       const finished = news.flatMap(jobLines);
       // Named only where they can work: earlier conversations, and skills the agent may change, exist only in some places.
-      const usable = (t: Tool): boolean => (t.name === "Recall" ? this.#o.recall !== undefined : t.name === "Remember" ? this.#o.memory !== undefined : t.name === "SkillManage" ? this.#o.skillBook !== undefined && this.#kind !== "chat" : t.name === "Schedule" ? this.#o.schedule !== undefined : t.name === COMPUTER_TOOL ? this.#computer !== undefined : true);
+      const usable = (t: Tool): boolean => (t.name === "Recall" ? this.#o.recall !== undefined : t.name === "Remember" ? this.#o.memory !== undefined : t.name === "SkillManage" ? this.#o.skillBook !== undefined && this.#kind !== "chat" : t.name === "Schedule" ? this.#o.schedule !== undefined : t.name === COMPUTER_TOOL ? this.#computer !== undefined : t.name === "Browser" ? browserHere() : true);
       const also = this.#on.filter((t) => EXTRA.has(t.name) && usable(t) && allowedNow(t) && !tools.some((o) => o.name === t.name)).map((t) => t.name);
       try { await this.#o.prepare?.({ userText: this.#lastUserText() }); } catch { /* the notes fall back to words */ }
       const instructions = attempt(() => this.#o.instructions?.({ userText: this.#lastUserText() }));
@@ -929,7 +948,7 @@ export class Engine implements AgentEngine {
       const said = (text: string): void => { if (text) { endThought(); this.#emit({ ev: "text", text }); } };
       const ask = (effort: Effort | undefined): Promise<ModelReply> => this.#provider.stream(
         {
-          system: systemPrompt({ cwd: this.#o.cwd, platform: process.platform, date: (this.#o.now?.() ?? new Date()).toISOString().slice(0, 10), ...(this.#persona ? { persona: this.#persona } : {}), ...(this.#noting.length && !this.#keptByModel ? { noted: this.#noting } : {}), ...(this.#reference && asksAboutProgram(this.#lastUserText()) ? { reference: this.#reference } : {}), tools: tools.map((t) => t.name), ...(also.length ? { also } : {}), ...(finished.length ? { finished } : {}), ...(instructions ? { instructions } : {}), ...(skills.length ? { skills: skillsPrompt(skills, small)! } : {}), small, ...(this.#kind === "chat" ? { kind: "chat" as const, sandboxed: this.#o.sandboxed === true } : {}) }, this.#mode) + (this.#noTools.has(this.#model ?? "") ? `\n\n${toolsInPrompt(tools)}` : ""),
+          system: systemPrompt({ cwd: this.#o.cwd, platform: process.platform, date: (this.#o.now?.() ?? new Date()).toISOString().slice(0, 10), ...(this.#persona ? { persona: this.#persona } : {}), ...(this.#noting.length && !this.#keptByModel ? { noted: this.#noting } : {}), ...(this.#reference ? { reference: this.#reference } : {}), tools: tools.map((t) => t.name), ...(also.length ? { also } : {}), ...(finished.length ? { finished } : {}), ...(instructions ? { instructions } : {}), ...(skills.length ? { skills: skillsPrompt(skills, small)! } : {}), small, ...(this.#kind === "chat" ? { kind: "chat" as const, sandboxed: this.#o.sandboxed === true } : {}) }, this.#mode) + (this.#noTools.has(this.#model ?? "") ? `\n\n${toolsInPrompt(tools)}` : ""),
           messages: this.#noTools.has(this.#model ?? "") ? messagesAsText(this.#messages) : this.#messages,
           tools: this.#noTools.has(this.#model ?? "") ? [] : tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
           ...(effort ? { effort } : {}),
@@ -966,10 +985,15 @@ export class Engine implements AgentEngine {
 
       if (!reply.calls.length) {
         if (this.#mode === "plan" && reply.content.trim()) this.#emit({ ev: "plan_proposal", id: `plan${this.#messages.length}` });
+        else {
+          const note = this.#unfinishedTurn();
+          if (note) { this.#continued = true; this.#messages.push({ role: "user", content: note }); continue; }
+        }
         return;
       }
       if (this.#mode === "plan" && this.#presentPlan(reply)) return;
       this.#sinceTodo++;
+      this.#sinceAnswer += reply.calls.length;
 
       // Helpers (and other tools that only read) asked for in the same step run side by side; anything that may change something runs alone and in order, because it may need an answer from the person.
       const writesLater = (c: ToolCall): boolean => { // a helper allowed to change things must not run beside another one
@@ -1046,11 +1070,14 @@ export class Engine implements AgentEngine {
 
   /** The Ask tool: the questions go to the person's window and wait; when nobody can answer, the model is told so and goes on. */
   async #askPerson(questions: QuestionItem[], signal: AbortSignal, tool: string): Promise<string> {
+    this.#questioned = true;
+    this.#sinceAnswer = 0;
+    this.#questionEnd = "nobody";
     if (!this.#canAsk()) return NOBODY_ANSWERS;
     if (this.#asked >= MOST_QUESTIONS_PER_TURN) return "You have asked enough in this turn. Decide yourself, say what you assumed, and go on.";
     this.#asked++;
     const given = await this.#question(questions, signal, tool);
-    if (given) return answersText(questions, given);
+    if (given) { this.#questionEnd = "answered"; return answersText(questions, given); }
     return signal.aborted ? "[interrupted]" : `No answer came in time. ${NOBODY_ANSWERS}`;
   }
 
@@ -1231,13 +1258,12 @@ export class Engine implements AgentEngine {
   }
 
   /**
-   * What a script running as `parent` may call: the tools the model itself was offered (the program's own and connected ones), each as its
-   * own step shown under the script's and through every check a call of the model meets. Not the script tool itself, and not a tool that
-   * is known but was not offered: a script gets no reach the model lacks.
+   * What a script running as `parent` may call: whatever the model itself may call (the tools offered, and the ones the prompt names), each as its own
+   * step shown under the script's and through every check a call of the model meets. Not the script tool itself: a script gets no reach the model lacks.
    */
   #within(parent: ToolCall, offered: Tool[]): NonNullable<ToolContext["call"]> {
     let n = 0;
-    const reachable = offered.filter((t) => t.name !== EXECUTE_CODE_TOOL);
+    const reachable = [...offered, ...this.#on.filter((t) => EXTRA.has(t.name))].filter((t, i, all) => t.name !== EXECUTE_CODE_TOOL && all.findIndex((o) => o.name === t.name) === i && this.#toolFor(t.name, offered) === t);
     return async (name, args) => {
       if (!reachable.some((t) => t.name === name)) return { ok: false, text: `Error: a script cannot call ${name || "that"}. It can call: ${reachable.map((t) => t.name).join(", ")}.` };
       let failed = false;

@@ -24,7 +24,7 @@ export function questionsOf(raw: unknown): QuestionItem[] {
 export const ask: Tool = {
   name: ASK_TOOL_NAME,
   readOnly: true,
-  description: "Ask the person 1-4 questions only when you cannot go on without the answer. Up to 4 short choices each, your recommendation first; they may answer in their own words. Decide small things yourself.",
+  description: "Ask 1-4 questions when a needed fact is missing and any answer would be a guess (a port, a name). Up to 4 short choices each, best first; they may answer in their own words. Find out the rest yourself.",
   parameters: {
     type: "object",
     properties: {

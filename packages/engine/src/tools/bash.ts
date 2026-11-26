@@ -6,7 +6,7 @@ import { localBackend } from "../backend.ts";
 import { shellFor } from "../platform.ts";
 import type { Jobs } from "../jobs.ts";
 import type { Tool, ToolContext } from "../types.ts";
-import { relative, resolve } from "node:path";
+import { delimiter, relative, resolve } from "node:path";
 import { redact } from "../redact.ts";
 import { endedIn, inside, realPath, remembering, type ShellState } from "./shell-state.ts";
 import { exitNote, maskedNote } from "./shell-notes.ts";
@@ -71,7 +71,8 @@ async function runOne(a: Record<string, unknown>, ctx: ToolContext): Promise<str
       launch = ctx.sandbox.confine(plain, { root: ctx.cwd, cwd: where.cwd, detached: a.run_in_background === true });
       return launch.confined ? launch.argv : plain;
     };
-    const scriptEnv = (): NodeJS.ProcessEnv | undefined => (hidden ? { [SCRIPT_VAR]: given } : undefined);
+    const look = (base: NodeJS.ProcessEnv): NodeJS.ProcessEnv => { const l = current(); return l.confined && l.look ? { NAVVIED_LOOK: l.look.dir, PATH: `${l.look.bin}${delimiter}${base.PATH ?? process.env.PATH ?? ""}` } : {}; };
+    const scriptEnv = (): NodeJS.ProcessEnv | undefined => { const e = { ...(hidden ? { [SCRIPT_VAR]: given } : {}), ...look(ctx.env ?? process.env) }; return Object.keys(e).length ? e : undefined; };
     const current = (): Launch => launch;
     const guarded = (): boolean => { const l = current(); return l.confined && l.guarded; };
     const withLine = (text: string): string => { const l = current().line; return l ? `${text}\n${l}` : text; };
@@ -95,7 +96,7 @@ async function runOne(a: Record<string, unknown>, ctx: ToolContext): Promise<str
     const seconds = Math.min(Math.max(1, num(a.timeout, SILENCE_SECONDS)), 600);
     let handedOn: string | undefined;
     const title = str(a.description) || command.slice(0, 80);
-    const r = await run(argv(keep !== undefined && !explicit), { cwd: where.cwd, signal: ctx.signal, idleMs: seconds * 1000, timeoutMs: 600_000, guarded: guarded(), onSpawn: (child) => { if (current().confined) child.once("exit", ctx.jobs.track(child.pid)); }, ...(hidden || ctx.env ? { env: { ...(ctx.env ?? process.env), ...scriptEnv() } } : {}), ...(ctx.live ? { onChunk: ctx.live } : {}), onTimeout: (child, printed) => { handedOn = ctx.jobs.adopt(child, title, printed).id; return true; }, onLeft: (child, code, printed) => { handedOn = ctx.jobs.adoptLeft(child, code, title, printed).id; return true; } });
+    const r = await run(argv(keep !== undefined && !explicit), { cwd: where.cwd, signal: ctx.signal, idleMs: seconds * 1000, timeoutMs: 600_000, guarded: guarded(), onSpawn: (child) => { if (current().confined) child.once("exit", ctx.jobs.track(child.pid)); }, ...(scriptEnv() || ctx.env ? { env: { ...(ctx.env ?? process.env), ...scriptEnv() } } : {}), ...(ctx.live ? { onChunk: ctx.live } : {}), onTimeout: (child, printed) => { handedOn = ctx.jobs.adopt(child, title, printed).id; return true; }, onLeft: (child, code, printed) => { handedOn = ctx.jobs.adoptLeft(child, code, title, printed).id; return true; } });
     const budget = outputBudget(ctx.window);
     const cleaned = cleanOutput(r.output);
     const full = redact(cleaned).trimEnd();

@@ -10,8 +10,6 @@ const MOST_NAME = 80;
 const ACTIONS = ["list", "create", "update", "pause", "resume", "remove", "runs", "run", "cancel"] as const;
 type Action = (typeof ACTIONS)[number];
 
-const TIMING = /\b(schedul\w*|cron|recurring|remind\w*|(?:daily|weekly|monthly|hourly|nightly)(?![-\w])|of the month|every (?:\d+ ?)?(?:minutes?|mins?|hours?|hrs?|days?|mornings?|nights?|weekdays?|mon|tue|wed|thu|fri|sat|sun)\w*|in \d+ ?(?:minutes?|mins?|hours?|hrs?|days?)|tomorrow|tonight|overnight|at \d{1,2}(?::\d{2})? ?(?:am|pm)|each (?:day|week|morning))\b/i;
-
 const stamp = (ms: number, tz?: string): string => {
   if (!tz) { const d = new Date(ms), p = (n: number): string => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())} local`; }
   const parts: Record<string, string> = {};
@@ -43,7 +41,7 @@ export const schedule: Tool = {
   name: "Schedule",
   readOnly: false,
   // Not offered to a small model: it is named in the prompt, and a call is run.
-  offeredWhen: ({ small, userText, schedule: here }) => here === true && !small && TIMING.test(userText),
+  offeredWhen: ({ small, schedule }) => !small && schedule === true,
   description: "Run a task later or on a timetable, with nobody to ask. create needs prompt and when: \"every 2h\", \"every monday 9am\", \"tomorrow at 9\" or cron. run starts a job now, cancel stops it. A job only reads and plans unless mode is auto.",
   parameters: {
     type: "object",

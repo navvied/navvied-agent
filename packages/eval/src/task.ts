@@ -3,6 +3,9 @@ import { join, relative } from "node:path";
 
 export const KINDS = ["fix", "feature", "refactor", "tests", "docs", "terminal", "web", "agent"] as const;
 export const LANGS = ["ts", "py", "sh", "c", "none"] as const;
+/** `vision` is the picture model: it has no stand-in, so it is there only when the engines are real (see media-cache.ts). */
+export const MEDIA_KINDS = ["stt", "tts", "image", "vision"] as const;
+export type MediaKind = (typeof MEDIA_KINDS)[number];
 
 export interface Task {
   id: string;
@@ -21,7 +24,9 @@ export interface Task {
   /** MCP servers the agent is given for this task: each is a program of the fixtures folder (`fixture`), started by the agent itself from its own configuration, which the harness writes for the run. */
   mcp?: Record<string, { fixture: string; /** What the program may ask of the model and of the person (see the engine's MCP configuration); left out: the defaults. */ sampling?: "ask" | "allow" | "off"; elicitation?: "ask" | "off" }>;
   /** The stand-ins for speech and picture programs (fixtures/media) the agent is configured with: `stt` hears one fixed sentence, `tts` writes the text it is given into a sound file, `image` writes a picture that says its size. */
-  media?: ("stt" | "tts" | "image")[];
+  media?: MediaKind[];
+  /** The project's skills are accepted in the agent's own state before it starts, as the person would have said yes: a skill held back is not offered to the model. */
+  trust?: true;
   /** A program of the fixtures folder that starts the agent in place of the command line, with the same arguments, for a task that gives it something a command line cannot be given from outside (a scripted screen). */
   runner?: string;
   /** Hooks the agent is given for this task, by event: each is a program of the fixtures folder (`fixture`), written into the agent's own configuration for the run. */
@@ -38,11 +43,21 @@ export interface Task {
   /** The task is done by keeping a task list: every list the agent sent has one item in progress at most, and the last has all of them completed. */
   plan?: boolean;
   /** What the scripted model does besides the solution's actions: the questions it asks, the helpers it hands research to (`says` is what the helper answers), the task list it keeps. A real model decides these itself. */
-  oracle?: { ask?: { question: string; choices?: string[] }[]; helpers?: { prompt: string; says: string }[]; plan?: string[] };
+  oracle?: { ask?: { question: string; choices?: string[] }[]; helpers?: { prompt: string; says: string }[]; plan?: string[]; /** What it answers in words when it has nothing to do: for a task whose right behaviour is to say it cannot. */ says?: string };
+  /** The right behaviour is to do nothing and say so, so the check holds before the agent starts: the validator does not ask it to fail untouched. */
+  idle?: true;
+  /** Said to the agent, each in a conversation of its own that ends before the task's prompt is given (what the person told it another day). */
+  earlier?: string[];
+  /** Said to the agent after the prompt, in the same conversation, one message after the other ("go on", "the one from before"). */
+  then?: string[];
+  /** Harmless calls the scripted model makes before the solution, so that a run is seen to use a tool the reference solution would not touch. */
+  touch?: ScriptedCall[];
   /** Shell command run in the finished workspace; exit code 0 means the task is solved. */
   check: string;
   /** Files (globs) the agent must not change, such as the tests. */
   protect: string[];
+  /** Files that may be made inside the protected folders, as the person's own words allow (compared without case): a new one is not a change of what is protected. */
+  mayAdd?: string[];
   maxSteps: number;
   timeoutSeconds: number;
   /** The calls the scripted `oracle` model makes, in place of laying down the solution's files: for a task that is about how a tool behaves. */
@@ -78,12 +93,16 @@ export function loadTask(dir: string): Task {
     ...(isString(raw.runner) ? { runner: raw.runner } : {}),
     ...(raw.env && typeof raw.env === "object" && !Array.isArray(raw.env) ? { env: Object.fromEntries(Object.entries(raw.env as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string")) } : {}),
     ...(isMcp(raw.mcp) ? { mcp: raw.mcp } : {}),
-    ...(Array.isArray(raw.media) ? { media: raw.media.filter((k): k is "stt" | "tts" | "image" => k === "stt" || k === "tts" || k === "image") } : {}),
+    ...(Array.isArray(raw.media) ? { media: raw.media.filter((k): k is MediaKind => (MEDIA_KINDS as readonly unknown[]).includes(k)) } : {}),
+    ...(raw.trust === true ? { trust: true as const } : {}),
     ...(isHooks(raw.hooks) ? { hooks: raw.hooks } : {}),
     ...(isPeers(raw.a2a) ? { a2a: raw.a2a } : {}),
     ...(isEmbeddings(raw.embeddings) ? { embeddings: raw.embeddings } : {}),
     ...(script ? { script } : {}),
     slow: raw.slow === true,
+    ...(Array.isArray(raw.touch) && raw.touch.every((c) => !!c && isString((c as ScriptedCall).tool) && typeof (c as ScriptedCall).args === "object") ? { touch: raw.touch as ScriptedCall[] } : {}),
+    ...(raw.idle === true ? { idle: true as const } : {}),
+    ...(Array.isArray(raw.earlier) ? { earlier: raw.earlier.filter(isString) } : {}),
     ...(Array.isArray(raw.answers) ? { answers: raw.answers.filter(isString) } : {}),
     ...(raw.plan === true ? { plan: true } : {}),
     ...(raw.oracle && typeof raw.oracle === "object" ? { oracle: raw.oracle as NonNullable<Task["oracle"]> } : {}),

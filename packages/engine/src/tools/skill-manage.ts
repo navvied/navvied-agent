@@ -6,7 +6,7 @@ const SCOPES = ["project", "user"];
 export const skillManage: Tool = {
   name: "SkillManage",
   readOnly: false,
-  offeredWhen: ({ chat, userText }) => chat !== true && /\b(make|create|write|save|keep|turn|add|edit|change|update|delete|remove|patch|new)\b.{0,40}\bskills?\b/i.test(userText),
+  offeredWhen: ({ small, chat, skillBook }) => !small && chat !== true && skillBook === true,
   description: "Keep what you learned about a kind of task as a skill: list, view, create (content is SKILL.md with name and description in front matter), patch (replace old with new), delete. Not for one-off notes.",
   parameters: {
     type: "object",

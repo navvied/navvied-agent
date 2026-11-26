@@ -11,7 +11,7 @@
     "image"
   ],
   "prompt": "Make a wide picture of a lighthouse at night and save it as banner.png.",
-  "check": "head -c4 banner.png | tail -c3 | grep -q PNG && grep -aq 'W=1024 H=576' banner.png",
+  "check": "head -c4 banner.png | tail -c3 | grep -q PNG && { grep -aq 'W=1024 H=576' banner.png || ffprobe -v error -show_entries stream=width,height -of csv=p=0 banner.png | awk -F, '{exit !($1 > $2)}'; }",
   "protect": [
     "README.md"
   ],

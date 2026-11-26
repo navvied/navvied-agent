@@ -1,6 +1,5 @@
 import type { ScheduleInfo, ScheduleWhen } from "./types.ts";
 
-/** The rows of "When should it run?", in the words of the page. */
 export const WHENS: readonly { label: string; hint?: string }[] = [
   { label: "Every day" }, { label: "Every weekday" }, { label: "Every week on…" }, { label: "Every month on…" }, { label: "Once at…" }, { label: "Every few minutes or hours" },
   { label: "Write it myself", hint: "For people who know the five-field form." },
@@ -18,11 +17,9 @@ export const BAD_DATE = "Use a date such as 2026-12-01.";
 export const BAD_EVERY = "Use a number such as 20 minutes or 3 hours.";
 export const PAST = "That time has passed.";
 
-/** What the person chose, one field for each question that can be asked. `kind` is the row of WHENS. */
 export interface When { kind: number; time: string; weekday: number; monthday: string; date: string; every: string; cron: string }
 export const firstWhen = (): When => ({ kind: 1, time: "9:00", weekday: 0, monthday: "1", date: "Tomorrow", every: "30 minutes", cron: "" });
 
-/** The questions after "When", in order, for a row. */
 export const subSteps = (kind: number): ("time" | "weekday" | "monthday" | "date" | "every" | "cron")[] =>
   kind <= 1 ? ["time"] : kind === 2 ? ["weekday", "time"] : kind === 3 ? ["monthday", "time"] : kind === 4 ? ["date", "time"] : kind === 5 ? ["every"] : ["cron"];
 
@@ -54,7 +51,6 @@ const parseDate = (s: string, now: number): Date | undefined => {
 };
 export const validDate = (s: string, now: number): boolean => parseDate(s, now) !== undefined;
 
-/** What `schedule.add` takes for the choices: the timing, or the sentence that says what to change. */
 export function scheduleOf(w: When, now: number): ScheduleWhen | string {
   const time = parseTime(w.time);
   if (w.kind === 6) return w.cron.trim().split(/\s+/).filter(Boolean).length === 5 ? { kind: "cron", cron: w.cron.trim().split(/\s+/).join(" ") } : BAD_CRON;
@@ -72,13 +68,11 @@ export function scheduleOf(w: When, now: number): ScheduleWhen | string {
 const clock = (h: number, m: number): string => `${h}:${String(m).padStart(2, "0")}`;
 const nth = (n: number): string => `the ${n}${n % 10 === 1 && n !== 11 ? "st" : n % 10 === 2 && n !== 12 ? "nd" : n % 10 === 3 && n !== 13 ? "rd" : "th"}`;
 
-/** How often, as a person says it: "Every 20 minutes", "Every 2 hours", "Every hour". */
 function everyWords(ms: number): string {
   const hours = ms / 3_600_000, minutes = ms / 60_000;
   return hours === 1 ? "Every hour" : Number.isInteger(hours) ? `Every ${hours} hours` : `Every ${minutes} minutes`;
 }
 
-/** A cron line in the words of the page ("Every weekday at 9:00"), or the line itself when it is not one of the ordinary ones. */
 export function cronWords(cron: string): string {
   if (cron === "@hourly" || cron === "0 * * * *") return "Every hour";
   if (cron === "@daily") return "Every day at 0:00";
@@ -96,14 +90,12 @@ export function cronWords(cron: string): string {
   return cron;
 }
 
-/** What a task's timing says, in words; `day` words one moment ("tomorrow 9:00"). */
 export function whenWords(when: ScheduleWhen, day: (ms: number) => string): string {
   return when.kind === "cron" ? cronWords(when.cron) : when.kind === "every" ? everyWords(when.ms) : `Once ${day(when.at)}`;
 }
 
 const isoDate = (ms: number): string => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 
-/** The choices that give back a task's timing, so it can be changed from where it stands. */
 export function whenOf(job: ScheduleInfo): When {
   const w = firstWhen();
   const when = job.when;

@@ -23,7 +23,7 @@ class Toolless implements Provider {
 }
 
 describe("the tools said in the prompt", () => {
-  const offered = toolsFor("auto", defaultTools(), { small: true, userText: "make a file", jobs: 0, steps: 0, chat: false, typable: false, skills: 0 } as never);
+  const offered = toolsFor("auto", defaultTools(), { small: true, jobs: 0, steps: 0, chat: false, typable: false, skills: 0 } as never);
 
   test("one line a tool, only the arguments a call must have, one example, and far less than the tool definitions", () => {
     const text = toolsInPrompt(offered);

@@ -207,6 +207,34 @@ describe("acting", () => {
   });
 });
 
+describe("typing over a selection", () => {
+  const names = (calls: { name: string; args: Record<string, unknown> }[]) => calls.map((c) => c.name === "press_key" ? `press_key:${c.args.key}` : c.name).filter((n) => !/get_window_state|list_windows/.test(n));
+  test("where the text route only inserts (Linux), a selection made by select all or a drag is deleted first, once", async () => {
+    const { adapter, calls } = make();
+    await adapter.call({ action: "capture", app: "Notes" });
+    await adapter.call({ action: "key", keys: "ctrl+a" });
+    await adapter.call({ action: "type", target: 2, text: "new" });
+    expect(names(calls)).toEqual(["hotkey", "press_key:delete", "type_text"]);
+    await adapter.call({ action: "type", target: 2, text: "more" });
+    expect(names(calls).slice(-1)).toEqual(["type_text"]);
+    expect(names(calls).length).toBe(4);
+  });
+  test("a click in between ends the selection, and the other systems are not given a delete they do not need", async () => {
+    const { adapter, calls } = make();
+    await adapter.call({ action: "capture", app: "Notes" });
+    await adapter.call({ action: "key", keys: "ctrl+a" });
+    await adapter.call({ action: "click", target: 1 });
+    await adapter.call({ action: "type", target: 2, text: "x" });
+    expect(names(calls)).toEqual(["hotkey", "click", "type_text"]);
+    const f = fake(); const guard = new Guard({ mode: () => "bypass", ownApps: [], humanHasControl: () => false });
+    const mac = new DriverAdapter({ driver: f.driver, guard, mode: { current: "bypass" }, platform: "darwin", ready: async () => ({ ok: true }) });
+    await mac.call({ action: "capture", app: "Notes" });
+    await mac.call({ action: "key", keys: "cmd+a" });
+    await mac.call({ action: "type", target: 2, text: "x" });
+    expect(names(f.calls)).toEqual(["hotkey", "type_text"]);
+  });
+});
+
 describe("what the person decides", () => {
   test("ask mode: nothing is sent until the person answers; no ends it; once allows that step only; app allows the app", async () => {
     const { adapter, calls } = make("ask");

@@ -104,6 +104,11 @@ function stepwiseRounds(task: Task, results: readonly string[]): Round[] | undef
 }
 
 function roundsFor(task: Task, behaviour: Behaviour, leaves: string, results: readonly string[]): Round[] {
+  const touch = behaviour === "oracle" || behaviour === "code" || behaviour === "leave" || behaviour === "unplanned" ? task.touch ?? [] : [];
+  return [...touch.map((step): Round => [step]), ...solutionRounds(task, behaviour, leaves, results.slice(touch.length))];
+}
+
+function solutionRounds(task: Task, behaviour: Behaviour, leaves: string, results: readonly string[]): Round[] {
   if (behaviour === "stall") behaviour = "oracle";
   if (behaviour === "lazy" || behaviour === "leak" || behaviour === "crash" || behaviour === "hang") return [];
   if (behaviour === "tamper") {
@@ -163,7 +168,7 @@ export function startMock(tasks: readonly Task[], behaviour: Behaviour | ((task:
       const completion = tokens(sent ? chars(sent.map((s) => s.args)) : 6);
       requests.push({ task: task?.id ?? "?", prompt: promptTokens, completion });
       const usage = { choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: completion } };
-      if (!round) return sse([{ choices: [{ delta: { content: helper ? helper.says : how === "lazy" ? "I looked at it and everything seems fine." : how === "leak" ? `The key I was given is ${req.headers.get("authorization") ?? "none"}.` : "done" } }] }, { choices: [{ delta: {}, finish_reason: "stop" }] }, usage]);
+      if (!round) return sse([{ choices: [{ delta: { content: helper ? helper.says : how === "lazy" ? "I looked at it and everything seems fine." : task?.oracle?.says && how !== "leak" ? task.oracle.says : how === "leak" ? `The key I was given is ${req.headers.get("authorization") ?? "none"}.` : "done" } }] }, { choices: [{ delta: {}, finish_reason: "stop" }] }, usage]);
       return sse([
         { choices: [{ delta: { tool_calls: sent!.map((step, index) => ({ index, id: `call_${results.length}_${index}`, type: "function", function: { name: step.tool, arguments: JSON.stringify(step.args) } })) } }] },
         { choices: [{ delta: {}, finish_reason: "tool_calls" }] }, usage,

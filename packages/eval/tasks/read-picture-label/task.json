@@ -5,14 +5,17 @@
   "level": 1,
   "lang": "none",
   "requires": [
-    "base64"
+    "bun"
+  ],
+  "media": [
+    "vision"
   ],
   "prompt": "chart.png is a picture with a label on it. Write the text of the label into answer.txt.",
-  "check": "grep -q 'revenue 42' answer.txt",
+  "check": "grep -qiE 'revenue ?42' answer.txt",
   "protect": [
     "README.md"
   ],
   "maxSteps": 30,
   "timeoutSeconds": 600,
-  "setup": "echo 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAHXRFWHRDb21tZW50AGJhciBsYWJlbDogcmV2ZW51ZSA0MkIjTQUAAAAMSURBVHicY/jPwAAAAwEBAMn+ku8AAAAASUVORK5CYII=' | base64 -d > chart.png"
+  "setup": "bun \"$BENCH_FIXTURES/make-chart.ts\" chart.png"
 }

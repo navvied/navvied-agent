@@ -8,17 +8,17 @@ const outputs = (r: ReturnType<typeof rig>) => r.of("tool").filter((e) => e.stat
 
 describe("a tool that exists and is not offered", () => {
   test("is named in the prompt, without its definition, and a call to it is run, not refused", async () => {
-    const r = rig(calls({ name: "WebFetch", args: { url: "http://127.0.0.1:1/" } }));
+    const r = rig(calls({ name: "WebFetch", args: { url: "http://127.0.0.1:1/" } }), { window: 8000, small: true });
     await r.turn(prompt("fix the bug in a.ts", { mode: "auto" }));
     const first = r.provider.requests[0]!;
     expect(first.tools.map((t) => t.name)).not.toContain("WebFetch");
-    expect(first.system).toContain("Also available, by name: WebFetch, WebSearch.");
+    expect(first.system).toMatch(/Also available, by name: .*WebFetch.*WebSearch/);
     expect(outputs(r).join("")).not.toContain("there is no tool");
     r.cleanup();
   });
 
   test("once used it is still not offered: the list and the prompt stay as they were", async () => {
-    const r = rig(calls({ name: "WebFetch", args: { url: "http://127.0.0.1:1/" } }));
+    const r = rig(calls({ name: "WebFetch", args: { url: "http://127.0.0.1:1/" } }), { window: 8000, small: true });
     await r.turn(prompt("fix the bug in a.ts", { mode: "auto" }));
     await r.turn(prompt("and now the other file", { mode: "auto" }));
     const [first, later] = [r.provider.requests[0]!, r.provider.requests.at(-1)!];
@@ -40,7 +40,7 @@ describe("a tool that exists and is not offered", () => {
   test("a tool that does not exist is refused with the ones there are", async () => {
     const r = rig(calls({ name: "TeleportHome", args: {} }));
     await r.turn(prompt("fix it", { mode: "auto" }));
-    expect(outputs(r).join("")).toContain('there is no tool "TeleportHome". Use one of: Read, Write, Edit, MultiEdit, apply_patch, Bash, Glob, Grep');
+    expect(outputs(r).join("")).toContain('there is no tool "TeleportHome". Use one of: Read, Write, Edit, MultiEdit, NotebookEdit, apply_patch, Bash, Glob, Grep');
     r.cleanup();
   });
 });
@@ -57,7 +57,7 @@ describe("the names models invent for the command tool", () => {
   });
 
   test("a name written another way is the tool it spells: web_search is WebSearch", async () => {
-    const r = rig(calls({ name: "todo_write", args: { todos: [{ content: "x", status: "pending" }] } }));
+    const r = rig(calls({ name: "todo_write", args: { todos: [{ content: "x", status: "completed" }] } }));
     await r.turn(prompt("do it", { mode: "auto" }));
     expect(r.of("plan").length).toBe(1);
     r.cleanup();

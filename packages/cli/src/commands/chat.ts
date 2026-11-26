@@ -182,7 +182,7 @@ export async function chatCommand(initial: string | undefined, options: Options,
   const signedIn = io.interactive ? readAccount(accountPath(io.env, options.config)) : undefined;
   if (signedIn) void joinAccount(signedIn).catch(() => relay().start().catch(() => undefined));
   else if (io.interactive && devices.list().some((d) => d.kind === "relay")) void relay().start().catch(() => undefined);
-  hub.attach({ send: (line) => { const parsed = parseEvent(String(line)); if (parsed.ok) emit(parsed.value); }, ...(presenter && io.choose ? { answers: true as const } : {}) }, 0);
+  hub.attach({ send: (line) => { const parsed = parseEvent(String(line)); if (parsed.ok) emit(parsed.value); }, ...(presenter && io.choose ? { questions: true as const } : {}) }, 0);
   const start = (): boolean => {
     const restarted = hub.restart();
     if (!restarted.ok) { say(`${paint(io.color, "yellow", "!")} ${restarted.error}`); return false; }

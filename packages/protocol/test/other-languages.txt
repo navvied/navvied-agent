@@ -1,0 +1,7 @@
+packages/protocol/test/language.test.ts	holds the Indonesian words it scans for
+packages/engine/src/password-words.ts	holds the word for password in many languages, so a typed secret is found in any of them
+packages/engine/src/memory-words.ts	holds the sentences that state a lasting fact in other languages
+packages/engine/test/memory-words.test.ts	holds one example of each of those sentences
+packages/eval/src/newbie-prompts.ts	holds the messy messages of the newbie lane as people write them
+packages/engine/test/language-free.test.ts	holds messy requests to prove no tool depends on how a request is worded
+packages/desktop/Cargo.lock	generated

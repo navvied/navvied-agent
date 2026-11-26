@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { killTree, usesProcessGroups } from "../../platform.ts";
+import { endAll, usesProcessGroups } from "../../platform.ts";
 
 const CANDIDATES: Record<string, string[]> = {
   darwin: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"],
@@ -62,12 +62,21 @@ const QUIET = [
   "--disable-background-networking", "--disable-component-update", "--disable-component-extensions-with-background-pages", "--disable-background-mode", "--disable-search-engine-choice-screen", "--disable-field-trial-config", "--no-service-autorun", "--disable-default-apps", "--disable-client-side-phishing-detection",
   "--disable-domain-reliability", "--metrics-recording-only", "--safebrowsing-disable-auto-update", "--disable-breakpad", "--no-pings",
   "--disable-composebox-from-aimntp", "--disable-updater-scheduler", "--disable-delta-updates",
-  "--disable-features=Translate,OptimizationHints,MediaRouter,NetworkTimeServiceQuerying,SafeBrowsingHashPrefixRealTimeLookups",
+  // AutofillServerCommunication: without it the shape of every form on a page the person visits is sent to the vendor of the browser.
+  "--disable-features=Translate,OptimizationHints,MediaRouter,NetworkTimeServiceQuerying,SafeBrowsingHashPrefixRealTimeLookups,AutofillServerCommunication",
 ];
 
 class StoppedAtStart extends Error {}
 
-export interface Launched { endpoint: string; stop(): void }
+export interface Launched { endpoint: string; /** On Linux it returns when the browser and everything it started have ended. */ stop(): void }
+
+// The browser's crash handler cannot be switched off from outside (`--disable-crashpad-for-testing` leaves the processes the browser starts
+// by itself, its network service among them, crashing at start). Left alone it writes dumps, which hold the memory of pages, into the
+// person's own browser's crash reports, for that browser to send if they agreed to that there. BREAKPAD_DUMP_LOCATION puts its database
+// in the throwaway profile: removed with it, and with uploads off, since nobody has agreed to them in this profile.
+
+/** Set in the browser's environment to its profile folder: what carries it was started by this browser. */
+const MARK = "NAVVIED_BROWSER_PROFILE";
 
 /**
  * Starts the browser with a profile folder of its own (thrown away when it stops), every connection it makes going through the proxy on
@@ -81,12 +90,12 @@ export async function launch(chrome: string, proxyPort: number): Promise<Launche
 async function start(chrome: string, proxyPort: number): Promise<Launched> {
   // The long form of the folder: a short 8.3 name (RUNNER~1) in a profile path is one more thing for a browser on Windows to trip over.
   const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "navvied-browser-")));
-  const child: ChildProcess = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${dir}`, `--proxy-server=http://127.0.0.1:${proxyPort}`, "--proxy-bypass-list=<-loopback>", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync", ...QUIET, "--mute-audio", "--hide-scrollbars", "--window-size=1280,900", ...(process.platform === "win32" ? ["--disable-gpu"] : []), ...(process.getuid?.() === 0 || process.env.NAVVIED_BROWSER_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), ...extraFlags(), "about:blank"], { detached: usesProcessGroups(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+  const child: ChildProcess = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${dir}`, `--proxy-server=http://127.0.0.1:${proxyPort}`, "--proxy-bypass-list=<-loopback>", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync", ...QUIET, "--mute-audio", "--hide-scrollbars", "--window-size=1280,900", ...(process.platform === "win32" ? ["--disable-gpu"] : []), ...(process.getuid?.() === 0 || process.env.NAVVIED_BROWSER_NO_SANDBOX === "1" ? ["--no-sandbox"] : []), ...extraFlags(), "about:blank"], { detached: usesProcessGroups(), stdio: ["ignore", "ignore", "pipe"], windowsHide: true, env: { ...process.env, [MARK]: dir, BREAKPAD_DUMP_LOCATION: join(dir, "crashes") } });
   let said = "", stopped: number | null | undefined, over = false;
   child.stderr?.on("data", (d: Buffer) => { said = (said + d.toString("utf8")).slice(-600); });
   child.on("exit", (code) => { stopped = code; });
   child.on("error", (e) => { said += e.message; stopped = null; });
-  const stop = (): void => { if (over) return; over = true; killTree(child); try { rmSync(dir, { recursive: true, force: true }); } catch { /* the folder is removed with the temporary files */ } };
+  const stop = (): void => { if (over) return; over = true; endAll(child, `${MARK}=${dir}`); try { rmSync(dir, { recursive: true, force: true }); } catch { /* the folder is removed with the temporary files */ } };
   const portFile = join(dir, "DevToolsActivePort");
   const wait = Number(process.env.NAVVIED_BROWSER_START_MS) || 15_000;
   const until = Date.now() + wait;

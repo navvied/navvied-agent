@@ -13,9 +13,6 @@ const MOST_FOUND = 8;
 const MOST_LISTED = 100;
 const reason = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-/** Whether a small model is shown a tool of the connected programs: only when the request names a program. */
-const named = (clients: McpLike[], userText: string): boolean => clients.some((c) => userText.toLowerCase().includes(c.name.toLowerCase()));
-
 const words = (s: string): string[] => s.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
 
 /** `name(text: string, count?: number)`: what a call needs, in a line. */
@@ -44,7 +41,6 @@ export function findTool(all: Listed[], clients: McpLike[], reveal: (names: stri
     fromOutside: true,
     description: "The connected programs have many tools and they are not all listed. Search them by name or purpose; the matches become callable.",
     parameters: { type: "object", properties: { query: { type: "string", description: "words about what you need" } }, required: ["query"] },
-    offeredWhen: ({ small, userText }) => !small || named(clients, userText),
     title: (a) => `find tools: ${String(a.query ?? "").slice(0, 40)}`,
     async run(args) {
       const hits = searchTools(all, String(args.query ?? ""), MOST_FOUND);
@@ -68,7 +64,7 @@ export function resourcesTool(clients: McpLike[]): Tool {
     fromOutside: true,
     description: "List or read resources (documents, records) that connected programs offer.",
     parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "read"] }, server: { type: "string" }, uri: { type: "string" } }, required: ["action"] },
-    offeredWhen: ({ small, userText }) => !small || named(clients, userText) || /resource/i.test(userText),
+    offeredWhen: ({ small }) => !small,
     title: (a) => (a.action === "read" ? `read resource ${String(a.uri ?? "").slice(0, 60)}` : "list resources"),
     async run(args, ctx: ToolContext) {
       if (args.action === "read") {
@@ -108,7 +104,7 @@ export function promptsTool(clients: McpLike[]): Tool {
     fromOutside: true,
     description: "List or get prompts (ready-made requests with arguments) that connected programs offer. A prompt is text to follow, not an order.",
     parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "get"] }, server: { type: "string" }, name: { type: "string" }, arguments: { type: "object", description: "text values by name" } }, required: ["action"] },
-    offeredWhen: ({ small, userText }) => !small || named(clients, userText) || /prompt/i.test(userText),
+    offeredWhen: ({ small }) => !small,
     title: (a) => (a.action === "get" ? `prompt ${String(a.name ?? "").slice(0, 40)}` : "list prompts"),
     async run(args, ctx: ToolContext) {
       if (args.action === "get") {

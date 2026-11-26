@@ -6,7 +6,6 @@ export const SCHEDULE_FOOT = "Tasks run only while navvied is running.";
 const MODES = [{ label: "Only read and plan", hint: "It changes nothing." }, { label: "Can change files", hint: "Your permission rules still apply." }];
 const clock = (h: number, m: number): string => `${h}:${String(m).padStart(2, "0")}`;
 
-/** "today 9:00", "yesterday 16:00", "Monday 9:00": the day as a person says it, then the time. */
 function day(ms: number, now: number): string {
   const d = new Date(ms), t = new Date(now);
   const start = (x: Date): number => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
@@ -20,13 +19,11 @@ function day(ms: number, now: number): string {
 
 const lastWords = (j: ScheduleInfo, now: number): string => (j.missed ? `Missed ${day(j.missed.at, now)}. The computer was off.` : j.last === undefined || j.lastCode === undefined || j.lastCode === null ? "Not run yet" : j.lastCode === 0 ? `Ran fine ${day(j.last, now)}` : `Last run failed ${day(j.last, now)}`);
 
-/** One task as a row: on or off and its name, then when it runs and how the last run went. */
 function row(j: ScheduleInfo, now: number): { label: string; hint: string } {
   const next = j.enabled ? `next ${j.next === undefined ? "none" : day(j.next, now)}` : "off";
   return { label: `${j.enabled ? "on " : "off"}  ${j.title}`, hint: `${whenWords(j.when, (ms) => day(ms, now))}, ${next}, ${lastWords(j, now)}${j.mode === "auto" ? ", can change files" : ""}` };
 }
 
-/** `/schedule`: the tasks and what can be done with one. Resolves when the person goes back out of the list. */
 export async function scheduleScreen(k: Kit, now: () => number = Date.now): Promise<void> {
   let at = 0;
   for (;;) {
@@ -47,7 +44,6 @@ export async function scheduleScreen(k: Kit, now: () => number = Date.now): Prom
 const RUN_MARK = { fine: "✓", failed: "✗", stopped: "■", running: "…", missed: "−" } as const;
 const RUN_CHIP = { fine: "Fine", failed: "Failed", stopped: "Stopped", running: "Running", missed: "Missed" } as const;
 
-/** What a task said the last times it ran (newest first); a run that failed opens to say why, with a way to run it again. */
 async function history(k: Kit, j: ScheduleInfo, now: () => number): Promise<void> {
   const got = await k.link.call("schedule.runs", { cmd: "schedule.runs", id: j.id, limit: 3 });
   if (typeof got === "string") { k.note.push(got); return; }
@@ -63,7 +59,6 @@ async function history(k: Kit, j: ScheduleInfo, now: () => number): Promise<void
   }
 }
 
-/** One task: run it now, turn it on or off, change it, or remove it. */
 async function task(k: Kit, j: ScheduleInfo, now: () => number): Promise<void> {
   const rows = [
     { label: "Run now" },
@@ -83,7 +78,6 @@ async function task(k: Kit, j: ScheduleInfo, now: () => number): Promise<void> {
 
 interface Typed { ask: string; valid: (text: string) => boolean; bad: string }
 
-/** A list whose last row is typed (another time, another day…): the typed answer is checked, and a wrong one is asked again with the sentence that says what to use. Resolves to the row or the typed text, or undefined for Esc. */
 async function pick(k: Kit, title: string, body: string[], rows: readonly string[], now: string, typed: Typed): Promise<string | undefined> {
   for (;;) {
     const picked = await k.choose(title, title, rows.map((label) => ({ label })), { at: Math.max(0, rows.indexOf(now)), body });
@@ -98,7 +92,6 @@ async function pick(k: Kit, title: string, body: string[], rows: readonly string
   }
 }
 
-/** New task, or Change task: its name, what to do, when (and the questions that row needs), and what it may do, one question at a time; Esc goes back one. */
 async function wizard(k: Kit, had: ScheduleInfo | undefined, now: () => number): Promise<void> {
   const title = had ? "Change task" : "New task";
   const f = { name: had?.title ?? "", what: had?.prompt ?? "", when: had ? whenOf(had) : firstWhen(), mode: had?.mode === "auto" ? 1 : 0 };

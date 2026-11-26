@@ -283,20 +283,14 @@ describe("a prompt that tries to steer the model", () => {
 
 describe("when the tool is offered", () => {
   const all = defaultTools();
-  const names = (userText: string, o: { small?: boolean; schedule?: boolean } = {}) => toolsFor("auto", all, { small: o.small ?? false, userText, jobs: 0, schedule: o.schedule ?? true }).map((t) => t.name);
-  test("a large model gets it when the request is about timing, and not otherwise", () => {
-    for (const text of ["run the tests every night", "remind me tomorrow to deploy", "schedule a backup", "check the build in 20 minutes", "do it daily at 9am", "set up a cron for this"]) expect(names(text), text).toContain("Schedule");
-    for (const text of ["fix the failing test in a.ts", "rename the function", "what does this regex do"]) expect(names(text), text).not.toContain("Schedule");
-  });
-  test("a small model is not shown it, and nor is a place that cannot schedule", () => {
-    expect(names("run the tests every night", { small: true })).not.toContain("Schedule");
-    expect(names("run the tests every night", { schedule: false })).not.toContain("Schedule");
+  test("it is never in the list, whatever the model or the request: it is named in the prompt where jobs can be scheduled, and a call is run", () => {
+    for (const small of [false, true]) expect(toolsFor("auto", all, { small, jobs: 0 }).map((t) => t.name)).not.toContain("Schedule");
   });
   test("looking is never asked about; every change is, and plan mode does not offer it", () => {
     for (const action of ["list", "runs"]) expect(needsApproval("ask", tool, { action })).toBe(false);
     for (const action of ["create", "update", "pause", "resume", "remove", "run", "cancel"]) expect(needsApproval("ask", tool, { action })).toBe(true);
     expect(needsApproval("edits", tool, { action: "create" })).toBe(true);
-    expect(toolsFor("plan", all, { small: false, userText: "run it every night", jobs: 0, schedule: true }).map((t) => t.name)).not.toContain("Schedule");
+    expect(toolsFor("plan", all, { small: false, jobs: 0 }).map((t) => t.name)).not.toContain("Schedule");
   });
   test("its text is small", () => {
     expect(JSON.stringify({ description: tool.description, parameters: tool.parameters }).length).toBeLessThanOrEqual(668);
@@ -308,7 +302,7 @@ describe("in a conversation", () => {
 
   test("a small model is told its name; a call is run; a mode that may change things is asked of the person first, and the plan one asked too", async () => {
     const m = new Memory();
-    const r = rig(script({ action: "create", prompt: "tidy the logs", when: "every 2h", mode: "auto" }), { schedule: m, window: 4_000 });
+    const r = rig(script({ action: "create", prompt: "tidy the logs", when: "every 2h", mode: "auto" }), { schedule: m, window: 4_000, small: true });
     r.send(prompt("keep the logs tidy", { mode: "ask" }));
     await until(() => r.of("approval").length === 1);
     expect(r.provider.requests[0]!.system).toContain("Schedule");

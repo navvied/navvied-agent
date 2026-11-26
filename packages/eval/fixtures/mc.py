@@ -24,9 +24,9 @@ def put(files):
         Path(name).write_text(text)
 
 
-def load(name):
+def load(name, pairs=None):
     try:
-        return json.loads(Path(name).read_text())
+        return json.loads(Path(name).read_text(), object_pairs_hook=pairs)
     except (OSError, ValueError):
         return None
 
@@ -115,6 +115,23 @@ def logs():
     return files, want
 
 
+def unique(pairs):
+    """An object that writes a key twice would lose one of the two without a word."""
+    out = dict(pairs)
+    if len(out) != len(pairs):
+        raise ValueError("a key is written twice")
+    return out
+
+
+def by_service(name):
+    """The report by service. "The file name is the service" reads as auth and as auth.log, so a key may be either; one service named both ways is wrong."""
+    got = load(name, unique)
+    if not isinstance(got, dict):
+        return None
+    out = {key.removesuffix(".log"): value for key, value in got.items()}
+    return out if len(out) == len(got) else None
+
+
 # --- 5: thirty modules, the ones that take part in an import cycle -------------------------------------------------------------------
 
 def modules():
@@ -193,15 +210,33 @@ def configs():
 
 # --- the commands -----------------------------------------------------------------------------------------------------------------------------
 
+def final_answer():
+    answer = os.environ.get("BENCH_ANSWER_FILE", "")
+    return Path(answer).read_text() if answer and Path(answer).is_file() else ""
+
+
+def named_in_answer(path):
+    folder, name = path.rsplit("/", 1)
+    said = final_answer()
+    return name in said and f"{folder}/" in said
+
+
+def cycle_lines():
+    in_project_folder = lines_of("cycles.txt")
+    if in_project_folder is not None:
+        return in_project_folder
+    return lines_of("src/cycles.txt") if named_in_answer("src/cycles.txt") else None
+
+
 def check(task):
     if task == "aggregate-json":
         return load("report.json") == records()[1]
     if task == "migrate-calls":
         return all(Path(p).exists() and Path(p).read_text() == text for p, text in sources()[1].items())
     if task == "triage-logs":
-        return load("triage.json") == logs()[1]
+        return by_service("triage.json") == logs()[1]
     if task == "import-cycles":
-        return lines_of("cycles.txt") == modules()[1]
+        return cycle_lines() == modules()[1]
     if task == "config-diff":
         try:
             with open("diff.csv", newline="") as f:

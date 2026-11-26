@@ -110,7 +110,7 @@ describe("a program you type to", () => {
   test("BashInput is offered only while a program that can be typed to is running", async () => {
     const { toolsFor } = await import("../src/permissions.ts");
     const all = defaultTools();
-    const names = (typable: number) => toolsFor("auto", all, { small: false, userText: "", jobs: typable, typable }).map((t) => t.name);
+    const names = (typable: number) => toolsFor("auto", all, { small: false, jobs: typable, typable }).map((t) => t.name);
     expect(names(0)).not.toContain("BashInput");
     expect(names(1)).toContain("BashInput");
   });

@@ -41,6 +41,16 @@ describe("keeping notes", () => {
     expect(keep(p, { action: "replace", scope: "project", target: first!.id, text: "Tabs, never spaces" }, { today: "2026-11-20", origin: "self" })).toContain("Replaced");
     expect(readNotes(p.project)).toMatch(/free text the person wrote\n- 2026-11-20: Tabs, never spaces <!--[a-z0-9]{6} self-->\n$/);
   });
+  test("a note copied with its date from the file keeps no second date: the engine dates the note itself", () => {
+    const dir = temp();
+    const p: MemoryPaths = { project: join(dir, "m.md") };
+    writeFileSync(p.project, "# What navvied remembers\n\n- 2026-11-02: Run tests with bun test <!--k3a002 user-->\n");
+    keep(p, { action: "replace", scope: "project", target: "k3a002", text: "2026-11-02: Run tests with bun test --timeout 30000" }, { today: "2026-11-25", origin: "self" });
+    expect(parseEntries(readNotes(p.project))[0]).toMatchObject({ id: "k3a002", date: "2026-11-25", text: "Run tests with bun test --timeout 30000" });
+    keep(p, { action: "add", scope: "project", text: "2026-11-26: The api lives in src/api" }, { today: "2026-11-26", origin: "self" });
+    expect(parseEntries(readNotes(p.project))[1]!.text).toBe("The api lives in src/api");
+  });
+
   test("replace and forget work by id or by words, keep a .bak, and a miss names the closest notes", () => {
     const p = paths();
     add(p, "project", "The staging server is alpha");

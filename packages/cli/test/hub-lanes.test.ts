@@ -280,7 +280,7 @@ describe("a chat and an agent on one computer", () => {
     expect(row.unread).toBe(true);
     hub.command(JSON.stringify({ cmd: "mark", id: row.id, read: true, kind: "chat" }), () => undefined);
     await until(() => (got.filter((e) => e.ev === "sessions" && e.kind === "chat").at(-1) as unknown as { items: { unread?: boolean }[] }).items[0]!.unread === undefined);
-    back();
+    back.detach();
     await hub.stop();
   });
 

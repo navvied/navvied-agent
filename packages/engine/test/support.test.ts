@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ApprovalBroker, COMPACT_AT, compactMessages, estimateTokens, needsApproval, shouldCompact, toolsFor, defaultTools } from "../src/index.ts";
 import { systemPrompt } from "../src/prompt.ts";
+import { browserHere } from "../src/tools/browser.ts";
 import type { Message, Provider } from "../src/types.ts";
 
 describe("approval broker", () => {
@@ -27,10 +28,11 @@ describe("approval broker", () => {
 describe("permissions", () => {
   const all = defaultTools();
   test("plan offers only read-only tools plus the plan tool; ask and auto offer everything", () => {
-    const running = { small: false, userText: "fix the notebook, open https://example.com in the browser and search the web, research it, remember this, make a skill, schedule it daily, and what did we decide last time, look at pic.png, watch the video, transcribe the recording, read it aloud, draw a picture of it and make a video clip:\n1. one\n2. two", jobs: 1, typable: 1, skills: 1, recall: true, memory: true, schedule: true, computer: true, code: true };
-    expect(toolsFor("plan", all).map((t) => t.name)).toEqual(["Read", "Glob", "Grep", "Agent", "TodoWrite", "AskUserQuestion", "ExitPlanMode"]);
-    expect(toolsFor("ask", all, running)).toHaveLength(all.length);
-    expect(toolsFor("auto", all, running)).toHaveLength(all.length);
+    const running = { small: false, jobs: 1, typable: 1, skills: 1, recall: true, memory: true, schedule: true, skillBook: true, computer: true, code: true };
+    expect(toolsFor("plan", all).map((t) => t.name)).toEqual(["Read", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "TodoWrite", "AskUserQuestion", "LookAt", "Watch", "Transcribe", "ExitPlanMode"]);
+    // The browser is there only where one is installed.
+    const there = all.filter((t) => t.name !== "Browser" || browserHere()).map((t) => t.name);
+    for (const mode of ["ask", "auto"] as const) expect(toolsFor(mode, all, running).map((t) => t.name)).toEqual(there);
     expect(toolsFor("auto", all).map((t) => t.name)).not.toContain("KillShell");
     expect(toolsFor("auto", all).map((t) => t.name)).not.toContain("BashInput");
   });

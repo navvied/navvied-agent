@@ -17,7 +17,7 @@ describe("a command that ended wakes an idle conversation", () => {
   test("the model is told what finished, with the end of its output, without anybody typing", async () => {
     const r = rig(starts(node("setTimeout(() => console.log('build ok'), 300)")), { wake: true });
     await r.turn(prompt("build it", { mode: "auto" }));
-    await until(() => r.of("done").length === 2);
+    await r.when(() => r.of("done").length === 2);
     const [note] = woken(r);
     expect(note).toMatch(/^\[job1 finished: exit 0, \d\.\d s; BashOutput job1 for the rest\]\nbuild ok$/);
     expect(lastUser(r.provider.requests.at(-1)!)).toBe(note!);
@@ -65,7 +65,8 @@ describe("a command that ended wakes an idle conversation", () => {
   test("a turn that was cancelled is not followed by a wake: the news waits for the person", async () => {
     const r = rig((req, n) => (req.messages.at(-1)?.role === "tool" ? { text: "x", delayMs: 5000 } : n === 0 ? { calls: [{ name: "Bash", args: { command: node("console.log('quick')"), run_in_background: true } }] } : { text: "ok" }), { wake: true });
     r.send(prompt("go", { mode: "auto" }));
-    await until(() => r.provider.requests.length >= 2);
+    // The model's request is not an event of the engine, so this one is looked for.
+    await until(() => r.provider.requests.length >= 2, 15_000);
     await wait(400);
     r.send({ cmd: "cancel" });
     await r.engine.idle();
@@ -83,10 +84,10 @@ describe("a command that ended wakes an idle conversation", () => {
       return n === 0 ? { calls: [{ name: "Bash", args: { command: node("setTimeout(() => console.log('a'), 200)"), run_in_background: true } }, { name: "Bash", args: { command: node("setTimeout(() => console.log('b'), 260)"), run_in_background: true } }] } : { text: "ok" };
     }, { wake: true, wakeGapMs: 700 });
     await r.turn(prompt("go", { mode: "auto" }));
-    await until(() => woken(r).length === 1);
+    await r.when(() => woken(r).length === 1);
     await wait(250);
     expect(woken(r).length).toBe(1);
-    await until(() => woken(r).length === 2);
+    await r.when(() => woken(r).length === 2);
     expect(woken(r).map((t) => /^\[(job\d)/.exec(t)![1])).toEqual(["job1", "job2"]);
     r.cleanup();
   }, 20_000);
@@ -97,7 +98,7 @@ describe("a line the model asked to be told about", () => {
     const lines = "let n = 0; const t = setInterval(() => { console.log('ready ' + (++n)); if (n === 6) { clearInterval(t); } }, 120);";
     const r = rig(starts(node(lines), { notify: "ready" }), { wake: true, wakeGapMs: 0 });
     await r.turn(prompt("go", { mode: "auto" }));
-    await until(() => woken(r).some((t) => t.includes("finished")), 10_000);
+    await r.when(() => woken(r).some((t) => t.includes("finished")));
     const notes = woken(r);
     const printed = notes.filter((t) => t.startsWith("[job1 printed"));
     expect(printed.length).toBe(3);
@@ -110,7 +111,7 @@ describe("a line the model asked to be told about", () => {
   test("what it matches is the line, whatever its case, and a line cut between two reads is still found", async () => {
     const r = rig(starts(node("process.stdout.write('Listen'); setTimeout(() => { process.stdout.write('ing on 8080\\n'); setTimeout(() => {}, 400); }, 250)"), { notify: "listening on" }), { wake: true, wakeGapMs: 0 });
     await r.turn(prompt("go", { mode: "auto" }));
-    await until(() => woken(r).some((t) => t.startsWith("[job1 printed")));
+    await r.when(() => woken(r).some((t) => t.startsWith("[job1 printed")));
     expect(woken(r)[0]).toContain('"Listening on 8080"');
     r.cleanup();
   }, 20_000);
@@ -120,7 +121,7 @@ describe("the person writing again", () => {
   test("a person's message is a prompt like any other and ends what was waiting for the gap", async () => {
     const r = rig(starts(node("setTimeout(() => console.log('late'), 400)")), { wake: true });
     await r.turn(prompt("go", { mode: "auto" }));
-    await until(() => r.of("done").length === 2);
+    await r.when(() => r.of("done").length === 2);
     await r.turn(prompt("thanks", { mode: "auto", qid: "q-thanks" }));
     expect(r.of("user").map((u) => u.text)).toContain("thanks");
     r.cleanup();

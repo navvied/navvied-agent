@@ -15,11 +15,10 @@ const ctx = (recall?: Recall): ToolContext => ({ cwd: ".", signal: new AbortCont
 describe("looking through earlier conversations", () => {
   test("a large model is offered it whenever earlier conversations exist, in any language; a small one has it named, and a call is run", async () => {
     const all = defaultTools();
-    const names = (userText: string, recall: boolean, small: boolean) => toolsFor("auto", all, { small, userText, jobs: 0, recall }).map((t) => t.name);
-    expect(names("fix the failing test in src/a.ts", true, false)).toContain("Recall");
-    expect(names("was haben wir gestern beschlossen?", true, false)).toContain("Recall");
-    expect(names("what did we decide last time?", false, false)).not.toContain("Recall");
-    expect(names("what did we decide last time?", true, true)).not.toContain("Recall");
+    const names = (recall: boolean, small: boolean) => toolsFor("auto", all, { small, jobs: 0, recall }).map((t) => t.name);
+    expect(names(true, false)).toContain("Recall");
+    expect(names(false, false)).not.toContain("Recall");
+    expect(names(true, true)).not.toContain("Recall");
     const r = rig((req) => (req.messages.at(-1)?.role === "tool" ? { text: String(req.messages.at(-1)!.content).slice(0, 60) } : { calls: [{ name: "Recall", args: { query: "tresor" } }] }), { recall: past, window: 8_000, small: true });
     await r.turn(prompt("was haben wir gestern ueber den Tresor beschlossen?"));
     expect(r.provider.requests[0]!.system).toContain("Recall");

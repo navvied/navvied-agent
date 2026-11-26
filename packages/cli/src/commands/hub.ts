@@ -55,7 +55,10 @@ const HISTORY = 5000;
 /** While no model is connected the configuration is looked at this often, so a page connects itself once one is set up. */
 const WATCH_MS = 1000;
 
-export interface Client { send(text: string): unknown; /** True: this window shows the agent's questions and can answer them. A window that does not say so (a page whose question card is not built yet) is not counted as someone who can be asked. */ answers?: true; /** True: this window is not on this computer (it is reached through the relay), so what the person typed as a secret is not sent to it. */ leaves?: true }
+export interface Client { send(text: string): unknown; /** For a window built into this program: it draws the agent's questions. A window at the other end of a wire says so itself, in what it sends (`window`, or `questions` on a prompt); what carries it says nothing on its behalf. */ questions?: true; /** True: this window is not on this computer (it is reached through the relay), so what the person typed as a secret is not sent to it. */ leaves?: true }
+
+/** One attached window's end of the hub: what it sends goes in here, so that what it says of itself is known to be its own. What it must be told straight away goes to its `send`. */
+export interface Attached { command(text: string): void; detach(): void }
 
 /** What the desktop app's native side gives the hub for computer use: where turning it on stands, asking the system for a grant, and the switch. It calls `changed` whenever a grant or the switch changes without a command (the person granted it in the system's settings). */
 export interface ComputerPort { state(): Promise<ComputerState>; request(id: ComputerPermissionId): Promise<void>; turn(on: boolean): Promise<void>; /** The driver of the screen while computer use is on, none while it is off: asked once at the start of each turn, so the switch applies to the conversation that is open. Without it the `computer` tool is never offered. `owner` is the one conversation's engine, so what a conversation was allowed is its own. */ helper?(owner?: object): ComputerHelper | undefined; /** The person takes the screen (`person`: the helper refuses every step with `human_has_control`) or gives it back (`agent`). It reports the one who has it as `control` of `state()`, and calls `changed` when the person takes it by using the screen themselves. Without it the hub says the person cannot take over from here. */ control?(who: "person" | "agent"): Promise<void> }
@@ -87,9 +90,9 @@ export interface HubOptions {
 }
 
 export interface Hub {
-  /** Replays what the client missed since `since`, then keeps it up to date. Returns the way to detach. */
-  attach(client: Client, since: number): () => void;
-  /** One protocol command as text. Anything the sender must be told straight away goes to `reply`. */
+  /** Replays what the client missed since `since`, then keeps it up to date. */
+  attach(client: Client, since: number): Attached;
+  /** One protocol command as text, from the program that runs the hub rather than from a window. Anything the sender must be told straight away goes to `reply`. */
   command(text: string, reply: (text: string) => void): void;
   /** Whether a model is connected right now (it is looked for again each time this is asked). */
   connected(): boolean;
@@ -167,6 +170,8 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   /** What was said, in order. `starts` marks the first event of a conversation (a new one, or one opened), so a window that arrives fresh can be given only the current one of each kind. */
   const history: { seq: number; line: string; kind: SessionKind; starts: boolean; caps: boolean }[] = [];
   const clients = new Set<Client>();
+  /** The attached windows that can answer a question: while there is none, the agent is told that nobody can. */
+  const answering = new Set<Client>();
   /** What the person typed as a secret in these conversations (it stays in their journal and on this computer's windows). */
   const typed = new Set<string>();
   const noteTyped = (e: EngineEvent): void => {
@@ -394,7 +399,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   const engineFor = (lane: Lane, earlier?: string): ReturnType<typeof createEngine> => {
     const slot: Slot = { lane, bg: false, id: undefined, created: undefined, journal: lane.journal, running: false, asking: false, turn: [], writing: lane.writing };
     lane.slot = slot;
-    return createEngine(lane.options, io, (e) => { if (slot.bg) sayAside(slot, e); else say(lane, e); }, { wake: true, shelf, computer: () => computerPort?.helper?.(slot), conversations: lane.conversations, jobs: () => runner, schedulesChanged: () => { tellSchedules(); }, attended: () => [...clients].some((c) => c.answers === true), ...(earlier ? { earlier } : {}) });
+    return createEngine(lane.options, io, (e) => { if (slot.bg) sayAside(slot, e); else say(lane, e); }, { wake: true, shelf, computer: () => computerPort?.helper?.(slot), conversations: lane.conversations, jobs: () => runner, schedulesChanged: () => { tellSchedules(); }, attended: () => answering.size > 0, ...(earlier ? { earlier } : {}) });
   };
 
   const connect = (lane: Lane): Created | undefined => {
@@ -893,6 +898,244 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     };
   };
 
+  /** One command, from a window (`from`) or from the program that runs the hub. */
+  const run = (text: string, reply: (text: string) => void, from?: Client): void => {
+    const parsed = parseCommand(text);
+    if (!parsed.ok) { reply(JSON.stringify({ ev: "error", msg: `bad command: ${parsed.error}` })); return; }
+    // What a window says of itself, kept while it is attached: nothing else decides who can be asked.
+    const word = parsed.value.cmd === "window" ? parsed.value.questions : parsed.value.cmd === "prompt" ? parsed.value.questions : undefined;
+    if (from && word !== undefined && clients.has(from)) { if (word) answering.add(from); else answering.delete(from); }
+    if (parsed.value.cmd === "window") return;
+    const lane = laneFor(parsed.value.kind ?? primary);
+    // Opening another conversation while one is being answered does not stop it: it goes on in the background, and opening it again brings it back.
+    if (parsed.value.cmd === "load") {
+      const id = parsed.value.id;
+      const there = [...asideSlots].find((s) => s.lane === lane && s.id === id);
+      if (there) { bringBack(lane, there); return; }
+      if (lane.running && !putAside(lane)) return;
+    }
+    if (parsed.value.cmd === "new" && lane.running && !putAside(lane)) return;
+    // A new conversation makes its own engine: one is not made first just to be replaced.
+    const now = parsed.value.cmd === "new" && !lane.created ? undefined : connect(lane);
+    if (parsed.value.cmd === "sessions") {
+      const archived = parsed.value.archived === true;
+      say(lane, { ev: "sessions", items: listSessions(lane, archived) });
+      void refreshRemote().then((changed) => { if (changed) say(lane, { ev: "sessions", items: listSessions(lane, archived) }); announceImportable(); });
+      return;
+    }
+    if (parsed.value.cmd === "import") { if (!signedIn()) { say(lane, { ev: "error", msg: "Sign in to bring conversations from the cloud." }); return; } void importHosted(parsed.value.ids); return; }
+    if (parsed.value.cmd === "move" || parsed.value.cmd === "copy") { void transfer(lane, parsed.value); return; }
+    if (parsed.value.cmd === "schedules" || parsed.value.cmd === "schedule.add" || parsed.value.cmd === "schedule.update" || parsed.value.cmd === "schedule.remove" || parsed.value.cmd === "schedule.run" || parsed.value.cmd === "schedule.runs") { schedule(lane, parsed.value); return; }
+    const page = pageCommand(parsed.value, { env: io.env, config: configPath(io.env, options.config), memory: () => memoryPathsFor(resolve(main.options.cwd ?? process.cwd()), configPath(io.env, options.config)), shelf, inCloud: () => runsInCloud(main.options, io.env), plugins: () => ({ ev: "plugins", items: pluginItems() }), today: () => new Date().toISOString().slice(0, 10), fetch: io.fetch });
+    if (page) {
+      const answer = (a: { say: EngineEvent[]; reply: EngineEvent[] }): void => { for (const e of a.say) say(lane, e); for (const e of a.reply) reply(JSON.stringify(encoder.stamp(e))); };
+      if ("then" in page) void page.then(answer); else answer(page);
+      return;
+    }
+    if (parsed.value.cmd === "artifacts") { say(lane, { ev: "artifacts", items: lane.artifacts.list(parsed.value.id) }); return; }
+    if (parsed.value.cmd === "artifact.read") {
+      const got = lane.artifacts.read(parsed.value.id);
+      if ("error" in got) { say(lane, { ev: "error", msg: got.error }); return; }
+      say(lane, { ev: "artifact", id: got.info.id, name: got.info.name, mime: got.info.mime, bytes: got.info.bytes, ...(got.text !== undefined ? { text: got.text } : {}), ...(got.data !== undefined ? { data: got.data } : {}), ...(got.truncated ? { truncated: true as const } : {}) });
+      return;
+    }
+    if (parsed.value.cmd === "plugins") { tellPlugins(); return; }
+    if (parsed.value.cmd === "memory.pending") { const r = review(), c = parsed.value; for (const e of c.action && c.id ? answerMemory(r, c.action, c.id, new Date().toISOString().slice(0, 10)) : [memoryPending(r)]) say(lane, e); return; }
+    if (parsed.value.cmd === "skill.review") { const r = review(), c = parsed.value; for (const e of c.id && c.accept !== undefined ? answerSkill(r, c.id, c.accept) : [skillReview(r)]) say(lane, e); return; }
+    if (parsed.value.cmd === "skill.rollback") { for (const e of rollbackSkill(review(), parsed.value.id)) say(lane, e); return; }
+    if (parsed.value.cmd === "providers") { tellProviders(); return; }
+    if (local.command(parsed.value)) return;
+    if (accountsPage.command(parsed.value)) return;
+    if (mcpSignins.command(parsed.value)) return;
+    if (parsed.value.cmd === "endpoints" || parsed.value.cmd === "endpoint.save" || parsed.value.cmd === "endpoint.remove" || parsed.value.cmd === "endpoint.models") {
+      const cmd = parsed.value;
+      const path = configPath(io.env, main.options.config);
+      const file = loadConfig(path);
+      const fail = (msg: string): void => { say(lane, { ev: "error", msg }); };
+      if (!file.ok) { fail(file.error); return; }
+      if (cmd.cmd === "endpoints") { tellEndpoints(); return; }
+      if (main.options.sandboxed || file.value?.webProxy) { fail(ONLY_ON_A_COMPUTER); return; }
+      const known = file.value?.endpoints ?? {};
+      const headersFor = (key: string | undefined) => (api: EndpointRecord["api"]): Record<string, string> => authHeaders(api, key);
+      /** What the server speaks: the one asked for, or, for `auto`, the one it answers in. */
+      const lookup = async (baseUrl: string, api: "auto" | EndpointRecord["api"], key: string | undefined): Promise<{ api: EndpointRecord["api"]; items: { id: string; window?: number }[] } | { error: string }> => {
+        if (api === "auto") {
+          const found = await detectApi(io.fetch, baseUrl, headersFor(key), API_STYLES);
+          // The style is known now: asked once more in it, which also fills in the sizes the list itself does not say.
+          return "error" in found ? found : lookup(baseUrl, found.api, key);
+        }
+        const got = await askModels(io.fetch, { baseUrl, api, headers: authHeaders(api, key), machine: () => readMachine(realProbe(io.system), localDir(io.env)) });
+        return "error" in got ? got : { api, items: got.items };
+      };
+      if (cmd.cmd === "endpoint.models") {
+        const saved = "id" in cmd ? known[cmd.id] : undefined;
+        if ("id" in cmd && !saved) { fail("That endpoint is not there."); return; }
+        const asked = saved ? { baseUrl: saved.baseUrl, api: saved.api, key: saved.key } : { baseUrl: (cmd as { baseUrl: string }).baseUrl, api: (cmd as { api: "auto" | EndpointRecord["api"] }).api, key: (cmd as { key?: string }).key };
+        void lookup(asked.baseUrl, asked.api, asked.key).then((got) => say(lane, "error" in got ? { ev: "error", msg: got.error } : { ev: "endpoint.models", api: got.api, items: got.items }));
+        return;
+      }
+      if (cmd.cmd === "endpoint.remove") {
+        if (!known[cmd.id]) { fail("That endpoint is not there."); return; }
+        const written = saveEndpoint(path, cmd.id, undefined);
+        if (!written.ok) { fail(written.error); return; }
+        tellEndpoints();
+        pushModels();
+        return;
+      }
+      const id = cmd.id ?? newEndpointId(cmd.name, Object.keys(known));
+      const key = cmd.key === undefined ? known[id]?.key : cmd.key === "" ? undefined : cmd.key;
+      const keep = (api: EndpointRecord["api"]): void => {
+        const written = saveEndpoint(path, id, { name: cmd.name, baseUrl: cmd.baseUrl, api, ...(key ? { key } : {}), models: cmd.models });
+        if (!written.ok) { fail(written.error); return; }
+        tellEndpoints();
+        pushModels();
+      };
+      // The style is saved as the concrete one it was found to be, never as `auto`.
+      if (cmd.api !== "auto") { keep(cmd.api); return; }
+      void detectApi(io.fetch, cmd.baseUrl, headersFor(key), API_STYLES).then((got) => { if ("error" in got) fail(got.error); else keep(got.api); });
+      return;
+    }
+    if (parsed.value.cmd === "provider.save" || parsed.value.cmd === "provider.remove" || parsed.value.cmd === "provider.models" || parsed.value.cmd === "provider.use") {
+      const cmd = parsed.value;
+      const path = configPath(io.env, main.options.config);
+      const file = loadConfig(path);
+      const fail = (msg: string): void => { say(lane, { ev: "error", msg }); };
+      const entry = PROVIDERS.find((p) => p.id === cmd.id);
+      if (!file.ok) { fail(file.error); return; }
+      if (main.options.sandboxed || file.value?.webProxy) { fail(ONLY_ON_A_COMPUTER); return; }
+      if (!entry) { fail("That provider is not known."); return; }
+      const before = file.value?.providers?.[entry.id];
+      if (cmd.cmd === "provider.save" || cmd.cmd === "provider.remove") {
+        const next = cmd.cmd === "provider.remove" ? { saved: undefined } : mergeSaved(entry, before, cmd);
+        if ("error" in next) { fail(next.error); return; }
+        const commit = (): boolean => {
+          const written = saveProvider(path, entry.id, next.saved);
+          if (!written.ok) { fail(written.error); return false; }
+          tellProviders();
+          return true;
+        };
+        // A new key is tried on the provider's own list of models first: a key it refuses is never kept.
+        const where = next.saved && cmd.cmd === "provider.save" && cmd.key !== undefined && !entry.adc ? baseOf(entry, next.saved) : undefined;
+        if (!where || !("base" in where) || !next.saved) { commit(); return; }
+        const tried = next.saved;
+        const headers = { ...(entry.keyHeader ? {} : authHeaders(entry.api, tried.key)), ...headersOf(entry, tried) };
+        void listModels(entry, where.base, headers, io.fetch).then((got) => {
+          if ("error" in got && got.kind === "refused") { fail(got.error); return; }
+          if (commit() && "error" in got && got.kind === "failed") say(lane, { ev: "notice", msg: `${got.error} The key is saved, but it was not checked.` });
+        });
+        return;
+      }
+      const saved = before ?? {};
+      const where = baseOf(entry, saved);
+      if ("missing" in where) { fail(`Add ${where.missing} for ${entry.name} first.`); return; }
+      if (!saved.key && !entry.keyOptional && !entry.adc) { fail(`Add a key for ${entry.name} first.`); return; }
+      const headers = { ...(entry.keyHeader ? {} : authHeaders(entry.api, saved.key)), ...headersOf(entry, saved) };
+      if (cmd.cmd === "provider.models") {
+        if (entry.adc) { fail(`${entry.name} has no list of models here: give the name of the model.`); return; }
+        void listModels(entry, where.base, headers, io.fetch).then((got) => say(lane, "error" in got ? { ev: "error", msg: got.error } : { ev: "provider.models", id: entry.id, models: got.models.map((m) => m.id), ...(got.skipped.length ? { skipped: got.skipped } : {}) }));
+        return;
+      }
+      const use = (route?: ListedRoute): void => {
+        let credential: string | undefined;
+        if (entry.adc) {
+          const found = findCredentialFile(entry.adc, io.env);
+          if ("error" in found) { fail(found.error); return; }
+          const usable = checkCredentialFile(found.file);
+          if ("error" in usable) { fail(usable.error); return; }
+          credential = found.file;
+        }
+        const session = entry.sessionHeader ? randomUUID() : undefined;
+        const made = modelEntryOf(entry, saved, cmd.model, route, session, credential);
+        if ("missing" in made) { fail(`Add ${made.missing} for ${entry.name} first.`); return; }
+        const name = entryName(entry, cmd.model);
+        const written = saveModel(path, name, { provider: entry.id, model: cmd.model, ...(route ? { route } : {}), ...(session ? { session } : {}), ...(credential ? { credential } : {}), window: 128_000, display: { name: cmd.model, brand: entry.name } });
+        if (!written.ok) { fail(written.error); return; }
+        pushModels();
+        switchModel(lane, name);
+      };
+      if (!entry.routes) { use(); return; }
+      void listModels(entry, where.base, headers, io.fetch).then((got) => {
+        if ("error" in got) { fail(got.error); return; }
+        const listed = got.models.find((m) => m.id === cmd.model);
+        if (listed) { use(listed.route); return; }
+        const left = got.skipped.find((m) => m.id === cmd.model);
+        fail(left ? `${cmd.model}: ${left.reason}.` : `${entry.name} does not list ${cmd.model}.`);
+      });
+      return;
+    }
+    if (parsed.value.cmd === "drafts") { reply(JSON.stringify(encoder.stamp({ ev: "drafts", items: drafts.list() }))); return; }
+    if (parsed.value.cmd === "draft") {
+      drafts.set(parsed.value.key, parsed.value.text);
+      // Told to every window at once, but not kept in what a late window is replayed: it asks with `drafts`.
+      const line = JSON.stringify(encoder.stamp({ ev: "drafts", items: drafts.list() }));
+      for (const c of clients) c.send(lineFor(c, line));
+      return;
+    }
+    if (parsed.value.cmd === "tools") { tellTools(lane); return; }
+    if (parsed.value.cmd === "computer.state") { void tellComputer(lane); return; }
+    if (parsed.value.cmd === "computer.permission" || parsed.value.cmd === "computer.on") {
+      const cmd = parsed.value;
+      if (!computerPort) { void tellComputer(lane); return; }
+      void (cmd.cmd === "computer.on" ? computerPort.turn(cmd.on) : computerPort.request(cmd.id)).catch(() => { say(lane, { ev: "error", msg: "The screen helper did not answer." }); }).finally(() => tellComputer());
+      return;
+    }
+    if (parsed.value.cmd === "computer.takeover" || parsed.value.cmd === "computer.giveback") {
+      const who = parsed.value.cmd === "computer.takeover" ? "person" : "agent";
+      const port = computerPort;
+      if (!port?.control) { say(lane, { ev: "error", msg: "Computer use cannot be taken over from here." }); void tellComputer(lane); return; }
+      void port.state().then(async (state) => { if (!state.on) say(lane, { ev: "error", msg: "Computer use is off." }); else await port.control!(who); }).catch(() => { say(lane, { ev: "error", msg: "The screen helper did not answer." }); }).finally(() => tellComputer());
+      return;
+    }
+    if (parsed.value.cmd === "tool.setup") {
+      const start = toolSetups.get(parsed.value.id);
+      if (!start) { say(lane, { ev: "error", msg: "That tool has nothing to set up." }); return; }
+      start(lane, parsed.value.mode);
+      return;
+    }
+    if (parsed.value.cmd === "tool.setup.approve") { mediaSetup.approve(parsed.value.id); return; }
+    if (parsed.value.cmd === "tool.setup.cancel") { mediaSetup.cancel(parsed.value.id); return; }
+    if (parsed.value.cmd === "tool.toggle") {
+      const { name, enabled } = parsed.value;
+      const items = listTools(pluginState, toolUsage);
+      const row = resolveRow(name);
+      const rows = row ? [row] : (listSets(items).find((x) => x.id === name)?.tools ?? []).flatMap((n) => rowOf(n) ?? []).filter((r, i, all) => all.indexOf(r) === i);
+      if (!rows.length) { say(lane, { ev: "error", msg: "That tool is not one of the agent's." }); return; }
+      for (const r of rows) switchRow(pluginState, r, enabled);
+      tellTools(lane);
+      return;
+    }
+    if (parsed.value.cmd === "terminal.use") {
+      const id = parsed.value.backend;
+      const wanted = listBackends(terminalState, terminalConfig()).find((b) => b.id === id);
+      if (!wanted?.ready) { say(lane, { ev: "error", msg: wanted?.hint ?? "That place is not available." }); return; }
+      terminalState.set(wanted.id);
+      tellTools(lane);
+      return;
+    }
+    if (parsed.value.cmd === "sandbox.use") {
+      sandboxState.set({ ...(parsed.value.on !== undefined ? { on: parsed.value.on } : {}), ...(parsed.value.network !== undefined ? { network: parsed.value.network } : {}) });
+      tellTools(lane);
+      return;
+    }
+    if (parsed.value.cmd === "plugin.toggle") {
+      const id = parsed.value.id;
+      if (!pluginItems().some((p) => p.id === id)) { say(lane, { ev: "error", msg: "That is not installed on this computer." }); return; }
+      pluginState.set(id, parsed.value.enabled);
+      tellPlugins();
+      return;
+    }
+    if (parsed.value.cmd === "receive") { receive(lane, parsed.value); return; }
+    if (parsed.value.cmd === "new" || parsed.value.cmd === "rename" || parsed.value.cmd === "remove" || parsed.value.cmd === "pin" || parsed.value.cmd === "archive" || parsed.value.cmd === "mark") { manage(lane, parsed.value); return; }
+    if (parsed.value.cmd === "fork") { void fork(lane, parsed.value.id); return; }
+    if (parsed.value.cmd === "search") { search(lane, parsed.value.query, parsed.value.limit ?? 10, parsed.value.includeArchived === true); return; }
+    if (parsed.value.cmd === "load") { const id = parsed.value.id; if (lane.meta.read().unread.includes(id)) lane.meta.update((m) => { m.unread = m.unread.filter((x) => x !== id); }); }
+    if (parsed.value.cmd === "load" && now?.program) { openProgramSession(lane, parsed.value.id); return; }
+    if (parsed.value.cmd === "load" && now) { const id = parsed.value.id; void adoptWatched(lane, id).then(() => { lane.created?.engine.handle({ cmd: "load", id }); }); return; }
+    if (parsed.value.cmd === "model" && now && lane.engineModels && !lane.engineModels.has(parsed.value.id)) { switchModel(lane, parsed.value.id); return; }
+    if (now) now.engine.handle(parsed.value);
+    else if (parsed.value.cmd === "prompt") { say(lane, { ev: "error", msg: noModel(lane) }); say(lane, { ev: "done", stop: "error" }); }
+  };
+
   const hub: Hub = {
     attach(client, since) {
       if (since > 0) {
@@ -909,242 +1152,15 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
       }
       // The end of what was missed, also when there was nothing: a page knows from it that it is up to date.
       if (asideSlots.size) client.send(backgroundLine());
-      client.send(JSON.stringify({ ev: "synced", version: VERSION, running: [...lanes].filter(([, l]) => l.running).map(([k]) => k) }));
+      client.send(JSON.stringify({ ev: "synced", windows: true, version: VERSION, running: [...lanes].filter(([, l]) => l.running).map(([k]) => k) }));
       clients.add(client);
-      return () => { clients.delete(client); };
+      if (client.questions) answering.add(client);
+      return {
+        command: (text) => run(text, (line) => { client.send(line); }, client),
+        detach: () => { clients.delete(client); answering.delete(client); },
+      };
     },
-    command(text, reply) {
-      const parsed = parseCommand(text);
-      if (!parsed.ok) { reply(JSON.stringify({ ev: "error", msg: `bad command: ${parsed.error}` })); return; }
-      const lane = laneFor(parsed.value.kind ?? primary);
-      // Opening another conversation while one is being answered does not stop it: it goes on in the background, and opening it again brings it back.
-      if (parsed.value.cmd === "load") {
-        const id = parsed.value.id;
-        const there = [...asideSlots].find((s) => s.lane === lane && s.id === id);
-        if (there) { bringBack(lane, there); return; }
-        if (lane.running && !putAside(lane)) return;
-      }
-      if (parsed.value.cmd === "new" && lane.running && !putAside(lane)) return;
-      // A new conversation makes its own engine: one is not made first just to be replaced.
-      const now = parsed.value.cmd === "new" && !lane.created ? undefined : connect(lane);
-      if (parsed.value.cmd === "sessions") {
-        const archived = parsed.value.archived === true;
-        say(lane, { ev: "sessions", items: listSessions(lane, archived) });
-        void refreshRemote().then((changed) => { if (changed) say(lane, { ev: "sessions", items: listSessions(lane, archived) }); announceImportable(); });
-        return;
-      }
-      if (parsed.value.cmd === "import") { if (!signedIn()) { say(lane, { ev: "error", msg: "Sign in to bring conversations from the cloud." }); return; } void importHosted(parsed.value.ids); return; }
-      if (parsed.value.cmd === "move" || parsed.value.cmd === "copy") { void transfer(lane, parsed.value); return; }
-      if (parsed.value.cmd === "schedules" || parsed.value.cmd === "schedule.add" || parsed.value.cmd === "schedule.update" || parsed.value.cmd === "schedule.remove" || parsed.value.cmd === "schedule.run" || parsed.value.cmd === "schedule.runs") { schedule(lane, parsed.value); return; }
-      const page = pageCommand(parsed.value, { env: io.env, config: configPath(io.env, options.config), memory: () => memoryPathsFor(resolve(main.options.cwd ?? process.cwd()), configPath(io.env, options.config)), shelf, inCloud: () => runsInCloud(main.options, io.env), plugins: () => ({ ev: "plugins", items: pluginItems() }), today: () => new Date().toISOString().slice(0, 10), fetch: io.fetch });
-      if (page) {
-        const answer = (a: { say: EngineEvent[]; reply: EngineEvent[] }): void => { for (const e of a.say) say(lane, e); for (const e of a.reply) reply(JSON.stringify(encoder.stamp(e))); };
-        if ("then" in page) void page.then(answer); else answer(page);
-        return;
-      }
-      if (parsed.value.cmd === "artifacts") { say(lane, { ev: "artifacts", items: lane.artifacts.list(parsed.value.id) }); return; }
-      if (parsed.value.cmd === "artifact.read") {
-        const got = lane.artifacts.read(parsed.value.id);
-        if ("error" in got) { say(lane, { ev: "error", msg: got.error }); return; }
-        say(lane, { ev: "artifact", id: got.info.id, name: got.info.name, mime: got.info.mime, bytes: got.info.bytes, ...(got.text !== undefined ? { text: got.text } : {}), ...(got.data !== undefined ? { data: got.data } : {}), ...(got.truncated ? { truncated: true as const } : {}) });
-        return;
-      }
-      if (parsed.value.cmd === "plugins") { tellPlugins(); return; }
-      if (parsed.value.cmd === "memory.pending") { const r = review(), c = parsed.value; for (const e of c.action && c.id ? answerMemory(r, c.action, c.id, new Date().toISOString().slice(0, 10)) : [memoryPending(r)]) say(lane, e); return; }
-      if (parsed.value.cmd === "skill.review") { const r = review(), c = parsed.value; for (const e of c.id && c.accept !== undefined ? answerSkill(r, c.id, c.accept) : [skillReview(r)]) say(lane, e); return; }
-      if (parsed.value.cmd === "skill.rollback") { for (const e of rollbackSkill(review(), parsed.value.id)) say(lane, e); return; }
-      if (parsed.value.cmd === "providers") { tellProviders(); return; }
-      if (local.command(parsed.value)) return;
-      if (accountsPage.command(parsed.value)) return;
-      if (mcpSignins.command(parsed.value)) return;
-      if (parsed.value.cmd === "endpoints" || parsed.value.cmd === "endpoint.save" || parsed.value.cmd === "endpoint.remove" || parsed.value.cmd === "endpoint.models") {
-        const cmd = parsed.value;
-        const path = configPath(io.env, main.options.config);
-        const file = loadConfig(path);
-        const fail = (msg: string): void => { say(lane, { ev: "error", msg }); };
-        if (!file.ok) { fail(file.error); return; }
-        if (cmd.cmd === "endpoints") { tellEndpoints(); return; }
-        if (main.options.sandboxed || file.value?.webProxy) { fail(ONLY_ON_A_COMPUTER); return; }
-        const known = file.value?.endpoints ?? {};
-        const headersFor = (key: string | undefined) => (api: EndpointRecord["api"]): Record<string, string> => authHeaders(api, key);
-        /** What the server speaks: the one asked for, or, for `auto`, the one it answers in. */
-        const lookup = async (baseUrl: string, api: "auto" | EndpointRecord["api"], key: string | undefined): Promise<{ api: EndpointRecord["api"]; items: { id: string; window?: number }[] } | { error: string }> => {
-          if (api === "auto") {
-            const found = await detectApi(io.fetch, baseUrl, headersFor(key), API_STYLES);
-            // The style is known now: asked once more in it, which also fills in the sizes the list itself does not say.
-            return "error" in found ? found : lookup(baseUrl, found.api, key);
-          }
-          const got = await askModels(io.fetch, { baseUrl, api, headers: authHeaders(api, key), machine: () => readMachine(realProbe(io.system), localDir(io.env)) });
-          return "error" in got ? got : { api, items: got.items };
-        };
-        if (cmd.cmd === "endpoint.models") {
-          const saved = "id" in cmd ? known[cmd.id] : undefined;
-          if ("id" in cmd && !saved) { fail("That endpoint is not there."); return; }
-          const asked = saved ? { baseUrl: saved.baseUrl, api: saved.api, key: saved.key } : { baseUrl: (cmd as { baseUrl: string }).baseUrl, api: (cmd as { api: "auto" | EndpointRecord["api"] }).api, key: (cmd as { key?: string }).key };
-          void lookup(asked.baseUrl, asked.api, asked.key).then((got) => say(lane, "error" in got ? { ev: "error", msg: got.error } : { ev: "endpoint.models", api: got.api, items: got.items }));
-          return;
-        }
-        if (cmd.cmd === "endpoint.remove") {
-          if (!known[cmd.id]) { fail("That endpoint is not there."); return; }
-          const written = saveEndpoint(path, cmd.id, undefined);
-          if (!written.ok) { fail(written.error); return; }
-          tellEndpoints();
-          pushModels();
-          return;
-        }
-        const id = cmd.id ?? newEndpointId(cmd.name, Object.keys(known));
-        const key = cmd.key === undefined ? known[id]?.key : cmd.key === "" ? undefined : cmd.key;
-        const keep = (api: EndpointRecord["api"]): void => {
-          const written = saveEndpoint(path, id, { name: cmd.name, baseUrl: cmd.baseUrl, api, ...(key ? { key } : {}), models: cmd.models });
-          if (!written.ok) { fail(written.error); return; }
-          tellEndpoints();
-          pushModels();
-        };
-        // The style is saved as the concrete one it was found to be, never as `auto`.
-        if (cmd.api !== "auto") { keep(cmd.api); return; }
-        void detectApi(io.fetch, cmd.baseUrl, headersFor(key), API_STYLES).then((got) => { if ("error" in got) fail(got.error); else keep(got.api); });
-        return;
-      }
-      if (parsed.value.cmd === "provider.save" || parsed.value.cmd === "provider.remove" || parsed.value.cmd === "provider.models" || parsed.value.cmd === "provider.use") {
-        const cmd = parsed.value;
-        const path = configPath(io.env, main.options.config);
-        const file = loadConfig(path);
-        const fail = (msg: string): void => { say(lane, { ev: "error", msg }); };
-        const entry = PROVIDERS.find((p) => p.id === cmd.id);
-        if (!file.ok) { fail(file.error); return; }
-        if (main.options.sandboxed || file.value?.webProxy) { fail(ONLY_ON_A_COMPUTER); return; }
-        if (!entry) { fail("That provider is not known."); return; }
-        const before = file.value?.providers?.[entry.id];
-        if (cmd.cmd === "provider.save" || cmd.cmd === "provider.remove") {
-          const next = cmd.cmd === "provider.remove" ? { saved: undefined } : mergeSaved(entry, before, cmd);
-          if ("error" in next) { fail(next.error); return; }
-          const commit = (): boolean => {
-            const written = saveProvider(path, entry.id, next.saved);
-            if (!written.ok) { fail(written.error); return false; }
-            tellProviders();
-            return true;
-          };
-          // A new key is tried on the provider's own list of models first: a key it refuses is never kept.
-          const where = next.saved && cmd.cmd === "provider.save" && cmd.key !== undefined && !entry.adc ? baseOf(entry, next.saved) : undefined;
-          if (!where || !("base" in where) || !next.saved) { commit(); return; }
-          const tried = next.saved;
-          const headers = { ...(entry.keyHeader ? {} : authHeaders(entry.api, tried.key)), ...headersOf(entry, tried) };
-          void listModels(entry, where.base, headers, io.fetch).then((got) => {
-            if ("error" in got && got.kind === "refused") { fail(got.error); return; }
-            if (commit() && "error" in got && got.kind === "failed") say(lane, { ev: "notice", msg: `${got.error} The key is saved, but it was not checked.` });
-          });
-          return;
-        }
-        const saved = before ?? {};
-        const where = baseOf(entry, saved);
-        if ("missing" in where) { fail(`Add ${where.missing} for ${entry.name} first.`); return; }
-        if (!saved.key && !entry.keyOptional && !entry.adc) { fail(`Add a key for ${entry.name} first.`); return; }
-        const headers = { ...(entry.keyHeader ? {} : authHeaders(entry.api, saved.key)), ...headersOf(entry, saved) };
-        if (cmd.cmd === "provider.models") {
-          if (entry.adc) { fail(`${entry.name} has no list of models here: give the name of the model.`); return; }
-          void listModels(entry, where.base, headers, io.fetch).then((got) => say(lane, "error" in got ? { ev: "error", msg: got.error } : { ev: "provider.models", id: entry.id, models: got.models.map((m) => m.id), ...(got.skipped.length ? { skipped: got.skipped } : {}) }));
-          return;
-        }
-        const use = (route?: ListedRoute): void => {
-          let credential: string | undefined;
-          if (entry.adc) {
-            const found = findCredentialFile(entry.adc, io.env);
-            if ("error" in found) { fail(found.error); return; }
-            const usable = checkCredentialFile(found.file);
-            if ("error" in usable) { fail(usable.error); return; }
-            credential = found.file;
-          }
-          const session = entry.sessionHeader ? randomUUID() : undefined;
-          const made = modelEntryOf(entry, saved, cmd.model, route, session, credential);
-          if ("missing" in made) { fail(`Add ${made.missing} for ${entry.name} first.`); return; }
-          const name = entryName(entry, cmd.model);
-          const written = saveModel(path, name, { provider: entry.id, model: cmd.model, ...(route ? { route } : {}), ...(session ? { session } : {}), ...(credential ? { credential } : {}), window: 128_000, display: { name: cmd.model, brand: entry.name } });
-          if (!written.ok) { fail(written.error); return; }
-          pushModels();
-          switchModel(lane, name);
-        };
-        if (!entry.routes) { use(); return; }
-        void listModels(entry, where.base, headers, io.fetch).then((got) => {
-          if ("error" in got) { fail(got.error); return; }
-          const listed = got.models.find((m) => m.id === cmd.model);
-          if (listed) { use(listed.route); return; }
-          const left = got.skipped.find((m) => m.id === cmd.model);
-          fail(left ? `${cmd.model}: ${left.reason}.` : `${entry.name} does not list ${cmd.model}.`);
-        });
-        return;
-      }
-      if (parsed.value.cmd === "drafts") { reply(JSON.stringify(encoder.stamp({ ev: "drafts", items: drafts.list() }))); return; }
-      if (parsed.value.cmd === "draft") {
-        drafts.set(parsed.value.key, parsed.value.text);
-        // Told to every window at once, but not kept in what a late window is replayed: it asks with `drafts`.
-        const line = JSON.stringify(encoder.stamp({ ev: "drafts", items: drafts.list() }));
-        for (const c of clients) c.send(lineFor(c, line));
-        return;
-      }
-      if (parsed.value.cmd === "tools") { tellTools(lane); return; }
-      if (parsed.value.cmd === "computer.state") { void tellComputer(lane); return; }
-      if (parsed.value.cmd === "computer.permission" || parsed.value.cmd === "computer.on") {
-        const cmd = parsed.value;
-        if (!computerPort) { void tellComputer(lane); return; }
-        void (cmd.cmd === "computer.on" ? computerPort.turn(cmd.on) : computerPort.request(cmd.id)).catch(() => { say(lane, { ev: "error", msg: "The screen helper did not answer." }); }).finally(() => tellComputer());
-        return;
-      }
-      if (parsed.value.cmd === "computer.takeover" || parsed.value.cmd === "computer.giveback") {
-        const who = parsed.value.cmd === "computer.takeover" ? "person" : "agent";
-        const port = computerPort;
-        if (!port?.control) { say(lane, { ev: "error", msg: "Computer use cannot be taken over from here." }); void tellComputer(lane); return; }
-        void port.state().then(async (state) => { if (!state.on) say(lane, { ev: "error", msg: "Computer use is off." }); else await port.control!(who); }).catch(() => { say(lane, { ev: "error", msg: "The screen helper did not answer." }); }).finally(() => tellComputer());
-        return;
-      }
-      if (parsed.value.cmd === "tool.setup") {
-        const start = toolSetups.get(parsed.value.id);
-        if (!start) { say(lane, { ev: "error", msg: "That tool has nothing to set up." }); return; }
-        start(lane, parsed.value.mode);
-        return;
-      }
-      if (parsed.value.cmd === "tool.setup.approve") { mediaSetup.approve(parsed.value.id); return; }
-      if (parsed.value.cmd === "tool.setup.cancel") { mediaSetup.cancel(parsed.value.id); return; }
-      if (parsed.value.cmd === "tool.toggle") {
-        const { name, enabled } = parsed.value;
-        const items = listTools(pluginState, toolUsage);
-        const row = resolveRow(name);
-        const rows = row ? [row] : (listSets(items).find((x) => x.id === name)?.tools ?? []).flatMap((n) => rowOf(n) ?? []).filter((r, i, all) => all.indexOf(r) === i);
-        if (!rows.length) { say(lane, { ev: "error", msg: "That tool is not one of the agent's." }); return; }
-        for (const r of rows) switchRow(pluginState, r, enabled);
-        tellTools(lane);
-        return;
-      }
-      if (parsed.value.cmd === "terminal.use") {
-        const id = parsed.value.backend;
-        const wanted = listBackends(terminalState, terminalConfig()).find((b) => b.id === id);
-        if (!wanted?.ready) { say(lane, { ev: "error", msg: wanted?.hint ?? "That place is not available." }); return; }
-        terminalState.set(wanted.id);
-        tellTools(lane);
-        return;
-      }
-      if (parsed.value.cmd === "sandbox.use") {
-        sandboxState.set({ ...(parsed.value.on !== undefined ? { on: parsed.value.on } : {}), ...(parsed.value.network !== undefined ? { network: parsed.value.network } : {}) });
-        tellTools(lane);
-        return;
-      }
-      if (parsed.value.cmd === "plugin.toggle") {
-        const id = parsed.value.id;
-        if (!pluginItems().some((p) => p.id === id)) { say(lane, { ev: "error", msg: "That is not installed on this computer." }); return; }
-        pluginState.set(id, parsed.value.enabled);
-        tellPlugins();
-        return;
-      }
-      if (parsed.value.cmd === "receive") { receive(lane, parsed.value); return; }
-      if (parsed.value.cmd === "new" || parsed.value.cmd === "rename" || parsed.value.cmd === "remove" || parsed.value.cmd === "pin" || parsed.value.cmd === "archive" || parsed.value.cmd === "mark") { manage(lane, parsed.value); return; }
-      if (parsed.value.cmd === "fork") { void fork(lane, parsed.value.id); return; }
-      if (parsed.value.cmd === "search") { search(lane, parsed.value.query, parsed.value.limit ?? 10, parsed.value.includeArchived === true); return; }
-      if (parsed.value.cmd === "load") { const id = parsed.value.id; if (lane.meta.read().unread.includes(id)) lane.meta.update((m) => { m.unread = m.unread.filter((x) => x !== id); }); }
-      if (parsed.value.cmd === "load" && now?.program) { openProgramSession(lane, parsed.value.id); return; }
-      if (parsed.value.cmd === "load" && now) { const id = parsed.value.id; void adoptWatched(lane, id).then(() => { lane.created?.engine.handle({ cmd: "load", id }); }); return; }
-      if (parsed.value.cmd === "model" && now && lane.engineModels && !lane.engineModels.has(parsed.value.id)) { switchModel(lane, parsed.value.id); return; }
-      if (now) now.engine.handle(parsed.value);
-      else if (parsed.value.cmd === "prompt") { say(lane, { ev: "error", msg: noModel(lane) }); say(lane, { ev: "done", stop: "error" }); }
-    },
+    command(text, reply) { run(text, reply); },
     connected: () => connect(main) !== undefined,
     created: () => main.created,
     error: () => main.error,

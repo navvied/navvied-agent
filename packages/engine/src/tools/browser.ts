@@ -108,10 +108,13 @@ const WRITE = `function (expected, text) {
 }`;
 const LINK_AT = `((x, y) => { const a = document.elementFromPoint(x, y)?.closest("a[href]"); return a ? a.href : ""; })`;
 
+/** Whether a browser can be driven here: one is installed, or one is already listening. */
+export const browserHere = (): boolean => !!(findChrome() || process.env.NAVVIED_BROWSER_ENDPOINT);
+
 export const browser: Tool = {
   name: "Browser",
   readOnly: false,
-  offeredWhen: ({ userText }) => !!(findChrome() || process.env.NAVVIED_BROWSER_ENDPOINT) && /https?:\/\/|\bbrowse|\bbrowser\b|web ?(site|page)|\bonline\b|\blog ?in\b|\bsign ?in\b|\bscreenshot\b|\bclick\b|\bhover\b|\bdrag\b|\biframe\b|\bsite\b/i.test(userText),
+  offeredWhen: ({ small }) => !small && browserHere(),
   description: "Use a real web browser. Read the page as numbered text (frames too), then act by number; numbers expire when the page changes. Actions: open (url), read, click/hover (ref, or x y of the last screenshot), drag (ref or x y, to or x2 y2), type (ref, text, submit), fill (fields), choose (ref, text), press (text: key), scroll (direction), back, screenshot, dialog (accept, text), tabs, switch/new/close (tab, url), wait (text, selector, seconds), upload (ref, path), console, eval (text). A login the person gave may be typed on the site they named.",
   parameters: {
     type: "object",

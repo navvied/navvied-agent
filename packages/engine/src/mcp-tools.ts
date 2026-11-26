@@ -32,9 +32,9 @@ function partOf(c: McpContent): McpResourceContent {
 /** How much the programs may put in front of a model before their tools are searched instead of listed. */
 export interface DeferLimit { tools: number; /** Characters of names, descriptions and schemas. */ chars: number }
 
-/** About a twentieth of the window (at four characters a token), and fewer tools for a small model, which loses its way among many. */
+/** About a twentieth of the window (at four characters a token), and none listed for a small model, which loses its way among many: it gets the search tool alone. */
 export function deferLimit(small: boolean, window?: number): DeferLimit {
-  return { tools: small ? 10 : 30, chars: Math.max(4000, Math.floor((window ?? (small ? 32_000 : 128_000)) * 0.2)) };
+  return { tools: small ? 0 : 30, chars: Math.max(4000, Math.floor((window ?? (small ? 32_000 : 128_000)) * 0.2)) };
 }
 
 const toolName = (server: string, tool: string): string => `mcp__${server.replace(NAME, "_")}__${tool.replace(NAME, "_")}`.slice(0, 64);
@@ -42,7 +42,7 @@ const toolName = (server: string, tool: string): string => `mcp__${server.replac
 /** What offering a tool costs the model. */
 const weight = (l: Listed): number => JSON.stringify({ name: l.name, description: (l.info.description ?? "").slice(0, WORDS), parameters: l.info.inputSchema ?? {} }).length;
 
-function toTool(l: Listed, small: boolean): Tool {
+function toTool(l: Listed): Tool {
   const { client, info, name } = l;
   const schema = info.inputSchema && typeof info.inputSchema === "object" ? info.inputSchema : {};
   return {
@@ -51,7 +51,6 @@ function toTool(l: Listed, small: boolean): Tool {
     fromOutside: true,
     description: `${(info.description ?? "").slice(0, WORDS)} (from the connected program "${client.name}")`.trim(),
     parameters: { type: "object", ...schema, properties: (schema.properties as Record<string, unknown> | undefined) ?? {} },
-    offeredWhen: ({ small: tight, userText }) => !(small && tight) || userText.toLowerCase().includes(client.name.toLowerCase()) || userText.toLowerCase().includes(info.name.toLowerCase()),
     title: () => `${client.name}: ${info.name.replace(/[_-]+/g, " ")}`,
     async run(args, ctx) {
       try { return render(await client.callTool(info.name, args, ctx.signal), ctx); }
@@ -121,7 +120,7 @@ export async function connectMcp(servers: Record<string, McpServerConfig>, small
   const revealed = new Set<string>();
   const live = clients.filter((c) => listed.some((l) => l.client === c) || c.capabilities.resources || c.capabilities.prompts);
   const tools: Tool[] = listed.map((l) => {
-    const t = toTool(l, small);
+    const t = toTool(l);
     return deferred ? { ...t, offeredWhen: () => revealed.has(l.name) } : t;
   });
   if (deferred) tools.push(findTool(listed, live, (names) => names.forEach((n) => revealed.add(n))));

@@ -102,6 +102,7 @@ function validateOne(raw: unknown): Result<Command> {
       if ((cmd.images?.length ?? 0) + (cmd.files?.length ?? 0) > LIMITS.attachments) return fail(`at most ${LIMITS.attachments} images and files per prompt`);
       if (raw.effort !== undefined) { if (!EFFORTS.includes(raw.effort as Effort)) return fail(`prompt.effort must be one of ${EFFORTS.join(", ")}`); cmd.effort = raw.effort as Effort; }
       if (raw.mode !== undefined) { if (!PERM_MODES.includes(raw.mode as PermMode)) return fail(`prompt.mode must be one of ${PERM_MODES.join(", ")}`); cmd.mode = raw.mode as PermMode; }
+      if (raw.questions === true) cmd.questions = true;
       if (raw.paths !== undefined) {
         if (!Array.isArray(raw.paths) || raw.paths.some((p) => typeof p !== "string" || p.length > LIMITS.pathLength)) return fail("prompt.paths must be an array of paths");
         cmd.paths = (raw.paths as string[]).slice(0, LIMITS.paths);
@@ -110,6 +111,9 @@ function validateOne(raw: unknown): Result<Command> {
       return ok(cmd);
     }
     case "cancel": return ok({ cmd: "cancel" });
+    case "window":
+      if (typeof raw.questions !== "boolean") return fail("window.questions must be true or false");
+      return ok({ cmd: "window", questions: raw.questions });
     case "job.stop":
       if (!isId(raw.id)) return fail("job.stop needs an id");
       return ok({ cmd: "job.stop", id: raw.id });

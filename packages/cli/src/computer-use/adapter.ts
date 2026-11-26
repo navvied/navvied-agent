@@ -72,6 +72,8 @@ export class DriverAdapter implements ComputerHelper {
   /** Whether the last read of the window had a picture: places in pixels mean something only against one. */
   private shot = false;
   private halted = false;
+  /** The last step selected text (select all, or a drag): a text route that only inserts must delete it first for typing to replace it. */
+  private selected = false;
 
   constructor(private i: AdapterInput) {}
 
@@ -192,12 +194,24 @@ export class DriverAdapter implements ComputerHelper {
         name = "drag"; args = { ...base, from_x: from.x, from_y: from.y, to_x: to.x, to_y: to.y, ...held };
         break;
       }
-      case "type": return this.typeText(base, element, c.text ?? "", app, signal);
+      case "type": {
+        if (this.selected && this.i.platform === "linux") {
+          const gone = await this.input({ action: "key", keys: "delete" }, app, consent, delivery, signal);
+          if (gone.verdict === "refused") return gone;
+        }
+        this.selected = false;
+        return this.typeText(base, element, c.text ?? "", app, signal);
+      }
       case "key": { const ks = words(c.keys ?? ""); if (ks.length === 1) { name = "press_key"; args = { ...base, key: ks[0] }; } else { name = "hotkey"; args = { ...base, keys: ks }; } break; }
       case "scroll": name = "scroll"; args = { ...base, direction: c.direction ?? "down", amount: Math.max(1, Math.min(50, c.amount ?? 3)), by: "line", ...(element ? { element_token: element.token } : {}) }; break;
       default: return refused("blocked_by_policy", "This step does not exist.");
     }
     const r = await this.safe(name, args, true, signal);
+    if (c.action !== "scroll") {
+      const sent = !("fail" in r && r.fail.verdict === "refused");
+      const selects = c.action === "drag" || (c.action === "key" && /^(ctrl|cmd|command|control)[+-]a$/i.test((c.keys ?? "").replace(/\s/g, "")));
+      this.selected = sent && selects;
+    }
     if ("fail" in r) {
       if (r.fail.code === "background_unavailable" && delivery === "background" && consent && (await consent({ app, about: "foreground" })) !== "no") return this.input(c, app, consent, "foreground", signal);
       return r.fail;

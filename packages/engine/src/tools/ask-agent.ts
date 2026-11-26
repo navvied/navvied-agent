@@ -5,16 +5,13 @@ import { clip, outputBudget, str } from "./util.ts";
 
 export const ASK_AGENT_TOOL_NAME = "AskAgent";
 
-/** A model with room is offered the tool whenever the person has set up a peer; a small one only when the request names agents or one of them. */
-const mentions = (text: string, names: readonly string[]): boolean => /\bagents?\b/i.test(text) || names.some((n) => text.toLowerCase().includes(n.toLowerCase()));
-
 /** The tool, made only when the person has set up at least one peer. What the peer answers is somebody else's text, so it comes back framed and marks the turn as one that read outside text. */
 export function askAgentTool(names: readonly string[]): Tool {
   return {
     name: ASK_AGENT_TOOL_NAME,
     // Not read-only: the message leaves this computer. It is asked about in `ask` mode, and not offered in plan mode.
     readOnly: false,
-    offeredWhen: ({ small, userText }) => !small || mentions(userText, names),
+    offeredWhen: ({ small }) => !small,
     description: "Ask another agent the user has set up and read its answer. It does not see this conversation: say all it needs. context: an id from an earlier answer, to go on with it.",
     parameters: { type: "object", properties: { agent: { type: "string", enum: [...names] }, message: { type: "string" }, context: { type: "string" } }, required: ["agent", "message"] },
     fixArgs: (a) => ({ ...a, agent: a.agent ?? a.peer ?? a.name ?? a.to, message: a.message ?? a.prompt ?? a.question ?? a.text, context: a.context ?? a.context_id ?? a.contextId }),

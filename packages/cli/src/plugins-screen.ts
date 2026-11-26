@@ -4,7 +4,6 @@ import type { Kit } from "./providers/kit.ts";
 const NONE = "No skills, tool servers or hooks are set up. Skills are folders with a SKILL.md in ~/.config/navvied/skills; tool servers (mcp) and hooks go in config.json.";
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
-/** `/plugins`: what extends the agent here. Enter switches a skill or a hook, opens a connected program or a plugin, asks about a project's plugin; the last row installs one. */
 export async function pluginsScreen(k: Kit): Promise<void> {
   let at = 0;
   for (;;) {
@@ -26,13 +25,11 @@ export async function pluginsScreen(k: Kit): Promise<void> {
   }
 }
 
-/** A project's plugin is not used until the person says yes. */
 async function trust(k: Kit, p: PluginInfo): Promise<void> {
   const picked = await k.choose("Trust this project's plugin?", "Trust this project's plugin?", [{ label: "Trust this project" }, { label: "Do not trust" }], { body: [`This project asks to use the plugin ${p.name}.`, "It can run commands when the project is open."] });
   if (picked === 0 || picked === 1) k.link.send({ cmd: "skill.review", id: `trust:plugin:${p.name}`, accept: picked === 0 });
 }
 
-/** One connected program or one plugin: switch it, sign in, see what it offers. */
 async function one(k: Kit, p: PluginInfo): Promise<void> {
   for (;;) {
     const rows = [
@@ -47,7 +44,6 @@ async function one(k: Kit, p: PluginInfo): Promise<void> {
   }
 }
 
-/** The sign-in of a connected program, from its address to "Connected": the link, waiting for the browser, and a way to try again. */
 export async function signIn(k: Kit, server: string): Promise<void> {
   const seen: { url?: string; state?: string; reason?: string } = {};
   let waiting: (() => void)[] = [];
@@ -90,7 +86,6 @@ export async function signIn(k: Kit, server: string): Promise<void> {
   } finally { stop(); }
 }
 
-/** What a connected program offers: how many tools (searched when needed, not listed), its documents, and its ready-made requests. */
 async function catalog(k: Kit, server: string): Promise<{ count: number; docs: McpResourceInfo[]; prompts: McpPromptInfo[] }> {
   const [tools, resources, prompts] = await Promise.all([k.link.call("mcp.tools", { cmd: "mcp.tools", server }), k.link.call("mcp.resources", { cmd: "mcp.resources", server }), k.link.call("mcp.prompts", { cmd: "mcp.prompts" })]);
   return { count: typeof tools === "string" ? 0 : tools.items.length, docs: typeof resources === "string" ? [] : resources.items.filter((r) => r.server === server), prompts: typeof prompts === "string" ? [] : prompts.items.filter((i) => i.server === server) };
@@ -109,7 +104,6 @@ async function offers(k: Kit, server: string): Promise<void> {
   }
 }
 
-/** A ready-made request: Enter uses it (the arguments it needs are asked for first), and it goes to the conversation as the person's own message. */
 async function usePrompt(k: Kit, server: string, prompts: McpPromptInfo[]): Promise<void> {
   const picked = await k.choose("Prompts", "Prompts", prompts.map((p) => ({ label: p.name, ...(p.description ? { hint: p.description } : {}) })));
   const p = picked === undefined ? undefined : prompts[picked];
@@ -124,7 +118,6 @@ async function usePrompt(k: Kit, server: string, prompts: McpPromptInfo[]): Prom
   k.note.push("Added to the message box.");
 }
 
-/** Installing a plugin takes two steps: what it brings and its fingerprint are shown, and only a press on Install fetches those same files. */
 async function install(k: Kit): Promise<void> {
   const from = await k.text("Install a plugin", k.frame("", "Where is it?", k.dim("A folder on this computer, or an address.")));
   if (!from) return;

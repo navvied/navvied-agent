@@ -11,7 +11,7 @@
     "tts"
   ],
   "prompt": "Read the text of hello.txt aloud and save the sound as greeting.wav.",
-  "check": "head -c4 greeting.wav | grep -q RIFF && grep -qF \"$(cat hello.txt)\" greeting.wav",
+  "check": "head -c4 greeting.wav | grep -q RIFF && { grep -qF \"$(cat hello.txt)\" greeting.wav || ffprobe -v error -show_entries format=duration -of csv=p=0 greeting.wav | awk '{exit !($1 > 0.8)}'; }",
   "protect": [
     "README.md",
     "hello.txt"

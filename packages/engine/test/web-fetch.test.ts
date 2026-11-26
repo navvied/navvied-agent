@@ -127,7 +127,7 @@ describe("a page becomes text a small model can read", () => {
 describe("what goes wrong shows the next call", () => {
   test("not found, refused and rate-limited", async () => {
     answer = () => html("nope", 404);
-    expect(await fetchIt("https://docs.example.com/guide/missing-page")).toBe('Error: not found (404). Search for it: WebSearch {"query":"docs.example.com guide missing page"}');
+    expect(await fetchIt("https://docs.example.com/guide/missing-page")).toBe('Error: not found (404). Check the address and the path; if it was only a guess, search: WebSearch {"query":"docs.example.com guide missing page"}');
     answer = () => html("denied", 403);
     expect(await fetchIt("https://docs.example.com/x")).toBe('Error: the site refused a plain fetch (403). If you have a browser: Browser {"action":"open","url":"https://docs.example.com/x"}');
     answer = () => html("slow down", 429);

@@ -95,15 +95,13 @@ describe("connected programs", () => {
     expect(await echo.run({ text: "x" }, ctx())).toMatch(/^Error: /);
   });
 
-  test("a small model is shown a program's tools only when the request names the program or the tool", async () => {
-    const mcp = await connectMcp({ notes: server() }, true);
+  test("a small model is shown a program's tools by the search alone, a larger one lists them, whatever the request says", async () => {
+    const mcp = await connectMcp({ notes: server() }, true), big = await connectMcp({ notes: server() }, false);
     try {
-      const names = (userText: string, small: boolean) => toolsFor("auto", [...defaultTools(), ...mcp.tools], { small, userText, jobs: 0 }).map((t) => t.name).filter((n) => n.startsWith("mcp__"));
-      expect(names("fix the bug", true)).toEqual([]);
-      expect(names("add a note in notes", true)).toHaveLength(7);
-      expect(names("use echo please", true)).toEqual(["mcp__notes__echo"]);
-      expect(names("fix the bug", false)).toHaveLength(7);
-    } finally { mcp.close(); }
+      const names = (small: boolean, c = mcp) => toolsFor("auto", [...defaultTools(), ...c.tools], { small, jobs: 0 }).map((t) => t.name).filter((n) => n.startsWith("mcp__"));
+      expect(names(true)).toEqual(["mcp__find"]);
+      expect(names(false, big)).toHaveLength(7);
+    } finally { mcp.close(); big.close(); }
   });
 });
 

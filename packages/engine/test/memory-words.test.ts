@@ -48,4 +48,12 @@ describe("statements in other languages become notes, from the data file", () =>
   test("English is still read, including remember that", () => {
     expect(found("Remember that the build uses bun")).toEqual(["project: The build uses bun"]);
   });
+  test("Indonesian as it is written, with slang and short forms, is kept without its chat filler", () => {
+    expect(found("Jgn pernah pake var di repo ini")).toEqual(["project: Jgn pernah pake var di repo ini"]);
+    expect(found("mulai skrg tulis komentar singkat ya")).toEqual(["project: Tulis komentar singkat"]);
+    expect(found("inget kalo build jalan pake bun dong")).toEqual(["project: Build jalan pake bun"]);
+    expect(found("gue suka jawaban singkat")).toEqual(["user: Gue suka jawaban singkat"]);
+    expect(found("kita pake bun di sini")).toEqual(["project: Kita pake bun di sini"]);
+    expect(found("tolong benerin tes yg gagal dong")).toEqual([]);
+  });
 });

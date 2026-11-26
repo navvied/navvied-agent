@@ -8,6 +8,8 @@ use std::time::Duration;
 pub enum Notice {
     Finished,
     NeedsYou { detail: Option<String> },
+    /// The agent asked the person something; `detail` is its first question.
+    Question { detail: Option<String> },
 }
 
 impl Notice {
@@ -15,7 +17,8 @@ impl Notice {
         match self {
             Notice::Finished => ("navvied finished", "Your task is done. Open navvied to read the answer.".to_owned()),
             Notice::NeedsYou { detail: Some(d) } => ("navvied needs you", format!("It asks to: {d}")),
-            Notice::NeedsYou { detail: None } => ("navvied needs you", "It needs an answer before it can go on.".to_owned()),
+            Notice::Question { detail: Some(q) } => ("navvied needs you", format!("A question: {q}")),
+            Notice::NeedsYou { detail: None } | Notice::Question { detail: None } => ("navvied needs you", "It needs an answer before it can go on.".to_owned()),
         }
     }
 }
@@ -104,6 +107,11 @@ impl Tracker {
                 let detail = field("title").map(|t| tidy(t, 120)).filter(|t| !t.is_empty() && self.settings.details);
                 vec![Update::Notice(Notice::NeedsYou { detail })]
             }
+            Some("question") if self.settings.notices => {
+                let first = json.get("questions").and_then(|q| q.get(0)).and_then(|q| q.get("question")).and_then(|v| v.as_str());
+                let detail = first.map(|t| tidy(t, 120)).filter(|t| !t.is_empty() && self.settings.details);
+                vec![Update::Notice(Notice::Question { detail })]
+            }
             _ => Vec::new(),
         }
     }
@@ -153,6 +161,27 @@ mod tests {
     }
 
     #[test]
+    fn a_question_asks_for_the_person_with_the_first_question_in_the_words_of_the_card() {
+        let mut t = Tracker::new(Settings::default());
+        let line = r#"{"ev":"question","id":"q1","questions":[{"question":"Which folder\n\u0007should I use?","choices":["a","b"]},{"question":"Second?"}]}"#;
+        let n = notices(t.feed(line, s(1)));
+        assert_eq!(n, vec![Notice::Question { detail: Some("Which folder should I use?".into()) }]);
+        assert_eq!(n[0].text(), ("navvied needs you", "A question: Which folder should I use?".to_owned()));
+    }
+
+    #[test]
+    fn a_long_question_is_shortened_and_a_question_with_no_words_still_asks() {
+        let mut t = Tracker::new(Settings::default());
+        let long = "b".repeat(500);
+        let n = notices(t.feed(&format!(r#"{{"ev":"question","id":"q","questions":[{{"question":"{long}"}}]}}"#), s(1)));
+        let Notice::Question { detail: Some(d) } = &n[0] else { panic!() };
+        assert_eq!(d.chars().count(), 120);
+        for line in [r#"{"ev":"question","id":"q","questions":[]}"#, r#"{"ev":"question","id":"q"}"#, r#"{"ev":"question","id":"q","questions":[{"question":""}]}"#] {
+            assert_eq!(notices(t.feed(line, s(2))), vec![Notice::Question { detail: None }]);
+        }
+    }
+
+    #[test]
     fn without_details_no_name_or_path_is_carried() {
         let mut t = Tracker::new(Settings { details: false, ..Settings::default() });
         t.feed(r#"{"ev":"user","text":"fix secrets.env please"}"#, s(0));
@@ -161,6 +190,9 @@ mod tests {
         let n = notices(t.feed(r#"{"ev":"approval","id":"1","title":"Edit secrets.env"}"#, s(1)));
         assert_eq!(n, vec![Notice::NeedsYou { detail: None }]);
         assert!(!n[0].text().1.contains("secrets"));
+        let q = notices(t.feed(r#"{"ev":"question","id":"2","questions":[{"question":"Delete secrets.env?"}]}"#, s(1)));
+        assert_eq!(q, vec![Notice::Question { detail: None }]);
+        assert!(!q[0].text().1.contains("secrets"));
     }
 
     #[test]
@@ -168,6 +200,7 @@ mod tests {
         let mut t = Tracker::new(Settings { notices: false, ..Settings::default() });
         t.feed(r#"{"ev":"taken"}"#, s(0));
         assert!(notices(t.feed(r#"{"ev":"approval","id":"1","title":"x"}"#, s(1))).is_empty());
+        assert!(notices(t.feed(r#"{"ev":"question","id":"1","questions":[{"question":"x"}]}"#, s(1))).is_empty());
         assert!(notices(t.feed(r#"{"ev":"done","stop":"end_turn"}"#, s(900))).is_empty());
     }
 

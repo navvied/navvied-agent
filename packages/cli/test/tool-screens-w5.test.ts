@@ -9,7 +9,6 @@ import { browserLine, hookLine } from "../src/step-events.ts";
 import { fakeIO } from "./helpers.ts";
 import { FakeLink, scripted } from "./providers-helpers.ts";
 
-/** A hub that answers a command with the events a script gives for it, one after the other. */
 class Hub extends FakeLink {
   constructor(private script: Record<string, EngineEvent[] | ((c: Record<string, unknown>) => EngineEvent | string)>, private flow: Record<string, EngineEvent[]> = {}) { super((c) => { const s = script[c.cmd as string]; return typeof s === "function" ? s(c) : s?.[0]; }); }
   override send(cmd: object): void {

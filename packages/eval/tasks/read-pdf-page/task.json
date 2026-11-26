@@ -5,6 +5,7 @@
   "level": 1,
   "lang": "none",
   "requires": [],
+  "media": ["vision"],
   "prompt": "report.pdf has three pages. The access code is on page 3. Write the access code into answer.txt.",
   "check": "grep -q 'KITE-4471' answer.txt",
   "protect": [

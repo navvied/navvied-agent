@@ -47,7 +47,7 @@ export const todo: Tool = {
   readOnly: true,
   /** For every model with room for it; a small one is spared its text. */
   offeredWhen: ({ small }) => !small,
-  description: "Keep a task list for work in several steps. Send the whole list each time. Exactly one item in_progress; mark it completed as soon as it is done.",
+  description: "Your checklist for work in several steps; the person sees it as a to-do list or plan. It is not the result: do the steps. Send the whole list each time. Exactly one item in_progress; mark it completed as soon as it is done.",
   parameters: {
     type: "object",
     properties: {

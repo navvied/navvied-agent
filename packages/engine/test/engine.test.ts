@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { browserHere } from "../src/tools/browser.ts";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { EngineEvent } from "@navvied/protocol";
@@ -55,11 +56,11 @@ describe("echoing the prompt", () => {
 describe("a small model", () => {
   const names = (r: ReturnType<typeof rig>, i = 0): string[] => r.provider.requests[i]!.tools.map((t) => t.name);
 
-  test("is offered only the tools it needs, a shorter prompt, and the web tool only when an address is mentioned", async () => {
+  test("is offered only the tools it needs and a shorter prompt, and a web address in the request changes nothing", async () => {
     const small = rig(() => ({ text: "hi" }), { window: 32_768, small: true });
     await small.turn(prompt("say hi"));
     expect(names(small)).toEqual(["Read", "Write", "Edit", "Bash", "Glob", "Grep", "AskUserQuestion"]);
-    expect(small.provider.requests[0]!.system).toContain("Answer questions and chat in plain text, directly");
+    expect(small.provider.requests[0]!.system).toContain("Chat in plain text");
     expect(small.provider.requests[0]!.system.length).toBeLessThan(700);
     await small.turn(prompt("what is on https://example.com/docs ?"));
     expect(names(small, 1)).toEqual(names(small, 0));
@@ -67,31 +68,31 @@ describe("a small model", () => {
     small.cleanup();
     const asked = rig(() => ({ text: "hi" }), { window: 32_768, small: true });
     await asked.turn(prompt("what is on https://example.com/docs ?"));
-    expect(names(asked)).toContain("WebFetch");
+    expect(names(asked)).toEqual(names(small, 0));
     asked.cleanup();
   });
 
-  test("a model with a large window gets the tools of the work, and the others when its first request calls for them", async () => {
+  test("a model with a large window gets the tools of the work, and the words of its request change nothing", async () => {
     const large = rig(() => ({ text: "hi" }));
     await large.turn(prompt("say hi"));
-    expect(names(large)).toEqual(["Read", "Write", "Edit", "MultiEdit", "apply_patch", "Bash", "Glob", "Grep", "Agent", "TodoWrite", "AskUserQuestion"]);
+    expect(names(large)).toEqual(["Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", ...(browserHere() ? ["Browser"] : []), "Agent", "TodoWrite", "AskUserQuestion"]);
     expect(large.provider.requests[0]!.system).toContain("Work carefully");
     await large.turn(prompt("research the latest docs and remember them, then:\n1. update\n2. test"));
     expect(large.provider.requests[1]!.tools.map((t) => t.name)).toEqual(names(large));
     large.cleanup();
     const asked = rig(() => ({ text: "hi" }));
     await asked.turn(prompt("research the latest docs and remember them, then:\n1. update\n2. test"));
-    expect(names(asked)).toEqual(["Read", "Write", "Edit", "MultiEdit", "apply_patch", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "TodoWrite", "AskUserQuestion"]);
+    expect(names(asked)).toEqual(names(large));
     asked.cleanup();
   });
 
-  test("what the program knows about itself is sent only with a request that asks about it", async () => {
+  test("what the program knows about itself is in every request, whatever it says", async () => {
     const r = rig(() => ({ text: "ok" }), { reference: "REFERENCE: the commands are /model and /clear." });
     await r.turn(prompt("fix src/age.ts and run the tests in /tmp/work"));
     await r.turn(prompt("how do I switch the model?"));
     await r.turn(prompt("what does /clear do"));
     await r.turn(prompt("who are you?"));
-    expect(r.provider.requests.map((q) => q.system.includes("REFERENCE"))).toEqual([false, true, true, true]);
+    expect(r.provider.requests.map((q) => q.system.includes("REFERENCE"))).toEqual([true, true, true, true]);
     r.cleanup();
   });
 

@@ -4,6 +4,8 @@ import { PluginState } from "../../cli/src/plugins.ts";
 
 const HERE = dirname(import.meta.path);
 export const TASKS = join(HERE, "../tasks");
+/** The tasks that exist only for the newbie lane (see newbie.ts); the others of the lane are in `TASKS`. */
+export const NEWBIE_TASKS = join(HERE, "../newbie-tasks");
 export const CLI = join(HERE, "../../cli/src/main.ts");
 
 /** The values of `--name x` and `--name=x` in an argument list, in order. */

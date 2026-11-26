@@ -242,19 +242,19 @@ describe("the /login screens", () => {
 });
 
 describe("signing in through the browser", () => {
-  const device = { deviceCode: "dev-secret", userCode: "BCDF-GHJK", verificationUrl: "https://example.test/device?code=BCDF-GHJK", expiresIn: 600, interval: 2 };
-  /** A server whose approval comes after `pending` polls, then answers with `final`. */
-  const server = (pending: number, final: "approved" | "denied" | "expired" | "down", log: string[] = []) => {
-    let polls = 0;
+  const device = { deviceCode: "dev-secret", userCode: "BCDF-GHJK", verificationUrl: "https://example.test/device?code=BCDF-GHJK", expiresIn: 600 };
+  const events = (...list: object[]): Response => new Response([": ping", ...list.map((e) => `data: ${JSON.stringify(e)}`)].map((l) => `${l}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+  const server = (dropped: number, final: "approved" | "denied" | "expired" | "down", log: string[] = []) => {
+    let connections = 0;
     return (async (url: string, init: RequestInit) => {
       const path = new URL(url).pathname;
       log.push(`${init.method ?? "GET"} ${path}`);
       if (path === "/api/account/device") return final === "down" ? reply(502, {}) : reply(200, device);
       if (path === "/api/account/device/token") {
-        if (polls++ < pending) return reply(400, { error: { type: "authorization_pending" } });
+        if (connections++ < dropped) return events();
         if (final === "denied") return reply(403, { error: { type: "denied" } });
         if (final === "expired") return reply(410, { error: { type: "expired" } });
-        return reply(200, { user: { email: "you@example.com" }, token: "nv_browser" });
+        return events({ ev: "approved", user: { email: "you@example.com" }, token: "nv_browser" });
       }
       if (path === "/v1/models") return reply(200, { default: "sage", data: listing.models });
       return reply(404, {});
@@ -275,7 +275,7 @@ describe("signing in through the browser", () => {
     expect(waiting.body!.join("\n")).toContain("BCDF-GHJK");
     expect(waiting.body!.join("\n")).toContain("https://example.test/device?code=BCDF-GHJK");
     expect(waiting.status).toBe("Waiting for you to approve in the browser");
-    expect(waits).toEqual([2000, 2000, 2000]);
+    expect(waits).toEqual([1000, 2000]);
     expect(log).toEqual(["POST /api/account/device", "POST /api/account/device/token", "POST /api/account/device/token", "POST /api/account/device/token", "GET /v1/models"]);
     expect(readAccount(p.account)).toEqual({ server: "https://example.test", token: "nv_browser", email: "you@example.com" });
     expect(readHostedModels(p.models)).toEqual(listing);

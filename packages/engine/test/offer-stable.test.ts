@@ -34,7 +34,7 @@ describe("the tools offered stay the same for a whole conversation", () => {
       expect(q.system).toBe(main[0]!.system);
     }
     expect(names(main[0]!)).toEqual(expect.arrayContaining(["TodoWrite", "MultiEdit", "apply_patch"]));
-    expect(names(main[0]!)).not.toContain("WebSearch");
+    expect(names(main[0]!)).not.toContain("Remember");
     r.cleanup();
   });
 
@@ -57,7 +57,7 @@ describe("the tools offered stay the same for a whole conversation", () => {
   });
 
   test("a hidden tool called by its name is run, and the list is the same afterwards", async () => {
-    const r = rig((req) => (req.messages.some((m) => m.role === "tool") ? { text: "ok" } : { calls: [{ name: "NotebookEdit", args: { notebook_path: "x.ipynb" } }] }));
+    const r = rig((req) => (req.messages.some((m) => m.role === "tool") ? { text: "ok" } : { calls: [{ name: "NotebookEdit", args: { notebook_path: "x.ipynb" } }] }), { window: 8000, small: true });
     await r.turn(prompt("hello"));
     const [first, second] = r.provider.requests;
     expect(String(second!.messages.find((m) => m.role === "tool")!.content)).not.toContain("there is no tool");

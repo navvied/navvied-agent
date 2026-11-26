@@ -11,11 +11,11 @@
     "stt"
   ],
   "prompt": "meeting.wav is a recording of a meeting. Write the sentence the speaker says into summary.txt.",
-  "check": "grep -q 'launch moves to Thursday' summary.txt",
+  "check": "grep -qi 'launch moves to thursday' summary.txt",
   "protect": [
     "README.md"
   ],
   "maxSteps": 20,
   "timeoutSeconds": 300,
-  "setup": "printf RIFF > meeting.wav"
+  "setup": "if [ -n \"$BENCH_TTS_BIN\" ]; then echo 'The launch moves to Thursday.' | \"$BENCH_TTS_BIN\" --model \"$BENCH_TTS_MODEL\" --output_file meeting.wav >/dev/null 2>&1; else printf RIFF > meeting.wav; fi"
 }

@@ -6,6 +6,7 @@ import { bubblewrapArgs, guarded, joinUserns, withFilter } from "./bubblewrap.ts
 import { denialIn, type Denial } from "./denial.ts";
 import { planFor, type Plan, type Setting } from "./policy.ts";
 import { seatbeltProfile } from "./seatbelt.ts";
+import { lookout } from "./lookout.ts";
 import { UserNamespace } from "./userns.ts";
 import { seccompProgram } from "./seccomp.ts";
 import { windowsAbility, windowsLaunch, windowsLine, sandboxHelper } from "./windows.ts";
@@ -41,7 +42,7 @@ export interface SandboxOptions {
 
 /** A command as it will be started. When `confined`, `line` says what is really in force; otherwise it says why nothing is, once. */
 export type Launch =
-  | { confined: true; argv: string[]; /** Started with `GUARD_STDIO` and released with `release` (see `handshake.ts`); without that the command never starts. */ guarded: boolean; line: string; plan: Plan; denial(output: string, cwd: string): Denial | undefined }
+  | { confined: true; argv: string[]; /** Started with `GUARD_STDIO` and released with `release` (see `handshake.ts`); without that the command never starts. */ guarded: boolean; /** Where the shims that let the command look at the computer's programs are (see `lookout.ts`): the folder for `NAVVIED_LOOK` and the one to put first in `PATH`. */ look?: { dir: string; bin: string }; line: string; plan: Plan; denial(output: string, cwd: string): Denial | undefined }
   | { confined: false; line?: string };
 
 const BASE = ["--ro-bind", "/", "/", "--dev", "/dev", "--cap-drop", "ALL"];
@@ -91,7 +92,7 @@ export class Sandbox {
   readonly #space = new UserNamespace();
   constructor(private readonly o: SandboxOptions) {}
 
-  /** Ends what this sandbox keeps alive between commands (the namespace they share). */
+  /** Ends what this sandbox keeps alive between commands (the namespace they share). The lookout is the program's, not a sandbox's: it ends with the program. */
   close(): void { this.#space.close(); }
 
   setting(): Setting { return this.o.setting(); }
@@ -130,7 +131,9 @@ export class Sandbox {
       if (filtered) { this.#file ??= filterFile(seccompProgram()!); started = withFilter(this.#file, bwrap, inside); } else started = ["bwrap", ...bwrap, ...inside];
       if (space) started = joinUserns(space, started);
     }
-    const parts = ["writes only in the project, temp and caches", ...(plan.hiddenDirs.length + plan.hiddenFiles.length ? ["secret folders hidden"] : []), `network ${setting.network ? "on" : "off"}`, ...(filtered ? ["risky system calls blocked"] : [])];
-    return { confined: true, argv: started, guarded: guard, line: `[sandbox: ${parts.join("; ")}]`, plan, denial: (output, cwd) => denialIn(output, plan, cwd) };
+    const parts = ["writes only in the project, temp and caches", ...(plan.hiddenDirs.length + plan.hiddenFiles.length ? ["secret folders hidden"] : []), `network ${setting.network ? "on" : "off"}`, ...(filtered ? ["risky system calls blocked"] : [])]
+    const look = ability.how === "bubblewrap" ? lookout.start() : undefined;
+    if (ability.how === "bubblewrap" && !look) parts.push("other programs not listed");
+    return { confined: true, argv: started, guarded: guard, ...(look ? { look } : {}), line: `[sandbox: ${parts.join("; ")}]`, plan, denial: (output, cwd) => denialIn(output, plan, cwd) };
   }
 }

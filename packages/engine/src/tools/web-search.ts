@@ -55,7 +55,7 @@ export const webSearch: Tool = {
   name: "WebSearch",
   readOnly: true,
   fromOutside: true,
-  offeredWhen: ({ userText, chat }) => chat === true || /\b(search|internet|online|on the web|latest|news|price|look up|google)\b/i.test(userText),
+  offeredWhen: ({ small, chat }) => chat === true || !small,
   description: "Search the web: links and summaries.",
   parameters: { type: "object", properties: { query: { type: "string" }, max_results: { type: "number" } }, required: ["query"] },
   fixArgs: fixSearchArgs,

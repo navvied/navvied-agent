@@ -172,7 +172,7 @@ describe("MultiEdit", () => {
     expect(await multi.run({ file_path: f, edits: [] }, c)).toMatch(/edits must be a list/);
   });
   test("is offered to a model with a large window, from the first request, so the list never changes", () => {
-    const s = { jobs: 0, userText: "" };
+    const s = { jobs: 0 };
     expect(multi.offeredWhen!({ ...s, small: true })).toBe(false);
     expect(multi.offeredWhen!({ ...s, small: false })).toBe(true);
   });

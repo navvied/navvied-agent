@@ -173,7 +173,7 @@ describe("navvied doctor", () => {
   test("nothing configured says how to fix it; a broken file is reported", async () => {
     const f = fakeIO({ env: { HOME: tmp(), PATH: process.env.PATH ?? "" } });
     expect(await main(["doctor"], f.io)).toBe(1);
-    expect(f.err()).toMatch(/· config\s+no model connected yet; run navvied init/);
+    expect(f.err()).toMatch(/○ config\s+no model connected yet; run navvied init/);
     expect(f.err()).toMatch(/✗ model\s+no model is connected yet/);
     const state = tmp(), config = join(state, "bad.json");
     writeFileSync(config, "{oops");

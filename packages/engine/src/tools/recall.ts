@@ -12,7 +12,7 @@ export const recallTool: Tool = {
   readOnly: true,
   // Offered to every model but a small one when there are earlier conversations; a small model has it named in its prompt and a call is run.
   offeredWhen: ({ recall, small }) => recall === true && !small,
-  description: "Search the user's earlier conversations. query: matches, with id and message number. id: read that conversation (around: a message number to read near). Nothing: the latest conversations.",
+  description: "Search the user's earlier conversations (what was said or decided before). query: matches, with id and message number. id: read that conversation (around: a message number to read near). Nothing: the latest conversations.",
   parameters: { type: "object", properties: { query: { type: "string" }, id: { type: "string" }, around: { type: "number" }, limit: { type: "number" } } },
   fixArgs: (a) => ({ ...a, query: a.query ?? a.q ?? a.search, id: a.id ?? a.session ?? a.conversation, around: a.around ?? a.message }),
   title: (a) => (str(a.id) ? `Read earlier conversation ${str(a.id)}` : str(a.query) ? `Look through earlier conversations for: ${str(a.query).slice(0, 80)}` : "List recent conversations"),

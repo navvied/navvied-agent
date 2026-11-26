@@ -25,7 +25,7 @@ const IDENTITY = (brain: Brain): string => [
 
 /** What the brain knows about the program it runs in. The slash commands are the person's to type: they are not named here, so the prompt does not change when one is added. */
 export function aboutNavvied(brain: Brain): string {
-  if (brain.small) return "In the app the user chooses the model from a menu, can undo your changes from the snapshots saved before each message, and changes the mode with Shift+Tab.";
+  if (brain.small) return "The user undoes changes from the snapshots saved before each message, and switches mode with Shift+Tab.";
   return [
     "How navvied works, in case the user asks:",
     "- The user talks to you in a terminal app or a web page, and chooses the model from a menu there.",
@@ -50,7 +50,15 @@ export function leanSoul(brain: Brain): string {
   return `You are navvied, a coding agent in the user's own folder; the user sees everything you do. Your model is ${brain.label}: that is your brain, not your name. If asked who you are, say navvied and which brain. Say what you did and what you did not check.`;
 }
 
-export const referenceFor = (brain: Brain): string | undefined => (brain.chat ? undefined : aboutNavvied({ ...brain, tools: [] }));
+/**
+ * What the engine's own models know about the program, in every request: it is not chosen by the words of a request, so it is as short as it can be.
+ * The long version (`aboutNavvied`) is for the brains of other programs.
+ */
+export const referenceFor = (brain: Brain): string | undefined => {
+  if (brain.chat) return undefined;
+  const undo = "Changes can be undone from the snapshots saved before each message.";
+  return brain.small ? `${undo} Shift+Tab switches mode.` : `${undo} Shift+Tab changes mode: ask (approval first), auto (acts freely), plan (reads only). Standing instructions go in NAVVIED.md.`;
+};
 
 /** The same self-knowledge and identity for every brain; the model is only what the agent thinks with. */
 export function soulFor(brain: Brain, notes?: string): string {

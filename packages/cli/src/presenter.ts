@@ -22,7 +22,6 @@ const MAX_QUEUE_SHOWN = 3;
 const PREVIEW_LINES = 2;
 const MAX_GROUP_SHOWN = 8;
 const MAX_PLAN_SHOWN = 8;
-/** Separates short facts on one line (a time, a count) without looking like a generated "a · b · c" list. */
 const SEP = "   ";
 
 /**
@@ -91,9 +90,7 @@ export class Presenter {
   #frame = 0;
   #stopTimer: (() => void) | undefined;
   #lastTool: { name: string; input: unknown } | undefined;
-  /** The application the last look at the screen named: a click or a key does not name one. */
   #app = "";
-  /** The files this conversation made, for `/open`. */
   readonly files = new SavedFiles();
   /** Steps asked for in the same go as one that is running: they wait their turn. */
   readonly #waiting = new Map<string, { name: string; input: unknown }>();
@@ -131,7 +128,6 @@ export class Presenter {
   get lastOutput(): { title: string; text: string } | undefined { return this.#lastOutput; }
 
   /** The step the engine is asking about, so the question can say what it is for. */
-  /** The application the agent is using on the screen right now, while a step of it runs (an empty text when it is not named yet). */
   get usingApp(): string | undefined {
     for (const r of this.#running.values()) if (r.name === "Computer") return this.#appOf(r.name, r.input);
     return undefined;
@@ -385,7 +381,6 @@ export class Presenter {
     this.#line(`    ${paint(this.io.color, "faint", "│")} ${paint(this.io.color, "dim", bad ? describeFailure(e.name, known.input, this.opts.cwd()) : step.done)}`);
   }
 
-  /** A line of its own for something that happened beside a step (a hook decided, the page asked a question, a download was saved). */
   #stepLine(l: StepLine): void {
     this.#settle();
     this.#stepStart();

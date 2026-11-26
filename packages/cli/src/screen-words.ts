@@ -1,9 +1,7 @@
 import type { ScreenOutcome } from "@navvied/protocol";
 
-/** A refused step on the screen, in the words of the web page: what could not be done, and why. */
 export interface Refusal { title: string; said: string }
 
-/** `undefined` for a reason that has no words of its own: the step then shows what the tool said. */
 export function refusalWords(screen: ScreenOutcome): Refusal | undefined {
   if (screen.verdict !== "refused") return undefined;
   const app = screen.app || "the app";

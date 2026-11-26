@@ -7,6 +7,7 @@ import { summarizeAb, type AbRun } from "./ab-report.ts";
 import { startMeter, type Meter } from "./meter.ts";
 import { startMock, type Mock } from "./mock.ts";
 import { runTask } from "./run.ts";
+import { keptFolder } from "./kept.ts";
 import { loadTasks, type Task } from "./task.ts";
 import { CLI, TASKS, agentWorld, codeTool, option } from "./world.ts";
 
@@ -81,11 +82,12 @@ export async function main(argv: string[]): Promise<number> {
     const key = p.keyFile ? readFileSync(resolve(p.keyFile), "utf8").trim() : undefined;
     const model = scripted ? "scripted" : p.model!;
     const world = agentWorld(home, model, p.window, key, p.api);
+    const keepFailed = keptFolder(p.trace, p.out);
 
     const one = async (task: Task, which: string, repeat: number): Promise<AbRun | undefined> => {
       arm = which;
       codeTool(world, which !== "base", which === "code");
-      const r = await runTask(task, { command: ["bun", CLI], label: `${model}:${which}`, env: world, meter: meter!, key: key ?? "none", agentEnv: (base) => ({ NAVVIED_BASE_URL: base }), ...(p.trace ? { trace: resolve(p.trace, which, `${repeat}`) } : {}) });
+      const r = await runTask(task, { command: ["bun", CLI], label: `${model}:${which}`, env: world, meter: meter!, key: key ?? "none", agentEnv: (base) => ({ NAVVIED_BASE_URL: base }), ...(p.trace ? { trace: resolve(p.trace, which, `${repeat}`) } : {}), ...(keepFailed ? { keepFailed } : {}) });
       // A run that was cut off by the limit is not a measurement of the model.
       return meter!.exhausted() ? undefined : { ...r, arm: which, repeat };
     };

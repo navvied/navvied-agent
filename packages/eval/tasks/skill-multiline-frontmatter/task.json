@@ -5,6 +5,7 @@
   "level": 1,
   "lang": "none",
   "requires": ["bun"],
+  "trust": true,
   "prompt": "This project has a skill for preparing the release label. Use it for the version in VERSION and write the label into ANSWER.txt, alone on one line.",
   "check": "test \"$(tr -d '[:space:]' < ANSWER.txt)\" = \"release-2.4.1-ok\" && bun \"$BENCH_FIXTURES/skills-check.ts\" listed release-label",
   "protect": ["README.md", "VERSION", ".agents/**"],

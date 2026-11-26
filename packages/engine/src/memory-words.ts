@@ -37,14 +37,14 @@ export interface Phrases {
 
 export const MEMORY_WORDS: Record<string, Phrases> = {
   id: {
-    polite: ["tolong", "mohon"],
+    polite: ["tolong", "tlg", "mohon"],
     name: ["nama saya adalah", "nama saya", "namaku adalah", "namaku", "panggil saya", "panggil aku"],
-    rule: ["selalu", "jangan pernah", "tidak pernah", "jangan gunakan", "jangan pakai", "jangan tambah", "jangan tambahkan", "jangan ubah", "jangan hapus", "jangan jalankan", "jangan edit", "jangan sentuh", "jangan commit"],
-    now: ["mulai sekarang", "mulai saat ini", "ke depannya", "selanjutnya"],
-    remember: ["ingat bahwa", "ingat kalau", "ingatlah bahwa", "catat bahwa"],
-    prefer: ["saya lebih suka", "aku lebih suka", "saya suka", "aku suka"],
-    we: ["kami menggunakan", "kami memakai", "kami pakai", "kita menggunakan", "kita memakai", "kita pakai", "kami memilih", "kami memutuskan", "kami menjalankan"],
-    filler: ["tolong", "mohon", "ingat itu", "ingat ya", "terima kasih"],
+    rule: ["selalu", "jangan pernah", "tidak pernah", "jangan gunakan", "jangan pakai", "jangan tambah", "jangan tambahkan", "jangan ubah", "jangan hapus", "jangan jalankan", "jangan edit", "jangan sentuh", "jangan commit", "jgn pernah", "jgn pake", "jgn pakai", "jangan pake", "slalu"],
+    now: ["mulai sekarang", "mulai saat ini", "ke depannya", "selanjutnya", "mulai skrg", "mulai skarang", "mulai dari sekarang"],
+    remember: ["ingat bahwa", "ingat kalau", "ingatlah bahwa", "catat bahwa", "inget bahwa", "inget kalo", "inget kalau", "ingat kalo", "catet bahwa"],
+    prefer: ["saya lebih suka", "aku lebih suka", "saya suka", "aku suka", "gue suka", "gw suka", "gue lebih suka", "gw lebih suka"],
+    we: ["kami menggunakan", "kami memakai", "kami pakai", "kita menggunakan", "kita memakai", "kita pakai", "kami memilih", "kami memutuskan", "kami menjalankan", "kita pake", "kami pake"],
+    filler: ["tolong", "mohon", "ingat itu", "ingat ya", "terima kasih", "makasih", "ya", "dong", "deh"],
     secret: ["kunci api", "rahasia", "kredensial", "kunci pribadi", "token"],
   },
   es: {

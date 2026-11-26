@@ -73,7 +73,6 @@ export function scripted(picks: Pick[], typed: (string | undefined)[] = []) {
 export const dirs: string[] = [];
 afterAll(() => { dirs.forEach(remove); });
 
-/** A real hub on a temporary computer, with the screens' link to it. `fetchFn` is what every outside address answers. */
 export function computer(fetchFn: typeof fetch, cloud = false) {
   const state = tempDir(), work = tempDir();
   dirs.push(state, work);

@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { browser, closeBrowser, findChrome } from "../src/index.ts";
-import { devToolsEndpoint, openWithRetry } from "../src/tools/browser.ts";
+import { browserHere, devToolsEndpoint, openWithRetry } from "../src/tools/browser.ts";
 import { stopAllJobs } from "../src/index.ts";
 import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 
@@ -34,10 +34,9 @@ describe("finding a browser", () => {
     expect(findChrome({}, "win32", (p) => p.includes("msedge") && p.includes("Program Files\\"), () => null)).toContain("msedge.exe");
     expect(findChrome({}, "linux", () => false, () => null)).toBeUndefined();
   });
-  test("it is offered only when the work is about the web, and only where a browser is", () => {
-    const offered = (userText: string) => browser.offeredWhen!({ small: false, userText, jobs: 0 });
-    expect(offered("fix the failing test")).toBe(false);
-    if (chrome) { expect(offered("open https://example.com and tell me the price")).toBe(true); expect(offered("log in to the site")).toBe(true); }
+  test("a model with room is offered it where a browser is, whatever the request says; a small one finds it by name", () => {
+    expect(browser.offeredWhen!({ small: false, jobs: 0 })).toBe(browserHere());
+    expect(browser.offeredWhen!({ small: true, jobs: 0 })).toBe(false);
   });
 });
 

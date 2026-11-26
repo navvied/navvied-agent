@@ -1,0 +1,18 @@
+{
+  "id": "newbie-recall",
+  "title": "Find what was said in an earlier conversation",
+  "kind": "agent",
+  "level": 2,
+  "lang": "none",
+  "requires": [],
+  "earlier": [
+    "Quick question while I plan the night: the customer asked us to move the billing cutover to 02:40 UTC under ticket ZX-4471. How much notice do customers usually get for a cutover?"
+  ],
+  "prompt": "In an earlier conversation I asked you a question about the billing cutover and gave a ticket number for it. Find that ticket number and write it into ANSWER.txt, alone on one line.",
+  "check": "test \"$(tr -d '[:space:]' < ANSWER.txt)\" = \"ZX-4471\"",
+  "protect": ["README.md"],
+  "env": { "XDG_STATE_HOME": "{dir}/.state" },
+  "touch": [{ "tool": "Recall", "args": { "query": "cutover" } }],
+  "maxSteps": 20,
+  "timeoutSeconds": 600
+}

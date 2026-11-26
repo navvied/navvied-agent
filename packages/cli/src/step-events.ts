@@ -3,12 +3,10 @@ import type { EngineEvent } from "@navvied/protocol";
 type Hook = Extract<EngineEvent, { ev: "hook" }>;
 type Browser = Extract<EngineEvent, { ev: "browser" }>;
 
-/** What a step of the agent shows for a line of its own: a mark (`ok`, `bad` or `ask`), its words, what to put on the right, and a line under it. */
 export interface StepLine { mark: "ok" | "bad" | "ask"; title: string; right?: string; under?: string }
 
 const WHEN = (e: Hook): string => (e.tool ?? (e.event === "UserPromptSubmit" ? "your message" : "the end of the reply"));
 
-/** A hook that decided something, in the words of the page: "Hook stopped Bash", "Hook after Write  ran the formatter". A hook that allowed it says nothing. */
 export function hookLine(e: Hook): StepLine | undefined {
   if (e.decision === "allowed") return undefined;
   const where = WHEN(e);
@@ -22,7 +20,6 @@ export function hookLine(e: Hook): StepLine | undefined {
 
 const REF = { "page-changed": "The page changed. navvied looks again.", gone: "The page changed. navvied looks again.", unknown: "That number is not on this page.", unnumbered: "Nothing is numbered yet. navvied looks first." } as const;
 
-/** What the Browser tool saw besides its own answer: a page's question, a download, a file the page asks for, a number that no longer fits. Nothing for a state that needs no line. */
 export function browserLine(e: Browser): StepLine | undefined {
   if (e.what === "dialog" && e.state === "answered") return { mark: "ok", title: "Answered a dialog", right: e.accepted ? "OK" : "Cancel" };
   if (e.what === "dialog" && e.state === "opened") return { mark: "ok", title: "A page asked a question", under: `The page asked: ${e.message ?? ""}`.trim() };

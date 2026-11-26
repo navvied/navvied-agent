@@ -7,7 +7,6 @@ const ABOUT = "Use the screen, mouse and keyboard.";
 
 const state = (k: Kit, cmd: object): Promise<ComputerState | string> => k.link.call("computer.state", cmd) as Promise<ComputerState | string>;
 
-/** Switching Computer Use on or off. Off is one press. On first says what it is, then gets what is missing (the driver, the system's two permissions), one thing at a time, and only then turns it on. */
 export async function computerScreen(k: Kit, e: Pick<ToolEntry, "title">): Promise<void> {
   let now = await state(k, { cmd: "computer.state" });
   if (typeof now === "string") { k.note.push(now); return; }
@@ -36,11 +35,10 @@ export async function computerScreen(k: Kit, e: Pick<ToolEntry, "title">): Promi
   }
 }
 
-/** The system's grants, with what each is for; Enter on one that is missing opens the system's own question for it. Resolves false when the person leaves. */
 async function permissions(k: Kit, list: ComputerPermission[]): Promise<boolean> {
   const shown = list.filter((p) => p.state !== "not-needed");
-  const picked = await k.choose("Two permissions", "Two permissions", shown.map((p) => ({ label: `${p.state === "granted" ? "✓" : "·"}  ${PERMISSIONS[p.id].title}` })), {
-    at: Math.max(0, shown.findIndex((p) => p.state === "missing")), body: ["The system asks for these, one at a time. Only you can answer its questions."],
+  const picked = await k.choose("Two permissions", "Two permissions", shown.map((p) => ({ label: `${PERMISSIONS[p.id].title}  ${p.state === "granted" ? "Granted" : "Allow"}` })), {
+    at: Math.max(0, shown.findIndex((p) => p.state === "missing")), body: ["Only you can answer the system's questions."],
   });
   const p = picked === undefined ? undefined : shown[picked];
   if (!p) return false;

@@ -1,20 +1,17 @@
 name: desktop-probe
-# Not part of any release. Finds out what makes a freshly made macOS disk image "busy" (the failure that stops the macOS Intel
-# installer now and then) and which way of making the image does not suffer from it: see packages/desktop/scripts/dmg-probe.sh.
-# Started from the Actions tab, or by pushing a tag named probe-<anything> (read the annotations, then delete the tag).
-# Remove it once the cause is fixed in desktop.yml.
 on:
   push:
     tags: ["probe-*"]
   workflow_dispatch:
     inputs:
       rounds:
-        description: Disk images to make, per way
+        description: Disk images to make, per state of the storage daemon
         default: "12"
 jobs:
   dmg:
     if: ${{ github.repository == 'navvied/navvied-agent' }}
     name: disk images (${{ matrix.os }})
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -22,7 +19,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Make disk images, each way, and count the failures
+      - name: Who holds a new disk image, with the storage daemon as it is, stopped and removed
         env:
           ROUNDS: ${{ inputs.rounds || '12' }}
         run: bash packages/desktop/scripts/ci-run.sh "disk image probe" bash packages/desktop/scripts/dmg-probe.sh "$ROUNDS"

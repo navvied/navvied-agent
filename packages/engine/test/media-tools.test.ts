@@ -208,13 +208,10 @@ describe("what is offered, and to whom", () => {
     r.cleanup();
   });
 
-  test("a tool is offered only when its own provider is there and the request asks for it", async () => {
+  test("a tool is offered only when its own provider is there, whatever the request says", async () => {
     const media = mediaOf(made("tts", async () => ({ bytes: wavBytes, mime: "audio/wav" })), made("image", async () => ({ bytes: PNG, mime: "image/png" })));
     const offered = async (text: string): Promise<string[]> => { const r = rig(() => ({ text: "ok" }), { media }); await r.turn(prompt(text)); r.cleanup(); return r.provider.requests[0]!.tools.map((t) => t.name).filter((x) => NAMES.includes(x)); };
-    expect(await offered("what is in this folder?")).toEqual([]);
-    expect(await offered("Please read this report aloud to me")).toEqual(["Speak"]);
-    expect(await offered("draw a logo for the app")).toEqual(expect.arrayContaining(["MakeImage"]));
-    expect(await offered("transcribe talk.mp3")).not.toContain("Transcribe");
+    for (const text of ["what is in this folder?", "Please read this report aloud to me", "bacain laporan ini dong", "transcribe talk.mp3"]) expect(await offered(text), text).toEqual(["Speak", "MakeImage"]);
   });
 
   test("a paid provider is never offered, only reported", async () => {

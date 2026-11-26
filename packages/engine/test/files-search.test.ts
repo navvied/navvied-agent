@@ -112,6 +112,13 @@ describe("Grep", () => {
         expect(await run(d, { pattern: "needle", glob: "*.md" })).toBe("c.md:1:needle");
         expect(await run(d, { pattern: "needle", type: "nonsense" })).toStartWith("Error:");
       });
+      test("a long result ends with its own total, so it is never counted by eye; a short one, a page and a cut one do not", async () => {
+        const d = workdir();
+        for (let i = 0; i < 4; i++) writeFileSync(join(d, `f${i}.txt`), "hit\nhit\nmiss\n");
+        expect(await run(d, { pattern: "hit" })).toEndWith("\n[8 matching lines in 4 files]");
+        expect(await run(d, { pattern: "hit", output_mode: "files_with_matches" })).not.toContain("[");
+        expect(await run(d, { pattern: "hit", glob: "f0.txt" })).toBe("f0.txt:1:hit\nf0.txt:2:hit");
+      });
       test("limit and offset page through the matches, and the message says where to go on", async () => {
         const d = workdir();
         writeFileSync(join(d, "f.txt"), Array.from({ length: 10 }, (_, i) => `hit ${i + 1}`).join("\n"));

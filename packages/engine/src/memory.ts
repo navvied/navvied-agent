@@ -112,7 +112,7 @@ export function keep(paths: MemoryPaths, op: MemoryOp, who: MemoryWho): string {
   if (op.action !== "forget") {
     const found = scanText(op.text);
     if (found.length) return `Error: not kept, the note has ${found.join(", ")}. A note is a plain fact about the person or the project.`;
-    text = clean(op.text.replace(/\s+/g, " ").trim());
+    text = clean(op.text.replace(/\s+/g, " ").trim()).replace(/^\d{4}-\d{2}-\d{2}: +/, "");
     if (!text) return "Error: the note is empty.";
     if (text.length > NOTE_LIMIT) return `Error: a note is at most ${NOTE_LIMIT} characters. Keep it short, one fact.`;
   }

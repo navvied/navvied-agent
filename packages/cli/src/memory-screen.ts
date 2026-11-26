@@ -9,7 +9,6 @@ export interface HubRow extends Choice { run(): Promise<void> }
 const WHERE = { message: "From your message", file: "From a file", web: "From a web page", tool: "From what a tool said" } as const;
 const fromWhere = (i: Pending["items"][number]): string => `${WHERE[i.source]}${i.n !== undefined ? `, message ${i.n}` : ""}`;
 
-/** The rows of /memory that come from the computer's own notes: whether it learns from conversations, what waits for a yes, and what is remembered. Empty when the computer keeps no notes this way. */
 export async function memoryHubRows(k: Kit): Promise<HubRow[]> {
   const mode = await k.link.call("memory.extract", { cmd: "memory.extract" });
   if (typeof mode === "string") return [];
@@ -23,7 +22,6 @@ export async function memoryHubRows(k: Kit): Promise<HubRow[]> {
   ];
 }
 
-/** What waits for a yes: Enter on one asks Keep or Dismiss. */
 async function waiting(k: Kit): Promise<void> {
   for (;;) {
     const got = await k.link.call("memory.pending", { cmd: "memory.pending" });
@@ -37,7 +35,6 @@ async function waiting(k: Kit): Promise<void> {
   }
 }
 
-/** The notes kept, as a list to read. */
 async function remembered(k: Kit): Promise<void> {
   const got = await k.link.call("memory.notes", { cmd: "memory.list" }) as Notes | string;
   if (typeof got === "string") { k.note.push(got); return; }

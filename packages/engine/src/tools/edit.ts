@@ -43,7 +43,7 @@ export function changeFile(ctx: ToolContext, path: string, changes: Change[]): s
 export const edit: Tool = {
   name: "Edit",
   readOnly: false,
-  description: "Replace one exact piece of text in a file; replace_all for every place it occurs.",
+  description: "Replace exact text in a file; replace_all for every place.",
   parameters: {
     type: "object",
     properties: {

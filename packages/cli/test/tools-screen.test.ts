@@ -10,7 +10,6 @@ const SOON = new Set(["schedule", "vision", "speech-to-text", "text-to-speech", 
 const item = (name: string, core: boolean): ToolInfo => ({ name, title: name, about: "", access: "read", enabled: true, core, small: false, calls: 0, set: "files" });
 const BACKENDS: BackendInfo[] = [{ id: "local", label: "This computer", about: "Commands run here.", ready: true, using: true }, { id: "docker", label: "A container", about: "In a clean container.", ready: false, using: false, hint: "Install the container program first." }];
 
-/** What this computer reports: everything on, the tools not built yet as soon, the browser waiting for setup, code experimental and off. */
 function report(over: Record<string, Partial<ToolEntry>> = {}): Tools {
   const entries = TOOL_ROWS.map((r): ToolEntry => {
     const state: ToolEntry["state"] = SOON.has(r.id) ? "soon" : r.id === "browser" ? "needs-setup" : r.id === "code" ? "experimental" : "on";
@@ -19,7 +18,6 @@ function report(over: Record<string, Partial<ToolEntry>> = {}): Tools {
   return { ev: "tools", items: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"].map((n) => item(n, true)), sets: [], entries, categories: [...CATEGORIES], backends: BACKENDS };
 }
 
-/** A hub that keeps the switches: each toggle changes the entry it names and answers with the report as it now stands. */
 function hub(start: Tools = report()): FakeLink {
   let now = start;
   return new FakeLink((c) => {

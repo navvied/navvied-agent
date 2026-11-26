@@ -1,11 +1,3 @@
-/**
- * End-to-end encryption for talking to an engine through a relay that must not be able to read anything.
- * Only the Web Crypto API is used, so the same file runs in the engine and in the browser.
- *
- * One random secret is shared once (in the address of a pairing link, after the `#`, which is never sent to a server).
- * Everything else is derived from it: the channel the relay uses, a proof that opens the channel, and the encryption key.
- * The relay learns the channel and a hash of the proof, nothing else.
- */
 
 type Bytes = Uint8Array<ArrayBuffer>;
 
@@ -14,6 +6,7 @@ const dec = new TextDecoder();
 const subtle = (): SubtleCrypto => globalThis.crypto.subtle;
 
 export const SECRET_BYTES = 32;
+export const MOST_WATCHED = 16;
 const NONCE_BYTES = 12;
 const SESSION_BYTES = 8;
 const HEADER = SESSION_BYTES + 8;
@@ -39,11 +32,8 @@ export function fromBase64Url(text: string): Bytes {
 export const newSecret = (): Bytes => globalThis.crypto.getRandomValues(new Uint8Array(SECRET_BYTES));
 
 export interface Pairing {
-  /** Names the channel at the relay. Unguessable, because it is derived from the secret. */
   channel: string;
-  /** What a client shows the relay to open the channel. */
   proof: string;
-  /** What an engine tells the relay, so the relay can check proofs without ever holding one. */
   proofHash: string;
   key: CryptoKey;
 }
@@ -57,7 +47,6 @@ async function derive(secret: Bytes, info: string, bytes: number): Promise<Bytes
 export const hashProof = async (proof: string): Promise<string> =>
   toBase64Url(new Uint8Array(await subtle().digest("SHA-256", fromBase64Url(proof))));
 
-/** Everything both ends need, from the shared secret. */
 export async function pairingFrom(secret: Bytes): Promise<Pairing> {
   if (secret.length !== SECRET_BYTES) throw new Error("the pairing secret has the wrong length");
   const [channel, proof, key] = await Promise.all([derive(secret, "channel", 16), derive(secret, "proof", 32), derive(secret, "key", 32)]);
@@ -73,7 +62,6 @@ const be64 = (n: number): Bytes => { const out = new Uint8Array(8); new DataView
 const readBe64 = (b: Bytes): number => Number(new DataView(b.buffer, b.byteOffset, 8).getBigUint64(0));
 const aad = (channel: string, from: Role): Bytes => enc.encode(`${from}:${channel}`);
 
-/** Seals messages from one end. A fresh random session id per connection keeps counters from colliding after a reconnect. */
 export class Sealer {
   readonly #session = globalThis.crypto.getRandomValues(new Uint8Array(SESSION_BYTES));
   #seq = 0;
@@ -94,7 +82,6 @@ export class Sealer {
   }
 }
 
-/** Opens messages from the other end. Anything altered, from the wrong end, from another channel, repeated or out of order is refused. */
 export class Opener {
   readonly #last = new Map<string, number>();
   constructor(private readonly pairing: Pairing, private readonly from: Role) {}
@@ -119,17 +106,12 @@ export class Opener {
 
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 
-/**
- * Eight characters in two groups, the same on both ends because both derive them from the secret. Shown in the terminal and
- * on the page, so a person can see that the device asking to connect holds the link that was just made.
- */
 export async function pairingCode(secret: Bytes): Promise<string> {
   const bytes = await derive(secret, "code", 8);
   const chars = Array.from(bytes, (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]!);
   return `${chars.slice(0, 4).join("")}-${chars.slice(4).join("")}`;
 }
 
-/** The pairing link a person opens on the other device. The secret stays after the `#`, so no server ever receives it. */
 export const pairingLink = (site: string, secret: Bytes): string => `${site.replace(/\/+$/, "")}/#relay=${toBase64Url(secret)}`;
 
 export function secretFromLink(hash: string): Bytes | undefined {

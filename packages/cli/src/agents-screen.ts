@@ -2,7 +2,6 @@ import type { Kit } from "./providers/kit.ts";
 
 const ago = (ms: number): string => { const m = Math.max(0, Math.round((Date.now() - ms) / 60_000)); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
 
-/** `/agents`: the other agents that may ask this one, a token for a new one, and taking access back. */
 export async function agentsScreen(k: Kit): Promise<void> {
   for (;;) {
     const got = await k.link.call("a2a", { cmd: "a2a.list" });
@@ -16,13 +15,11 @@ export async function agentsScreen(k: Kit): Promise<void> {
   }
 }
 
-/** Taking access back is asked first, with keeping it as the first row. */
 async function revoke(k: Kit, name: string): Promise<void> {
   const picked = await k.choose(`Revoke access for ${name}?`, `Revoke access for ${name}?`, [{ label: "Keep it" }, { label: "Revoke" }], { body: ["It can no longer ask this navvied."] });
   if (picked === 1) await k.link.call("a2a", { cmd: "a2a.token.revoke", name });
 }
 
-/** A new token is shown once: it can be copied now and never again. */
 async function create(k: Kit): Promise<void> {
   const name = await k.text("New access token", k.frame("", "What is the other agent called?", k.dim("Letters, digits, dots, dashes and underscores.")));
   if (!name) return;

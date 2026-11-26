@@ -68,6 +68,8 @@ export interface PromptCommand {
   files?: FileInput[];
   effort?: Effort;
   mode?: PermMode;
+  /** The window that sends this draws the agent's questions: the same word as `window`, said with the prompt so that it is there before the turn it starts. An older hub drops the field. */
+  questions?: true;
   /** Paths the session has worked in so far — lets the host snapshot those repositories before the turn. */
   paths?: string[];
 }
@@ -80,6 +82,8 @@ export interface ApproveCommand { cmd: "approve"; id: string; optionId: string; 
 /** The person's answer to a `question`: for each question, the choices picked and the person's own words, in the order of the questions. An empty list means that question was skipped. */
 export interface AnswerCommand { cmd: "answer"; id: string; answers: string[][] }
 export interface CompactCommand { cmd: "compact" }
+/** What the window that sends it can do for the person: `questions`, that it draws a `question` and sends the answer. The agent asks only while such a window is attached; a window that says nothing is not counted. Sent only to a hub whose `synced` has `windows`. */
+export interface WindowCommand { cmd: "window"; questions: boolean }
 export interface LoadCommand { cmd: "load"; id: string }
 /** Asks for the saved sessions of this engine, newest first (answered with a `sessions` event). */
 export interface SessionsCommand { cmd: "sessions"; /** List the archived conversations instead of the others. */ archived?: boolean }
@@ -270,7 +274,7 @@ export interface PinCommand { cmd: "pin"; id: string; pinned: boolean }
 export interface RestoreCommand { cmd: "restore"; id: string; preview?: boolean }
 
 /** Every command may say which kind of conversation it is for. */
-export type Command = (McpSigninCommand | McpPromptsCommand | McpPromptCommand | ProvidersCommand | LocalRunCommand | LocalStopCommand | LocalFileCommand | LocalModelsCommand | AccountsCommand | AccountSigninCommand | AccountSigninCodeCommand | AccountSigninIdCommand | AccountLoginCommand | AccountInstallCommand | LocalRecommendedCommand | LocalOllamaCommand | LocalOllamaPullCommand | LocalRuntimeCommand | LocalSearchCommand | MachineCommand | EndpointsCommand | EndpointSaveCommand | EndpointRemoveCommand | EndpointModelsCommand | ProviderModelsCommand | ProviderUseCommand | ProviderSaveCommand | ProviderRemoveCommand | PromptCommand | CancelCommand | ApproveCommand | AnswerCommand | CompactCommand | ModelCommand | EffortCommand | LoadCommand | SessionsCommand | SearchCommand | CheckpointsCommand | RestoreCommand | JobStopCommand | NewCommand | RenameCommand | RemoveCommand | PinCommand | ImportCommand | TransferCommand | ForkCommand | ArchiveCommand | MarkCommand | ReceiveCommand | SchedulesCommand | ScheduleAddCommand | ScheduleUpdateCommand | ScheduleRemoveCommand | ScheduleRunCommand | ScheduleRunsCommand | ComputerStateCommand | ComputerPermissionCommand | ComputerOnCommand | PluginsCommand | PluginToggleCommand | DraftCommand | DraftsCommand | ToolsCommand | ToolToggleCommand | ToolSetupCommand | ToolSetupAnswerCommand | TerminalUseCommand | SandboxUseCommand | ArtifactsCommand | ArtifactReadCommand | MemoryPendingCommand | SkillReviewCommand | SkillRollbackCommand | MediaReadCommand | A2aListCommand | A2aPeerAddCommand | A2aPeerRemoveCommand | A2aTokenAddCommand | A2aTokenRevokeCommand | MemoryListCommand | MemoryEditCommand | MemoryForgetCommand | MemoryExtractCommand | McpResourcesCommand | McpResourceCommand | McpToolsCommand | PluginInstallCommand | ComputerControlCommand) & { kind?: SessionKind };
+export type Command = (McpSigninCommand | McpPromptsCommand | McpPromptCommand | ProvidersCommand | LocalRunCommand | LocalStopCommand | LocalFileCommand | LocalModelsCommand | AccountsCommand | AccountSigninCommand | AccountSigninCodeCommand | AccountSigninIdCommand | AccountLoginCommand | AccountInstallCommand | LocalRecommendedCommand | LocalOllamaCommand | LocalOllamaPullCommand | LocalRuntimeCommand | LocalSearchCommand | MachineCommand | EndpointsCommand | EndpointSaveCommand | EndpointRemoveCommand | EndpointModelsCommand | ProviderModelsCommand | ProviderUseCommand | ProviderSaveCommand | ProviderRemoveCommand | PromptCommand | CancelCommand | ApproveCommand | AnswerCommand | WindowCommand | CompactCommand | ModelCommand | EffortCommand | LoadCommand | SessionsCommand | SearchCommand | CheckpointsCommand | RestoreCommand | JobStopCommand | NewCommand | RenameCommand | RemoveCommand | PinCommand | ImportCommand | TransferCommand | ForkCommand | ArchiveCommand | MarkCommand | ReceiveCommand | SchedulesCommand | ScheduleAddCommand | ScheduleUpdateCommand | ScheduleRemoveCommand | ScheduleRunCommand | ScheduleRunsCommand | ComputerStateCommand | ComputerPermissionCommand | ComputerOnCommand | PluginsCommand | PluginToggleCommand | DraftCommand | DraftsCommand | ToolsCommand | ToolToggleCommand | ToolSetupCommand | ToolSetupAnswerCommand | TerminalUseCommand | SandboxUseCommand | ArtifactsCommand | ArtifactReadCommand | MemoryPendingCommand | SkillReviewCommand | SkillRollbackCommand | MediaReadCommand | A2aListCommand | A2aPeerAddCommand | A2aPeerRemoveCommand | A2aTokenAddCommand | A2aTokenRevokeCommand | MemoryListCommand | MemoryEditCommand | MemoryForgetCommand | MemoryExtractCommand | McpResourcesCommand | McpResourceCommand | McpToolsCommand | PluginInstallCommand | ComputerControlCommand) & { kind?: SessionKind };
 /** What this computer is, as far as it could be read: a card or a number that could not be read is not there, never a guess. */
 export interface MachineInfo {
   os: "linux" | "wsl" | "macos" | "windows" | "unknown";
@@ -587,7 +591,7 @@ type EngineEventBody =
   /** This computer saved (or already had) a conversation sent by another computer. */
   | { ev: "received"; id: string; ok: boolean; msg?: string }
   | { ev: "moved"; id: string; to: string; ok: boolean; copy?: boolean; msg?: string }
-  | { ev: "synced"; /** The version of the program that runs the hub, so a page can show what it is connected to. */ version?: string; /** Which kinds of conversation have a reply being written right now, so a page that lost the end of one knows it is over. */ running?: string[] }
+  | { ev: "synced"; /** This hub takes a window's own word of what it can do: it is answered with `window`. */ windows?: true; /** The version of the program that runs the hub, so a page can show what it is connected to. */ version?: string; /** Which kinds of conversation have a reply being written right now, so a page that lost the end of one knows it is over. */ running?: string[] }
   /** A saved session is now the one in use. `items` is its conversation in short form, so every window can show it; the next prompt continues it and saves into it. */
   | { ev: "loaded"; id: string; items?: HistoryItem[] }
   /** The saved sessions, newest first. */

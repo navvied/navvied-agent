@@ -19,7 +19,7 @@ describe("AskUserQuestion", () => {
     expect(r.of("tool").find((e) => e.id === q.tool)?.name).toBe("AskUserQuestion");
     r.send({ cmd: "answer", id: q.id, answers: [["SQLite"], ["api", "web"]] });
     await r.engine.idle();
-    expect(r.provider.requests.at(-1)!.messages.at(-1)!.content).toBe('Which database? -> "SQLite"\nWhich parts? -> "api, web"');
+    expect(toolResults(r.provider.requests.at(-1)!).at(-1)).toBe('Which database? -> "SQLite"\nWhich parts? -> "api, web"');
     r.cleanup();
   });
 
@@ -29,7 +29,7 @@ describe("AskUserQuestion", () => {
     await until(() => r.of("question").length === 1);
     r.send({ cmd: "answer", id: r.of("question")[0]!.id, answers: [[], ["something else entirely"]] });
     await r.engine.idle();
-    expect(String(r.provider.requests.at(-1)!.messages.at(-1)!.content)).toBe('A? -> (no answer)\nB? -> "something else entirely"');
+    expect(toolResults(r.provider.requests.at(-1)!).at(-1)).toBe('A? -> (no answer)\nB? -> "something else entirely"');
     r.cleanup();
   });
 

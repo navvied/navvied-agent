@@ -4,7 +4,7 @@
  * shared in a link, from which the channel, the proof and the key are derived (see the protocol package).
  */
 import { Opener, Sealer, fromBase64Url, newSecret, pairingCode, pairingFrom, pairingLink, toBase64Url, type Pairing } from "@navvied/protocol";
-import type { Hub } from "./commands/hub.ts";
+import type { Attached, Hub } from "./commands/hub.ts";
 import type { Device, DeviceStore } from "./devices.ts";
 import type { A2aRelay } from "./a2a-relay.ts";
 import type { Decision } from "./pairing.ts";
@@ -44,7 +44,8 @@ export interface RelayHostOptions {
 interface Peer {
   sealer: Sealer;
   opener: Opener;
-  attached: (() => void) | undefined;
+  /** The page's window on the hub, once it was let in and said hello. */
+  attached: Attached | undefined;
   /** Messages are opened and answered one after another, because each is numbered. */
   queue: Promise<void>;
   asked: boolean;
@@ -107,7 +108,7 @@ class Link {
     this.ready = false;
     clearTimeout(this.#timer);
     clearInterval(this.#ping);
-    for (const peer of this.#peers.values()) peer.attached?.();
+    for (const peer of this.#peers.values()) peer.attached?.detach();
     this.#peers.clear();
     try { this.#socket?.close(); } catch { /* already closed */ }
     if (this.#ephemeral) this.host.store.remove(this.device.id);
@@ -118,7 +119,7 @@ class Link {
     clearInterval(this.#ping);
     this.ready = false;
     this.host.a2a()?.disconnected(this.a2aSend);
-    for (const peer of this.#peers.values()) peer.attached?.();
+    for (const peer of this.#peers.values()) peer.attached?.detach();
     this.#peers.clear();
     if (this.#stopped) return;
     // Another navvied took this device's place. Taking it back would start a tug of war that cuts both off, every second.
@@ -150,7 +151,7 @@ class Link {
     if (typeof msg.t === "string" && msg.t.startsWith("a2a.")) { if (this.device.account !== undefined) this.host.a2a()?.message(msg as Record<string, unknown>); return; }
     if (msg.t === "peer" && typeof msg.id === "number") {
       if (msg.up === true) this.#addPeer(msg.id);
-      else { this.#peers.get(msg.id)?.attached?.(); this.#peers.delete(msg.id); }
+      else { this.#peers.get(msg.id)?.attached?.detach(); this.#peers.delete(msg.id); }
       return;
     }
     if (msg.t === "d" && typeof msg.from === "number" && typeof msg.d === "string") {
@@ -168,7 +169,7 @@ class Link {
   async #receive(id: number, peer: Peer, sealed: string): Promise<void> {
     let text: string;
     try { text = await peer.opener.open(sealed); } catch { return; }
-    if (peer.attached) { this.host.hub.command(text, (reply) => { peer.queue = peer.queue.then(() => this.#deliver(id, peer, reply)).catch(() => undefined); }); return; }
+    if (peer.attached) { peer.attached.command(text); return; }
 
     let hello: { navvied?: string; since?: unknown };
     try { hello = JSON.parse(text); } catch { return; }

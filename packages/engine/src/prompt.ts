@@ -1,8 +1,5 @@
 import type { PermMode, SessionKind } from "@navvied/protocol";
 
-/** A request that asks about the program itself (its commands, modes, files, tools): only then is the reference about it put in the prompt. */
-export const asksAboutProgram = (text: string): boolean => /(^|\s)\/(model|mode|clear|compact|memory|resume|help|checkpoints|restore|login|logout|tools|plugins|steps|output|theme|remote|devices|schedule|exit|web|search|folder|copy|move|import|effort|go|artifacts)(?![\w./-])|\bnavvied\b|\b(how (do|can|to)|what (can|do) you|which|where)\b.*\b(you|mode|model|command|tool|memory|checkpoint|undo|restore|remote|schedule|theme|login|plugin|shortcut|setting|folder|conversation|resume|compact|clear)\b|\b(your|the) (tools|commands|modes|settings)\b|\bwho are you\b|\bwhat are you\b|\bshortcut|\bshift\+tab\b/i.test(text);
-
 export interface PromptInfo {
   cwd: string;
   platform: string;
@@ -39,10 +36,17 @@ const notedNow = (info: PromptInfo): string => (info.noted?.length ? `Notes bein
 
 const remembers = (info: PromptInfo): boolean => info.tools?.includes("Remember") === true || info.also?.includes("Remember") === true;
 
+const ASK_TOOL = "AskUserQuestion";
+/** The one rule about choosing tools: no tool is offered or withheld by the words of a request, so the model is told to read what is wanted, and to ask when that is unclear. */
+const asks = (info: PromptInfo): boolean => info.tools === undefined || info.tools.includes(ASK_TOOL);
+const PICK = `Pick tools by the goal, not the words. Clear request: do it, no offers. Must guess a value? Ask one question (${ASK_TOOL}).`;
+
+const CODE_ONLY = "A change to code changes code: leave comments and strings unless asked.";
+
 const SMALL_RULES = [
-  "Answer questions and chat in plain text, directly. Use a tool only when you must read or change files or run a command.",
-  "Read a file before you change it. Make the smallest change that works, then check it. Say only what you really did.",
-  "Use Bash for commands, never to print your answer. Do not make up file names or web addresses.",
+  "Chat in plain text. Use tools only to read or change files or run commands.",
+  "Read before changing a file; make the smallest change that works; check it. Say what you did.",
+  "Use Bash for commands, not for answers. Never invent file names.",
 ].join("\n");
 
 /** What a chat is told. It is a conversation first; the scratch folder and the tools are there for when they help. */
@@ -55,6 +59,7 @@ function chatPrompt(info: PromptInfo): string {
       ? "Answer directly and in plain words. Use a tool only when it really helps."
       : "Be direct, warm and accurate. Answer in plain language, with structure only when it helps. If you are not sure, say so rather than guess.",
     `You have a scratch folder: ${info.cwd}. You can read what the person gives you there and write files for them there (documents, data, code)${run}. You cannot see or change anything else on their computer, and you have no project. Search or fetch the web (WebSearch, WebFetch) when the answer depends on something recent or outside your knowledge, and say where it came from.`,
+    asks(info) ? PICK : "",
     "Use tools to act; never claim you did something you did not do. Tell the person what file you made and where it is.",
     info.skills,
   ].filter(Boolean).join("\n\n");
@@ -67,6 +72,7 @@ export function systemPrompt(info: PromptInfo, mode: PermMode): string {
       info.persona?.trim(),
       `You are a coding assistant working in ${info.cwd} on ${info.platform}.${info.tools?.some((t) => t === "WebSearch" || t === "WebFetch") ? ` Date: ${info.date}.` : ""}`,
       SMALL_RULES,
+      asks(info) ? PICK : "",
       remembers(info) ? REMEMBER_NOTE : "",
       notedNow(info),
       mode === "plan" ? PLAN_NOTE : "",
@@ -80,7 +86,9 @@ export function systemPrompt(info: PromptInfo, mode: PermMode): string {
   return [
     info.persona?.trim(),
     `Working directory: ${info.cwd}. Platform: ${info.platform}. Date: ${info.date}.`,
-    `Work carefully: read before you edit, make the smallest correct change, run the tests or the program to check it, and say what you verified. Be concise. Never claim to have done what you did not. Prefer Read, Glob and Grep to the shell for looking at code.${info.tools?.includes("TodoWrite") ? " Use TodoWrite for work in several steps." : ""} If a tool call is denied, do not retry it: ask what they prefer.`,
+    `Work carefully: read before you edit, make the smallest correct change, run the tests or the program to check it, and say what you verified. Be concise. Never claim to have done what you did not. Prefer Read, Glob and Grep to the shell for looking at code.${info.tools?.includes("TodoWrite") ? " Use TodoWrite for work in several steps or when a list is asked for, then do the steps." : ""} If a tool call is denied, do not retry it: ask what they prefer.`,
+    CODE_ONLY,
+    asks(info) ? PICK : "",
     mode === "plan" ? PLAN_NOTE : "",
     remembers(info) ? REMEMBER_NOTE : "",
     notedNow(info),

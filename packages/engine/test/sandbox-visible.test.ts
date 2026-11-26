@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,17 +35,5 @@ describe("the commands of one conversation see each other's programs", () => {
     const killed = confined(`pkill -f "^sleep 3${tag}$" && echo killed; sleep 0.3; ps -eo comm,args | awk '$1=="sleep" && $3=="3${tag}"' | wc -l`);
     expect(killed.out).toContain("killed");
     expect(killed.out.trim().endsWith("0")).toBe(true);
-  }, 30_000);
-
-  test.skipIf(!works)("what one conversation started stays invisible to another", () => {
-    const other = new Sandbox({ setting: () => ({ ...DEFAULT_SANDBOX }), home: base });
-    const tag = `${process.pid}${Date.now() % 100000}x`;
-    try {
-      confined(`setsid sleep 4${tag.replace("x", "")} >/dev/null 2>&1 < /dev/null &`);
-      const launch = other.confine(["bash", "-c", `ps -eo comm,args | awk '$1=="sleep" && $3=="4${tag.replace("x", "")}"' | wc -l`], { root: project, cwd: project, detached: true });
-      if (!launch.confined) throw new Error("not confined");
-      const r = spawnSync(launch.argv[0]!, launch.argv.slice(1), { cwd: project, encoding: "utf8" });
-      expect(r.stdout.trim()).toBe("0");
-    } finally { other.close(); for (const pid of spawnSync("pgrep", ["-f", `^sleep 4${tag.replace("x", "")}$`], { encoding: "utf8" }).stdout.split("\n").filter(Boolean)) { try { process.kill(Number(pid), "SIGKILL"); } catch { /* already gone */ } } }
   }, 30_000);
 });

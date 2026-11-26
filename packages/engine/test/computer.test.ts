@@ -107,10 +107,10 @@ describe("the tool", () => {
   });
 
   test("it is offered in plan mode, where only list and wait are let through", () => {
-    const names = (mode: "plan" | "auto") => toolsFor(mode, [computer, ...defaultTools()], { small: false, userText: "", jobs: 0, computer: true }).map((t) => t.name);
+    const names = (mode: "plan" | "auto") => toolsFor(mode, [computer, ...defaultTools()], { small: false, jobs: 0, computer: true }).map((t) => t.name);
     expect(names("plan")).toContain("computer");
     expect(names("auto")).toContain("computer");
-    expect(toolsFor("auto", [computer], { small: false, userText: "", jobs: 0 })).toEqual([]);
+    expect(toolsFor("auto", [computer], { small: false, jobs: 0 })).toEqual([]);
   });
 });
 

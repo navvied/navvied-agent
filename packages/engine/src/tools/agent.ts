@@ -15,7 +15,7 @@ export function agentTool(defs: readonly AgentDef[] = []): Tool {
     name: AGENT_TOOL_NAME,
     readOnly: true,
     /** A model with room is offered it always (the text is short); a small one only when the person names it. */
-    offeredWhen: ({ small, userText }) => !small || /\bagent\b/i.test(userText),
+    offeredWhen: ({ small }) => !small,
     description: defs.length ? `${BASE} Helpers defined by the user (name one in "agent" when its description fits the task): ${defs.map((d) => `${d.name}: ${d.description}`).join("; ")}.` : BASE,
     parameters: { type: "object", properties, required: ["prompt"] },
     title: (a) => `Ask a helper: ${str(a.description) || str(a.prompt).slice(0, 80)}`,

@@ -12,12 +12,12 @@ import type { ToolContext } from "../src/types.ts";
 import { HOOK_MS, hook, removeTree } from "../../protocol/test/support/cleanup.ts";
 import { run } from "../src/tools/util.ts";
 import { cleanupAll, prompt, rig, until, wait } from "./helpers.ts";
+import { outsideFolder } from "./outside.ts";
 
 const base = mkdtempSync(join(tmpdir(), "navvied-sandbox-test-"));
 const home = join(base, "home");
 const project = join(base, "home", "project");
-/** A folder that is neither the project nor a temporary folder: inside this repository, so it is outside what a confined command may write. */
-const away = mkdtempSync(join(import.meta.dir, ".away-"));
+const away = outsideFolder();
 mkdirSync(project, { recursive: true });
 afterAll(hook("sandbox removes what it made", async () => { await stopAllJobs(); await removeTree(base); await removeTree(away); }), HOOK_MS);
 afterAll(cleanupAll, HOOK_MS);
@@ -253,26 +253,36 @@ describe.skipIf(!works)("a confined command, for real (bubblewrap)", () => {
     await until(() => !alive(t));
   });
 
-  /** Starts the stand-in program, waits until it is about to start the command, and kills it after `ms` milliseconds. */
-  async function killedAfter(ms: number, how: "foreground" | "interactive" | "detached"): Promise<string> {
+  const anyProcessOf = (t: string): boolean => spawnSync("pgrep", ["-f", `sleep 3${t}`]).status === 0;
+  const GONE_WITHIN_MS = 20_000;
+
+  async function standIn(how: "foreground" | "interactive" | "detached"): Promise<{ tag: string; kill(): Promise<void> }> {
     const t = tag();
     const parent = spawn("bun", [join(import.meta.dir, "sandbox-parent.ts"), project, t, how], { stdio: ["ignore", "pipe", "inherit"] });
+    const ended = new Promise<void>((resolve) => parent.once("exit", () => resolve()));
     await new Promise<void>((resolve) => parent.stdout.once("data", () => resolve()));
-    await wait(ms);
-    parent.kill("SIGKILL");
-    return t;
+    return { tag: t, kill: () => { parent.kill("SIGKILL"); return ended; } };
   }
 
-  test("a command whose parent dies right after it started never outlives it, however early; a job meant to outlive the program does", async () => {
-    const detached = await killedAfter(0, "detached");
-    await until(() => alive(detached));
-    await wait(300);
-    expect(alive(detached)).toBe(true);
-    endTagged(detached);
-    // The parent dies at every moment of bubblewrap's own start (it arms its death signal only once it runs): none of the commands may be left.
-    const runs = await Promise.all(Array.from({ length: 15 }, (_, i) => killedAfter(i * 2, i % 5 === 4 ? "interactive" : "foreground")));
-    await wait(1500);
-    expect(runs.filter(alive)).toEqual([]);
+  test("a job meant to outlive the program does", async () => {
+    const job = await standIn("detached");
+    try {
+      await until(() => alive(job.tag), GONE_WITHIN_MS);
+      await job.kill();
+      expect(alive(job.tag)).toBe(true);
+    } finally { await job.kill(); endTagged(job.tag); }
+  }, 30_000);
+
+  test("a command whose parent dies right after it started never outlives it, however early", async () => {
+    const runs = await Promise.all(Array.from({ length: 15 }, async (_, i) => {
+      const program = await standIn(i % 5 === 4 ? "interactive" : "foreground");
+      await wait(i * 2);
+      await program.kill();
+      return program.tag;
+    }));
+    try {
+      await until(() => !runs.some(anyProcessOf), GONE_WITHIN_MS);
+    } finally { runs.forEach(endTagged); }
   }, 30_000);
 
   test("a command is not started unless it is released by the program that is still its parent", () => {

@@ -9,7 +9,6 @@ const OWN_WORDS = "In my own words…";
 const DONE = "Done";
 export const ANSWERED = "Answered. navvied is continuing.";
 
-/** What the conversation keeps of the questions: each one with the answers given (a question that was skipped is left out), then that the agent goes on. Nothing when nothing was answered. */
 export function answeredLines(color: boolean, e: Asked, answers: string[][]): string[] {
   const given = e.questions.flatMap((q, i) => (answers[i]?.length ? [{ q, said: answers[i]! }] : []));
   if (!given.length) return [];

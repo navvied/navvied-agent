@@ -17,6 +17,9 @@ switch (task) {
   case "deep-docs": ok = answer.includes(code("1")) && !answer.includes("0000000000"); break;
   case "follow-link": ok = answer.includes(code("2")); break;
   case "search-then-read": ok = answer.includes(code("3")) && !answer.includes(`OLD${code("0")}`); break;
+  // For a prompt that did not ask for only the code: the answer is the first line. It has the current code and not the retired one; a note below may say which code is retired.
+  case "deep-docs-first": ok = (lines(answer)[0] ?? "").includes(code("1")) && !(lines(answer)[0] ?? "").includes("0000000000"); break;
+  case "search-then-read-first": ok = (lines(answer)[0] ?? "").includes(code("3")) && !(lines(answer)[0] ?? "").includes(`OLD${code("0")}`); break;
   case "pdf-spec": ok = answer.includes(code("4")); break;
   case "redirects": ok = answer.includes(code("5a")) && answer.includes(code("5b")); break;
   case "script-page": {

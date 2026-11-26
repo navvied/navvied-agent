@@ -47,18 +47,13 @@ describe("reading a search page", () => {
 });
 
 describe("the WebSearch tool", () => {
-  test("it is read-only, and any model is offered it only when the request is about the web (a chat always)", () => {
+  test("it is read-only, and a model with room and every chat are offered it whatever the request says; a small model in other work finds it by name", () => {
     expect(tool.readOnly).toBe(true);
     const all = defaultTools();
-    const names = (userText: string) => toolsFor("auto", all, { small: true, userText, jobs: 0 }).map((t) => t.name);
-    expect(names("fix the bug in a.ts")).not.toContain("WebSearch");
-    expect(names("search the web for the latest news")).toContain("WebSearch");
-    expect(toolsFor("auto", all, { small: false, userText: "fix the bug in a.ts", jobs: 0 }).map((t) => t.name)).not.toContain("WebSearch");
-    expect(toolsFor("auto", all, { small: false, userText: "what is the latest version", jobs: 0 }).map((t) => t.name)).toContain("WebSearch");
-    // A web service the project runs is not a reason to offer the web.
-    expect(toolsFor("auto", all, { small: false, userText: "start the web service and wait until it answers", jobs: 0 }).map((t) => t.name)).not.toEqual(expect.arrayContaining(["WebSearch"]));
-    expect(toolsFor("auto", all, { small: false, userText: "start the web service and wait until it answers", jobs: 0 }).map((t) => t.name)).not.toContain("WebFetch");
-    expect(toolsFor("auto", all, { small: false, userText: "hello", jobs: 0, chat: true }).map((t) => t.name)).toContain("WebSearch");
+    const names = (o: { small: boolean; chat?: boolean }) => toolsFor("auto", all, { ...o, jobs: 0 }).map((t) => t.name);
+    expect(names({ small: false })).toEqual(expect.arrayContaining(["WebSearch", "WebFetch"]));
+    expect(names({ small: true })).not.toContain("WebSearch");
+    expect(names({ small: true, chat: true })).toEqual(expect.arrayContaining(["WebSearch", "WebFetch"]));
   });
   test("asks the configured search server, numbers the results and limits how many", async () => {
     const seen: string[] = [];

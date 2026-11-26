@@ -17,8 +17,8 @@ afterAll(hook("mcp depth removes what it made", async () => { await stopAllJobs(
 const server = (mode: string) => ({ command: process.execPath, args: [FAKE], env: { FAKE_MODE: mode } });
 const ctx = (extra: Partial<ToolContext> = {}): ToolContext => ({ cwd: dir, signal: new AbortController().signal, emit: () => {}, allowPrivateNetwork: false, jobs, ...extra });
 const find = (tools: Tool[], name: string): Tool => tools.find((t) => t.name === name)!;
-const situation = (userText: string, small = false) => ({ small, userText, jobs: 0 });
-const offered = (tools: Tool[], userText: string, small = false): string[] => toolsFor("auto", [...defaultTools(), ...tools], situation(userText, small)).map((t) => t.name).filter((n) => n.startsWith("mcp__"));
+const situation = (small = false) => ({ small, jobs: 0 });
+const offered = (tools: Tool[], small = false): string[] => toolsFor("auto", [...defaultTools(), ...tools], situation(small)).map((t) => t.name).filter((n) => n.startsWith("mcp__"));
 
 describe("resources", () => {
   test("a program that has resources brings one tool, with the programs that have none left out", async () => {
@@ -111,8 +111,8 @@ async function until(ok: () => boolean, ms = 5000): Promise<void> {
 
 describe("a long list of tools is searched, not listed", () => {
   test("the limit is lower for a small window, and has a floor", () => {
-    expect(deferLimit(true, 8_000)).toEqual({ tools: 10, chars: 4000 });
-    expect(deferLimit(true)).toEqual({ tools: 10, chars: 6400 });
+    expect(deferLimit(true, 8_000)).toEqual({ tools: 0, chars: 4000 });
+    expect(deferLimit(true)).toEqual({ tools: 0, chars: 6400 });
     expect(deferLimit(false, 200_000)).toEqual({ tools: 30, chars: 40_000 });
     expect(deferLimit(false).tools).toBe(30);
   });
@@ -121,10 +121,10 @@ describe("a long list of tools is searched, not listed", () => {
     const mcp = await connectMcp({ shop: server("many") });
     try {
       expect(mcp.tools.filter((t) => t.name.startsWith("mcp__shop__"))).toHaveLength(60);
-      expect(offered(mcp.tools, "send the invoice")).toEqual(["mcp__find"]);
+      expect(offered(mcp.tools)).toEqual(["mcp__find"]);
       const out = await find(mcp.tools, "mcp__find").run({ query: "invoice customer" }, ctx());
       expect(out).toContain("mcp__shop__send_invoice(id: string, note?: string) - Email an invoice to a customer");
-      expect(offered(mcp.tools, "send the invoice").sort()).toEqual(["mcp__find", "mcp__shop__send_invoice"]);
+      expect(offered(mcp.tools).sort()).toEqual(["mcp__find", "mcp__shop__send_invoice"]);
       const sent = await find(mcp.tools, "mcp__shop__send_invoice").run({ id: "7" }, ctx());
       expect(sent).toContain('ran send_invoice with {"id":"7"}');
     } finally { mcp.close(); }
@@ -140,22 +140,23 @@ describe("a long list of tools is searched, not listed", () => {
     const low = await connectMcp({ notes: server("") }, false, undefined, { defer: { tools: 3, chars: 100_000 } });
     try {
       expect(few.tools.some((t) => t.name === "mcp__find")).toBe(false);
-      expect(offered(few.tools, "hello")).toHaveLength(7);
+      expect(offered(few.tools)).toHaveLength(7);
       expect(low.tools.some((t) => t.name === "mcp__find")).toBe(true);
-      expect(offered(low.tools, "hello")).toEqual(["mcp__find"]);
+      expect(offered(low.tools)).toEqual(["mcp__find"]);
     } finally { few.close(); low.close(); }
   });
 
   test("the characters of a tool list too big for the window defer it even when it has few tools", async () => {
     const mcp = await connectMcp({ notes: server("") }, false, undefined, { defer: { tools: 100, chars: 300 } });
-    try { expect(offered(mcp.tools, "hello")).toEqual(["mcp__find"]); } finally { mcp.close(); }
+    try { expect(offered(mcp.tools)).toEqual(["mcp__find"]); } finally { mcp.close(); }
   });
 
-  test("a small model is shown the search only when the request names the program", async () => {
-    const mcp = await connectMcp({ shop: server("many") }, true);
+  test("a small model is shown the search alone, even for few tools, and what it finds is offered from then on", async () => {
+    const mcp = await connectMcp({ notes: server("") }, true);
     try {
-      expect(offered(mcp.tools, "fix the bug", true)).toEqual([]);
-      expect(offered(mcp.tools, "look in the shop", true)).toEqual(["mcp__find"]);
+      expect(offered(mcp.tools, true)).toEqual(["mcp__find"]);
+      await find(mcp.tools, "mcp__find").run({ query: "echo" }, ctx());
+      expect(offered(mcp.tools, true)).toContain("mcp__notes__echo");
     } finally { mcp.close(); }
   });
 

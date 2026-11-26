@@ -117,7 +117,7 @@ function slice(page: Page, offset: number, budget: number): string {
 
 function failed(status: number, url: URL, text: string): string | undefined {
   if (status < 400) return undefined;
-  if (status === 404 || status === 410) return `Error: not found (${status}). Search for it: ${searchFor(url)}`;
+  if (status === 404 || status === 410) return `Error: not found (${status}). Check the address and the path; if it was only a guess, search: ${searchFor(url)}`;
   if (status === 429) return "Error: the site says too many requests (429). Wait, then try once more, or use another address.";
   if (status === 401 || status === 403 || challenge(text)) return `Error: the site refused a plain fetch (${status}). If you have a browser: ${browserFor(url)}`;
   return `Error: the site answered ${status}.`;
@@ -127,7 +127,7 @@ export const webFetch: Tool = {
   name: "WebFetch",
   readOnly: true,
   fromOutside: true,
-  offeredWhen: ({ userText, chat }) => chat === true || /https?:\/\/|\b(website|web ?page|url|documentation|docs)\b/i.test(userText),
+  offeredWhen: ({ small, chat }) => chat === true || !small,
   description: "Read a web page or PDF as text. A long page ends with the call that reads on (offset).",
   parameters: { type: "object", properties: { url: { type: "string" }, offset: { type: "number" } }, required: ["url"] },
   fixArgs: fixFetchArgs,

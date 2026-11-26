@@ -15,7 +15,7 @@ import { RELAY_PATH, SESSION_PATH, isSitePath, relayTarget, sessionTarget, siteP
 import { createPairing, type Decision } from "../pairing.ts";
 import { configPath, loadConfig } from "../config.ts";
 import { discover, listModels, saveModel, useModel } from "../model-setup.ts";
-import { createHub, type Hub } from "./hub.ts";
+import { createHub, type Attached, type Hub } from "./hub.ts";
 import { startA2a } from "./a2a.ts";
 import { A2aRelay } from "../a2a-relay.ts";
 import { RelayHost } from "../relay-host.ts";
@@ -267,7 +267,7 @@ export async function startHttpServer(options: Options, io: IO, deps: HttpDeps =
 
   const siteDeps = { fetch: io.fetch, account: () => readAccount(accountPath(io.env, options.config)), site: io.env.NAVVIED_SERVER ?? DEFAULT_SERVER, inCloud: () => runsInCloud(options, io.env), // Read again each time: the program that joins the account may be another one than this server, and may do it after this one started.
     here: () => new DeviceStore(devicesPath(io.env)).list().find((d) => d.account !== undefined)?.account };
-  const server = Bun.serve<{ since: number; isApp: boolean; detach?: () => void; cloud?: { target: string; headers: Record<string, string> }; tunnel?: Tunnel }>({
+  const server = Bun.serve<{ since: number; isApp: boolean; window?: Attached; cloud?: { target: string; headers: Record<string, string> }; tunnel?: Tunnel }>({
     port: options.port ?? 8787,
     hostname: host,
     maxRequestBodySize: MAX_FRAME,
@@ -383,13 +383,13 @@ export async function startHttpServer(options: Options, io: IO, deps: HttpDeps =
       // code, the same reason the HTTP routes above check `isApp`, not `authorised`.
       open(ws) {
         if (ws.data.cloud) { ws.data.tunnel = tunnel(ws.data.cloud, { send: (d) => ws.send(d), close: (code, reason) => ws.close(code, reason) }); return; }
-        ws.data.detach = hub.attach(ws, ws.data.since); if (ws.data.isApp) ws.subscribe("relay"); },
+        ws.data.window = hub.attach(ws, ws.data.since); if (ws.data.isApp) ws.subscribe("relay"); },
       message(ws, frame) {
         if (ws.data.tunnel) { ws.data.tunnel.message(frame); return; }
         if (typeof frame !== "string") { ws.send(JSON.stringify({ ev: "error", msg: "bad command: send text frames" })); return; }
-        hub.command(frame, (text) => ws.send(text));
+        ws.data.window?.command(frame);
       },
-      close(ws) { ws.data.tunnel?.close(); ws.data.detach?.(); if (ws.data.isApp) ws.unsubscribe("relay"); },
+      close(ws) { ws.data.tunnel?.close(); ws.data.window?.detach(); if (ws.data.isApp) ws.unsubscribe("relay"); },
     },
   });
   // A pending relay question reaches a connected shell at once, over the socket it already has open for notices

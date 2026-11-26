@@ -52,7 +52,7 @@ export const notebookEdit: Tool = {
     },
     required: ["file_path"],
   },
-  offeredWhen: (s) => /\.ipynb|notebook|jupyter/i.test(s.userText),
+  offeredWhen: ({ small }) => !small,
   fixArgs: (a) => ("notebook_path" in a && !("file_path" in a) ? { ...a, file_path: a.notebook_path } : a),
   title: (a) => `Edit notebook: ${str(a.file_path)}`,
   async run(a, ctx) {

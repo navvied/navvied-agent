@@ -20,10 +20,10 @@ export async function serveCommand(options: Options, io: IO): Promise<number> {
     await hub.stop();
     return EXIT.usage;
   }
-  hub.attach({ send: (line) => io.stdout.write(`${line}\n`) }, 0);
+  const host = hub.attach({ send: (line) => io.stdout.write(`${line}\n`) }, 0);
 
   const splitter = new LineSplitter();
-  const handleLine = (line: string): void => { hub.command(line, (reply) => io.stdout.write(`${reply}\n`)); };
+  const handleLine = (line: string): void => { host.command(line); };
 
   const off = io.onInterrupt(() => hub.cancel());
   for await (const chunk of io.stdin) {

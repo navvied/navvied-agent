@@ -139,7 +139,7 @@ describe("the Skill tool", () => {
   test("is read-only, and offered only while there are skills", () => {
     expect(tool.readOnly).toBe(true);
     const all = defaultTools();
-    const names = (skills: number, mode: "auto" | "plan") => toolsFor(mode, all, { small: false, userText: "", jobs: 0, skills }).map((t) => t.name);
+    const names = (skills: number, mode: "auto" | "plan") => toolsFor(mode, all, { small: false, jobs: 0, skills }).map((t) => t.name);
     expect(names(0, "auto")).not.toContain("Skill");
     expect(names(2, "auto")).toContain("Skill");
     expect(names(2, "plan")).toContain("Skill");
