@@ -13,7 +13,7 @@ const tag = `${process.pid}${Math.floor(Math.random() * 100_000)}`;
 const WITHIN_MS = 20_000;
 const started: ChildProcess[] = [];
 
-const sleeping = (): Map<string, number> => new Map(spawnSync("pgrep", ["-af", `^sleep [0-9]+\\.${tag}$`], { encoding: "utf8" }).stdout.split("\n").filter(Boolean).map((line) => { const [pid, , seconds] = line.split(" "); return [seconds!.split(".")[0]!, Number(pid)]; }));
+const sleeping = (): Map<string, number> => new Map(process.platform !== "linux" ? [] : spawnSync("pgrep", ["-af", `^sleep [0-9]+\\.${tag}$`], { encoding: "utf8" }).stdout.split("\n").filter(Boolean).map((line) => { const [pid, , seconds] = line.split(" "); return [seconds!.split(".")[0]!, Number(pid)]; }));
 const asleep = (name: string): string => `sleep ${name}.${tag}`;
 
 afterAll(hook("the watcher tests end what they started", async () => {

@@ -25,15 +25,26 @@ describe("what a page may ask of the connected programs", () => {
     } finally { mcp.close(); }
   });
 
-  test("a document is read as parts: text as text, a picture as base64, and a wrong address is an error", async () => {
+  const withTheRichProgram = async (look: (mcp: Awaited<ReturnType<typeof connectMcp>>) => Promise<void>): Promise<void> => {
     const mcp = await connectMcp({ docs: server("rich") });
-    try {
-      expect(await mcp.readResource("docs", "note://a", signal)).toEqual([{ uri: "note://a", mime: "text/plain", bytes: 8, text: "Buy milk" }]);
-      expect(await mcp.readResource("docs", "img://logo", signal)).toEqual([{ mime: "image/png", bytes: 1, data: "AA==" }]);
-      await expect(mcp.readResource("docs", "note://zzz", signal)).rejects.toThrow("no resource");
-      await expect(mcp.readResource("other", "note://a", signal)).rejects.toThrow("has no documents");
-    } finally { mcp.close(); }
-  });
+    try { await look(mcp); } finally { mcp.close(); }
+  };
+
+  test("a document of text is read as text", () => withTheRichProgram(async (mcp) => {
+    expect(await mcp.readResource("docs", "note://a", signal)).toEqual([{ uri: "note://a", mime: "text/plain", bytes: 8, text: "Buy milk" }]);
+  }));
+
+  test("a picture is read as base64", () => withTheRichProgram(async (mcp) => {
+    expect(await mcp.readResource("docs", "img://logo", signal)).toEqual([{ mime: "image/png", bytes: 1, data: "AA==" }]);
+  }));
+
+  test("an address the program does not know is an error", () => withTheRichProgram(async (mcp) => {
+    await expect(mcp.readResource("docs", "note://zzz", signal)).rejects.toThrow("no resource");
+  }));
+
+  test("a program that is not connected has no documents", () => withTheRichProgram(async (mcp) => {
+    await expect(mcp.readResource("other", "note://a", signal)).rejects.toThrow("has no documents");
+  }));
 
   test("tools by words are the same search the model has, and a page's search offers nothing to the model", async () => {
     const mcp = await connectMcp({ docs: server("rich") });

@@ -352,7 +352,7 @@ function unpack(archive: Buffer, into: string): string | undefined {
   const names = listed.stdout.split("\n").filter(Boolean);
   if (names.length > LIMITS.files * 2) return `the archive has more than ${LIMITS.files * 2} entries`;
   if (names.some((n) => n.startsWith("/") || n.startsWith("\\") || /^[A-Za-z]:/.test(n) || n.split(/[\\/]/).includes(".."))) return "the archive has a path that leaves its folder";
-  const out = spawnSync("tar", ["-xf", "-", "-C", into, "--no-same-owner", "--no-same-permissions"], { input: tar, encoding: "utf8" });
+  const out = spawnSync("tar", ["-xf", "-", "--no-same-owner", "--no-same-permissions"], { cwd: into, input: tar, encoding: "utf8" });
   return out.status === 0 ? undefined : `the archive cannot be unpacked: ${whatTarSaid(out)}`;
 }
 

@@ -160,6 +160,17 @@ describe("installing", () => {
     expect(readdirNames(root)).toEqual([]);
   });
 
+  test("an archive is unpacked into a folder whose name holds what the unpacking program would read as a new line", async () => {
+    const source = makePlugin();
+    const file = join(fresh("archive"), "plugin.tar.gz");
+    writeFileSync(file, gzipSync(packTree(source)));
+    const odd = join(fresh("odd"), "a\\navvied");
+    mkdirSync(odd, { recursive: true });
+    const done = await installPlugin({ from: file, root: join(odd, "plugins"), lock: new PluginLock(join(odd, "plugins.lock.json")) });
+    expect(done.ok ? "" : done.error).toBe("");
+    expect(done.ok && done.pack.hash).toBe(readPack(source, "user").hash);
+  });
+
   test("an archive that cannot be read is refused with what the unpacking program said", async () => {
     const broken = join(fresh("archive"), "broken.tar");
     writeFileSync(broken, Buffer.alloc(2_048, 7));

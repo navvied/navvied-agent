@@ -127,7 +127,11 @@ describe.skipIf(findBash() === undefined)("validating a task", () => {
       const port = Number(readFileSync(join(dir, "port.txt"), "utf8"));
       expect(port).toBeGreaterThanOrEqual(20_000);
       expect(port).toBeLessThan(30_000);
-    } finally { killProcesses(leftovers(dir)); await removeTree(dir); }
+    } finally {
+      await shell(dir, `holder=$(cat leftover.pid 2>/dev/null) && kill "$holder" 2>/dev/null; while kill -0 "$holder" 2>/dev/null; do sleep 0.05; done`);
+      killProcesses(leftovers(dir));
+      await removeTree(dir);
+    }
   });
   test("a task whose program is missing here is skipped, not failed", async () => {
     expect(await validateTask(made({ requires: ["navvied-no-such-program"] }, { "a": "x" }, { "a": "y" }))).toEqual({ task: "made", status: "skipped", problems: ["needs navvied-no-such-program"] });

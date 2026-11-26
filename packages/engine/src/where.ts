@@ -1,4 +1,6 @@
+import { existsSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import type { Paths } from "./rules.ts";
 
 /**
@@ -16,6 +18,16 @@ export const tempDirs = (): string[] => [tmpdir(), "/tmp", "/var/tmp", "/dev/shm
 /** The null device and its kin: no one's place. */
 const DEVICE = /^\/dev\/(null|zero|stdout|stderr|tty)$/;
 
+export function followed(path: string): string {
+  const rest: string[] = [];
+  let here = resolve(path);
+  while (!existsSync(here) && dirname(here) !== here) { rest.unshift(here.slice(dirname(here).length).replace(/^[\\/]/, "")); here = dirname(here); }
+  try { here = realpathSync(here); } catch { return join(here, ...rest); }
+  return join(here, ...rest);
+}
+
+const whereItReallyIs = (path: string, p: Paths): string => (p.resolve === resolve ? followed(path) : path);
+
 const inside = (root: string, full: string, p: Paths): boolean => { const r = p.relative(p.resolve(root), full); return r !== ".." && !r.startsWith(`..${p.sep}`) && !r.startsWith("../") && !p.isAbsolute(r); };
 
 /**
@@ -26,6 +38,6 @@ export function outsideProject(target: string, cwd: string, p: Paths, extra: rea
   const t = expandHome(target.replace(/\\/g, "/"), p.home ?? homeFrom());
   if (!t || DEVICE.test(t)) return false;
   if (/[$`]/.test(t) || (p.sep === "/" && /^[a-z]:\//i.test(t))) return true;
-  const full = p.resolve(cwd, t);
-  return ![cwd, ...tempDirs(), ...extra].some((root) => inside(root, full, p));
+  const full = whereItReallyIs(p.resolve(cwd, t), p);
+  return ![cwd, ...tempDirs(), ...extra].some((root) => inside(whereItReallyIs(p.resolve(root), p), full, p));
 }

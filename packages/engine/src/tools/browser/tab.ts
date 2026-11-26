@@ -64,19 +64,18 @@ export class Tab {
   #inflight = new Set<string>();
   #urls = new Map<string, string>();
   #watchers = new Set<(d: DialogOpen) => void>();
+  #dialogsAnnounced = 0;
   #quiet = new Set<() => void>();
 
   constructor(readonly cdp: Cdp, readonly targetId: string, readonly sessionId: string, private readonly gate: (url: string) => Promise<string | undefined>, private readonly said: (note: BrowserNote) => void = () => undefined) {}
 
   async init(): Promise<void> {
     const on = (m: string, p: Record<string, unknown> = {}): Promise<unknown> => this.cdp.send(m, p, this.sessionId);
-    // All at once, the resume last: a page the browser holds at its start does not answer before it is let go, and commands are taken in order.
+    const required = (m: string, p?: Record<string, unknown>): Promise<unknown> => on(m, p).catch((e: Error) => { throw new Error(`the page could not be set up (${m}): ${e.message}`); });
     await Promise.all([
-      on("Page.enable"), on("Runtime.enable"), on("Network.enable"), on("DOM.enable"),
-      // Every request the page makes waits here until it has been looked at: a document, an image, a script's fetch.
-      on("Fetch.enable", { patterns: [{ urlPattern: "*" }] }),
+      required("Page.enable"), required("Runtime.enable"), required("Network.enable"), required("DOM.enable"),
+      required("Fetch.enable", { patterns: [{ urlPattern: "*" }] }),
       on("Page.setInterceptFileChooserDialog", { enabled: true }).catch(() => undefined),
-      // A frame of another site runs apart from the page; it is held at its start until it is under the same look.
       on("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }).catch(() => undefined),
       on("Runtime.runIfWaitingForDebugger").catch(() => undefined),
     ]);
@@ -100,6 +99,7 @@ export class Tab {
   handle(method: string, p: Record<string, any>, session: string = this.sessionId): void {
     switch (method) {
       case "Page.javascriptDialogOpening": {
+        this.#dialogsAnnounced += 1;
         this.dialog = { type: String(p.type), message: String(p.message ?? ""), ...(p.defaultPrompt ? { defaultPrompt: String(p.defaultPrompt) } : {}) };
         this.said({ what: "dialog", state: "opened", type: this.dialog.type, message: this.dialog.message.slice(0, 500), ...(this.dialog.defaultPrompt ? { defaultPrompt: this.dialog.defaultPrompt.slice(0, 500) } : {}) });
         for (const w of this.#watchers) w(new DialogOpen(this.dialog));
@@ -154,7 +154,9 @@ export class Tab {
     call.catch(() => undefined);
     let watcher!: (d: DialogOpen) => void;
     const opened = new Promise<never>((_, reject) => { watcher = reject; this.#watchers.add(watcher); });
-    try { return await Promise.race([call, opened]); } finally { this.#watchers.delete(watcher); }
+    try { return await Promise.race([call, opened]); }
+    catch (e) { throw e instanceof Error && TOOK_TOO_LONG.test(e.message) ? new Error(`${e.message} (dialogs the browser announced for this page: ${this.#dialogsAnnounced})`) : e; }
+    finally { this.#watchers.delete(watcher); }
   }
 
   async eval<T>(expression: string): Promise<T> {

@@ -1,10 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, realpathSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, mkdirSync, mkdtempSync, openSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { groupAlive, killTree, usesProcessGroups } from "../platform.ts";
 import { Redactor } from "../redact.ts";
-import { expandHome, homeFrom } from "../where.ts";
+import { expandHome, followed, homeFrom } from "../where.ts";
 import { releaseChild, withGuardStdio } from "../sandbox/handshake.ts";
 
 export type Args = Record<string, unknown>;
@@ -13,15 +13,6 @@ export const str = (v: unknown, fallback = ""): string => (typeof v === "string"
 export const num = (v: unknown, fallback: number): number => (typeof v === "number" && Number.isFinite(v) ? v : fallback);
 
 export const abs = (cwd: string, p: unknown, home?: string): string => resolve(cwd, expandHome(str(p), home ?? homeFrom()));
-
-/** A path with every link in it followed, even when the last parts do not exist yet (a file about to be written). */
-function followed(path: string): string {
-  const rest: string[] = [];
-  let here = resolve(path);
-  while (!existsSync(here) && dirname(here) !== here) { rest.unshift(here.slice(dirname(here).length).replace(/^[\\/]/, "")); here = dirname(here); }
-  try { here = realpathSync(here); } catch { /* it stays as it is */ }
-  return join(here, ...rest);
-}
 
 /**
  * Where a tool should work for `p`: like `abs`, and, when the conversation is held to a folder (`ctx.root`), nothing outside it:

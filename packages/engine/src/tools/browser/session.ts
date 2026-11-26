@@ -13,7 +13,15 @@ const TAB_EVENTS = ["Page.javascriptDialogOpening", "Page.javascriptDialogClosed
 
 export interface Download { guid: string; url: string; name: string; state: "going" | "done" | "failed"; path?: string; bytes?: number; note?: string; told?: true }
 
-/** The browser and its pages. */
+interface PageToCome { promise: Promise<Tab>; resolve(t: Tab): void; reject(why: Error): void }
+
+function pageToCome(): PageToCome {
+  let resolve!: (t: Tab) => void, reject!: (why: Error) => void;
+  const promise = new Promise<Tab>((yes, no) => { resolve = yes; reject = no; });
+  promise.catch(() => undefined);
+  return { promise, resolve, reject };
+}
+
 export class Session {
   cdp!: Cdp;
   tabs: Tab[] = [];
@@ -30,7 +38,7 @@ export class Session {
   #launched: Launched | undefined;
   #idle: ReturnType<typeof setTimeout> | undefined;
   #byId = new Map<string, Tab>();
-  #waiting = new Map<string, { promise: Promise<Tab>; resolve(t: Tab): void }>();
+  #waiting = new Map<string, PageToCome>();
   #own = new Set<string>();
   #folder = "";
   #downloadWaiters = new Set<() => void>();
@@ -56,7 +64,7 @@ export class Session {
   async #setUp(): Promise<void> {
     for (const name of TAB_EVENTS) this.cdp.on(name, (p, sid) => { if (sid) this.#byId.get(sid)?.handle(name, p, sid); });
     this.cdp.on("Target.attachedToTarget", (p, sid) => {
-      if (p.targetInfo?.type === "page") void this.#adopt(String(p.sessionId), String(p.targetInfo.targetId), p.targetInfo.openerId ? String(p.targetInfo.openerId) : undefined);
+      if (p.targetInfo?.type === "page") { const id = String(p.targetInfo.targetId); void this.#adopt(String(p.sessionId), id, p.targetInfo.openerId ? String(p.targetInfo.openerId) : undefined).catch((e: Error) => this.#couldNotBeSetUp(id, e)); }
       // A frame of another site speaks through a session of its own; it belongs to the page that holds it.
       else if (p.targetInfo?.type === "iframe" && sid) { const tab = this.#byId.get(sid); if (tab) { this.#byId.set(String(p.sessionId), tab); void tab.attachFrame(String(p.sessionId), String(p.targetInfo.targetId)); } }
     });
@@ -74,10 +82,18 @@ export class Session {
 
   #tabFor(targetId: string): Promise<Tab> {
     const existing = this.tabs.find((t) => t.targetId === targetId);
-    if (existing) return Promise.resolve(existing);
-    let w = this.#waiting.get(targetId);
-    if (!w) { let resolve!: (t: Tab) => void; const promise = new Promise<Tab>((r) => { resolve = r; }); w = { promise, resolve }; this.#waiting.set(targetId, w); }
-    return w.promise;
+    return existing ? Promise.resolve(existing) : this.#toCome(targetId).promise;
+  }
+
+  #toCome(targetId: string): PageToCome {
+    let page = this.#waiting.get(targetId);
+    if (!page) { page = pageToCome(); this.#waiting.set(targetId, page); }
+    return page;
+  }
+
+  #couldNotBeSetUp(targetId: string, why: Error): void {
+    this.#toCome(targetId).reject(why);
+    this.current?.failures.push(`a new tab was left out: ${why.message}`);
   }
 
   async #adopt(sessionId: string, targetId: string, opener: string | undefined): Promise<Tab> {

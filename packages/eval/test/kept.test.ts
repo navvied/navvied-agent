@@ -32,7 +32,7 @@ const AGENT = `
 const { mkdirSync, writeFileSync, symlinkSync } = require("node:fs");
 const { gzipSync } = require("node:zlib");
 const key = process.env.NAVVIED_API_KEY, other = process.env.SOME_SERVICE_TOKEN;
-const put = (path, data) => { mkdirSync(require("node:path").dirname(path), { recursive: true }); writeFileSync(path, data); };
+const put = (name, data) => { const path = require("node:path").resolve(name); mkdirSync(require("node:path").dirname(path), { recursive: true }); writeFileSync(path, data); };
 put("answer.txt", process.env.BENCH_SECRET + (process.env.RIGHT ? "" : " not yet"));
 put("notes/key.txt", "the key is " + key + " and " + other + "\\n");
 put(".state/session.json", JSON.stringify({ key }));
@@ -59,7 +59,7 @@ describe("a run that did not solve its task is kept", () => {
   const outside = join(made("outside", { "bench.key": KEY }), "bench.key");
   const run = (name: string, env: Record<string, string> = {}, keep = true): Promise<TaskResult> => runTask(task, { command: [process.execPath, agent], key: KEY, env: { NAVVIED_API_KEY: KEY, SOME_SERVICE_TOKEN: OTHER, KEY_FILE_AT: outside, ...env }, trace: join(root, name, "trace"), ...(keep ? { keepFailed: join(root, name, "failed") } : {}) });
 
-  const agentSaid = (name: string, r: TaskResult): string => (r.reason === "agent failed" ? readFileSync(join(root, name, "trace", `${task.id}.stderr.txt`), "utf8").split("\n").filter((line) => line.trim() !== "").slice(0, 8).join("\n") : "");
+  const agentSaid = (name: string, r: TaskResult): string => (r.reason === "agent failed" ? readFileSync(join(root, name, "trace", `${task.id}.stderr.txt`), "utf8").split("\n").filter((line) => line.trim() !== "" && !/^\s*(\d+ \||\^)/.test(line)).slice(0, 8).join("\n") : "");
 
   test("with its workspace, check and secret, and with no key anywhere in what was written", async () => {
     const r = await run("fail", { COMMIT: "notes/key.txt" });
