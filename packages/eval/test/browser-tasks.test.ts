@@ -1,3 +1,4 @@
+import { SECOND_SITE, mustAnswer } from "../fixtures/second-site.ts";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -48,9 +49,20 @@ describe("the browser tasks", () => {
     expect(log).not.toContain("Zx9");
   });
 
+  test("a site that cannot be reached names itself and why, and one that answers is let through", async () => {
+    await expect(mustAnswer("http://nowhere.invalid:1/x", async () => { throw new Error("no route"); })).rejects.toThrow("the fixture web's site cannot be reached at http://nowhere.invalid:1/x: no route");
+    await expect(mustAnswer("http://nowhere.invalid:1/x", async () => new Response("no", { status: 502 }))).rejects.toThrow("cannot be reached at http://nowhere.invalid:1/x: it answered 502");
+    await mustAnswer(`${base}/voucher`);
+  });
+
+  test("the second site goes by a name every system has", () => {
+    expect(["127.0.0.1", "localhost"]).toContain(SECOND_SITE);
+  });
+
   test("the entrance sends the browser to another address of the same computer, so it is another origin", async () => {
-    const r = await fetch(`${base}/enter`, { redirect: "manual" });
-    expect(r.headers.get("location")).toMatch(/^http:\/\/127\.0\.0\.2:\d+\/login$/);
+    const there = new URL((await fetch(`${base}/enter`, { redirect: "manual" })).headers.get("location")!);
+    expect([there.hostname, there.pathname]).toEqual([SECOND_SITE, "/login"]);
+    expect((await fetch(there)).ok).toBe(true);
   });
 
   test("the signup takes exactly the form the task names and writes down what it got", async () => {
@@ -63,8 +75,9 @@ describe("the browser tasks", () => {
   });
 
   test("the voucher frame is on another address of the same computer, so it is a frame of another site", async () => {
-    expect(await (await fetch(`${base}/checkout`)).text()).toMatch(/<iframe[^>]*src="http:\/\/127\.0\.0\.2:\d+\/voucher"/);
-    expect(await (await fetch(`${base}/voucher`)).text()).toContain("Voucher code:");
+    const frame = new URL(/<iframe[^>]*src="([^"]+)"/.exec(await (await fetch(`${base}/checkout`)).text())![1]!);
+    expect([frame.hostname, frame.origin === base]).toEqual([SECOND_SITE, false]);
+    expect(await (await fetch(frame)).text()).toContain("Voucher code:");
   });
 
   test("the menu shows its code under a pointer and the board when a card is dropped, and neither shows it before", async () => {

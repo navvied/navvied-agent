@@ -1,3 +1,4 @@
+import { data as noteText } from "../../protocol/test/support/ci-annotate.ts";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,6 +20,7 @@ const home = mkdtempSync(join(tmpdir(), "navvied-bench-home-"));
 // The build of the terminal task is short here; a real run leaves it as it is.
 process.env.BUILD_SECONDS = "2";
 const tasks = loadTasks(TASKS);
+const MOST_NOTE = 3_600;
 const canRunItsStandInPrograms = (task: Task): boolean => process.platform !== "win32" || !task.media?.some((kind) => kind !== "vision");
 let behaviour: Behaviour = "oracle";
 let mock: Mock, meter: Meter;
@@ -39,12 +41,18 @@ const startedMeter = (url: string): Meter => { const made = startMeter(url); met
 
 describe("every task can be solved by an agent run, not only by the validator", () => {
   test("the scripted model that does what the reference solution does solves all of them, through the real program", async () => {
+    const missed: string[] = [];
     for (const task of tasks.filter(canRunItsStandInPrograms)) {
       const r = await run(task, "oracle");
-      if (!r.passed || r.reason !== "solved") throw new Error([`${task.id}: ${r.reason}`, r.error, ...(r.why?.printed ?? []), r.why?.check].filter(Boolean).join("\n"));
+      if (!r.passed || r.reason !== "solved") {
+        missed.push(task.id);
+        console.log(`::warning title=benchmark missed ${task.id}::${noteText([r.reason, r.error, ...(r.why?.printed ?? []), r.why?.check].filter(Boolean).join("\n").slice(0, MOST_NOTE))}`);
+        continue;
+      }
       expect(r.prompt!.systemChars + r.prompt!.toolChars, task.id).toBeLessThanOrEqual(NOT_SMALL_CHARS + PATH_ROOM);
       expect(r.prompt!.tools, task.id).toBeLessThanOrEqual(NOT_SMALL_TOOLS);
     }
+    if (missed.length) throw new Error(`${missed.length} tasks missed, each said in a note of its own\n${missed.join(", ")}`);
   }, 240_000);
 });
 
