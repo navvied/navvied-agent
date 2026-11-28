@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./process-start.ts";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { win32 } from "node:path";
 

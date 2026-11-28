@@ -3,7 +3,7 @@
  * A server is either started here as a child process and spoken to in JSON lines over its standard input and output, or reached over the web.
  * Its tools join the engine's own, named `mcp__<server>__<tool>` (see mcp-tools.ts).
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { ChildEnv, spawn, type ChildProcess } from "./process-start.ts";
 import { killTree, launch, usesProcessGroups } from "./platform.ts";
 import { OAuthSession, type OAuthClient, type OAuthStore } from "./mcp-oauth.ts";
 import { plain, type McpContent, type McpResult } from "./mcp-result.ts";
@@ -288,7 +288,7 @@ export class McpClient extends McpBase {
   static async start(name: string, config: McpServerConfig, started?: (client: McpClient) => void, handlers?: McpHandlers): Promise<McpClient> {
     if (!config.command) throw new Error("a connected program needs a command or an address");
     const [program, ...args] = launch([config.command, ...(config.args ?? [])]);
-    const child = spawn(program!, args, { cwd: config.cwd, env: { ...process.env, ...config.env }, detached: usesProcessGroups(), windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(program!, args, { cwd: config.cwd, env: ChildEnv.forServer().with(config.env), detached: usesProcessGroups(), windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     const client = new McpClient(name, child, config.command, handlers);
     started?.(client);
     try { await client.handshake(); return client; } catch (e) { client.close(); throw e; }

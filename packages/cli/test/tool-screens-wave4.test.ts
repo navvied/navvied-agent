@@ -71,6 +71,22 @@ describe("setting a tool up", () => {
       for (const e of this.script[name] ?? []) queueMicrotask(() => this.emit(e));
     }
   }
+  test("an answer that comes while the command is being sent is not missed, as with the engine inside this program", async () => {
+    class SameProgram extends FakeLink {
+      override send(cmd: object): void {
+        super.send(cmd);
+        const name = (cmd as { cmd: string }).cmd;
+        if (name === "tool.setup") this.emit(event("ask", { steps: steps(["waiting", "waiting", "waiting"]) }));
+        if (name === "tool.setup.approve") this.emit(event("done", { steps: steps(["done", "done", "done"]), percent: 100 }));
+      }
+    }
+    const l = new SameProgram(() => undefined);
+    const t = scripted(["Start setup"]);
+    const kit = t.kit(l);
+    await toolSetup(kit, entry);
+    expect(l.commands("tool.setup.approve")).toHaveLength(1);
+    expect(kit.note).toEqual(["Browser Automation is ready."]);
+  });
   test("it says what it will do, starts on a press, shows the steps, and says when it is ready", async () => {
     const l = new Hub({
       "tool.setup": [event("ask", { steps: steps(["waiting", "waiting", "waiting"]) })],

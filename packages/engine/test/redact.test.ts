@@ -1,3 +1,4 @@
+import { ChildEnv } from "../src/process-start.ts";
 import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
@@ -105,7 +106,7 @@ describe("a secret split between two pieces, wherever the cut falls", () => {
 });
 
 describe("through Bash", () => {
-  const ctx = (): ToolContext => ({ cwd: process.cwd(), signal: new AbortController().signal, emit: () => undefined, allowPrivateNetwork: false, jobs: new Jobs(() => undefined) });
+  const ctx = (): ToolContext => { const allowed = ChildEnv.forNavvied(); return { cwd: process.cwd(), signal: new AbortController().signal, emit: () => undefined, allowPrivateNetwork: false, env: allowed, jobs: new Jobs(() => undefined, Date.now, { env: () => allowed }) }; };
   test("env, echo and a file that holds a key never give it away; a key of a shape nobody registered is hidden too", async () => {
     process.env.NAVVIED_FAKE_API_KEY = KEY;
     // Another secret that starts like the key ends: it must not make the key look unfinished at the end of the output.
@@ -166,7 +167,7 @@ describe("through the engine: events", () => {
     process.env.NAVVIED_FAKE_PASSWORD = KEY;
     process.env.NAVVIED_OTHER_TOKEN = LONG;
     try {
-      const r = rig((req) => (req.messages.at(-1)?.role === "tool" ? { text: "done" } : { calls: [{ name: "Bash", args: { command: `echo start; sleep 0.3; echo "$NAVVIED_FAKE_PASSWORD"; sleep 0.3; echo end` } }, { name: "Bash", args: { command: `echo "$NAVVIED_FAKE_PASSWORD"`, run_in_background: true } }] }));
+      const r = rig((req) => (req.messages.at(-1)?.role === "tool" ? { text: "done" } : { calls: [{ name: "Bash", args: { command: `echo start; sleep 0.3; echo "$NAVVIED_FAKE_PASSWORD"; sleep 0.3; echo end` } }, { name: "Bash", args: { command: `echo "$NAVVIED_FAKE_PASSWORD"`, run_in_background: true } }] }), { env: { keep: ["NAVVIED_FAKE_PASSWORD"] } });
       await r.turn(prompt("go", { mode: "auto" }));
       await Bun.sleep(300);
       const all = JSON.stringify(r.events) + JSON.stringify(r.provider.requests);

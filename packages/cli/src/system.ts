@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { ChildEnv, bunSpawn, spawn, type ChildProcess } from "@navvied/engine";
 import { homedir } from "node:os";
 import { killTree, launch, usesProcessGroups } from "@navvied/engine";
 import { delimiter, join } from "node:path";
@@ -10,6 +10,8 @@ export interface RunOptions {
   /** Gives the caller a way to type a line into the program while it runs. Without it the program gets no input. */
   input?: (write: (line: string) => void) => void;
   timeoutMs?: number;
+  keep?: readonly string[];
+  env?: Readonly<Record<string, string>>;
 }
 
 /** The parts of the computer the setup screens use: the clipboard to write to, the browser, programs. Injected, so tests touch none of it. */
@@ -57,7 +59,7 @@ export function realSystem(env: Record<string, string | undefined>, platform: No
     let output = "";
     let settled = false;
     const [program, ...args] = launch(argv);
-    const child = spawn(program!, args, { env: { ...env, PATH: path }, detached: usesProcessGroups(), windowsHide: true, stdio: [options.input ? "pipe" : "ignore", "pipe", "pipe"] });
+    const child = spawn(program!, args, { env: ChildEnv.scrubbed(env, options.keep ? { keep: options.keep } : {}).with({ ...options.env, PATH: path }), detached: usesProcessGroups(), windowsHide: true, stdio: [options.input ? "pipe" : "ignore", "pipe", "pipe"] });
     options.input?.((line) => { try { child.stdin?.write(`${line}\n`); } catch { /* the program has already ended */ } });
     guard(child);
     const stop = (): void => killTree(child);
@@ -95,7 +97,7 @@ export function realSystem(env: Record<string, string | undefined>, platform: No
         const path = which(argv[0]!);
         if (!path) continue;
         try {
-          const child = Bun.spawn([path, ...argv.slice(1)], { stdin: "pipe", stdout: "ignore", stderr: "ignore" });
+          const child = bunSpawn([path, ...argv.slice(1)], { stdin: "pipe", stdout: "ignore", stderr: "ignore" });
           child.stdin.write(text);
           await child.stdin.end();
           if ((await child.exited) === 0) return true;
@@ -107,7 +109,7 @@ export function realSystem(env: Record<string, string | undefined>, platform: No
       if (!/^https:\/\//.test(url)) return;
       const opener = OPENERS[platform];
       if (!opener || !which(opener[0]!)) return;
-      try { Bun.spawn([which(opener[0]!)!, ...opener.slice(1), url], { stdout: "ignore", stderr: "ignore", stdin: "ignore" }).unref(); } catch { /* no browser: the address is shown on screen as well */ }
+      try { bunSpawn([which(opener[0]!)!, ...opener.slice(1), url], { stdout: "ignore", stderr: "ignore", stdin: "ignore" }).unref(); } catch { /* no browser: the address is shown on screen as well */ }
     },
   };
 }

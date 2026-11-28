@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { ChildEnv, spawn, type ChildProcess } from "../process-start.ts";
 import { closeSync, mkdirSync, mkdtempSync, openSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
@@ -150,17 +150,13 @@ export class Capture {
 
 export interface RunResult { output: string; code: number | null; timedOut: boolean; interrupted: boolean; /** What ran out: the silence (no output for `idleMs`) or the whole time (`timeoutMs`). */ ranOut?: "silence" | "time" | "left"; /** The signal that ended the command, when one did. */ signal?: string; /** The command was not killed at its timeout: it was handed on (see `onTimeout`). */ adopted?: boolean; /** Where the whole output is, when it was too long to keep in memory. */ file?: string }
 
-/**
- * Run a process, collect its output, and kill the whole process group on timeout or when `signal` aborts.
- * Never rejects: a failure to start is reported in `output`.
- */
-export function run(argv: string[], opts: { cwd: string; signal: AbortSignal; timeoutMs: number; /** Time it may be silent: the clock is restarted by every bit of output, and `timeoutMs` is then the most it may take in all. */ idleMs?: number; /** What the command starts with (this program's own environment when not given). */ /** Most output kept whole in memory, in characters (default 1,000,000); more goes to a file. */ maxOutput?: number; env?: NodeJS.ProcessEnv; onChunk?: (text: string) => void; /** Called once the command has started. */ onSpawn?: (child: ChildProcess) => void; /** The command is confined with a guard that waits to be released (`Launch.guarded`). */ guarded?: boolean; /** At the timeout: take the running command over (true) instead of killing it. */ onTimeout?: (child: ChildProcess, printed: string) => boolean; /** When the shell has ended and programs it started (`server &`) still run in its group: take them over (true) instead of leaving them behind. */ onLeft?: (child: ChildProcess, code: number | null, printed: string) => boolean }): Promise<RunResult> {
+export function run(argv: string[], opts: { cwd: string; signal: AbortSignal; timeoutMs: number; idleMs?: number; maxOutput?: number; env?: ChildEnv; onChunk?: (text: string) => void; onSpawn?: (child: ChildProcess) => void; guarded?: boolean; onTimeout?: (child: ChildProcess, printed: string) => boolean; onLeft?: (child: ChildProcess, code: number | null, printed: string) => boolean }): Promise<RunResult> {
   return new Promise((done) => {
     const [cmd, ...args] = argv;
     if (!cmd) return done({ output: "Error: empty command", code: null, timedOut: false, interrupted: false });
     if (opts.signal.aborted) return done({ output: "", code: null, timedOut: false, interrupted: true });
     // Nobody types to a command: its input is closed, so a program that reads (cat, read, a prompt) ends at once instead of waiting out the timeout.
-    const child = spawn(cmd, args, { cwd: opts.cwd, env: { ...(opts.env ?? process.env), ...QUIET_ENV }, detached: usesProcessGroups(), windowsHide: true, stdio: withGuardStdio(["ignore", "pipe", "pipe"], opts.guarded === true) });
+    const child = spawn(cmd, args, { cwd: opts.cwd, env: (opts.env ?? ChildEnv.scrubbed()).with(QUIET_ENV), detached: usesProcessGroups(), windowsHide: true, stdio: withGuardStdio(["ignore", "pipe", "pipe"], opts.guarded === true) });
     if (opts.guarded) releaseChild(child);
     opts.onSpawn?.(child);
     const output = new Capture(opts.maxOutput);

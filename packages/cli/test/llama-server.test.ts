@@ -1,3 +1,4 @@
+import { ChildEnv } from "@navvied/engine";
 import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -28,7 +29,7 @@ describe("the arguments", () => {
 describe.skipIf(win)("a server that is started", () => {
   test("is ready when its line says it listens, answers on that port, is a child of this program, and leaves a note of its process", async () => {
     const d = dir(), argsFile = join(d, "args.json");
-    const s = await startServer({ binary: fakeBinary(d), model: join(d, "m.gguf"), window: 4096, layers: 0, alias: "tiny", pidFile: join(d, "server.json"), env: { ...process.env, FAKE_LLAMA_ARGS: argsFile } });
+    const s = await startServer({ binary: fakeBinary(d), model: join(d, "m.gguf"), window: 4096, layers: 0, alias: "tiny", pidFile: join(d, "server.json"), env: ChildEnv.scrubbed().with({ FAKE_LLAMA_ARGS: argsFile }) });
     if ("error" in s) throw new Error(s.error);
     killers.push(() => { try { process.kill(s.pid, "SIGKILL"); } catch { /* gone */ } });
     expect(s.url).toBe(`http://127.0.0.1:${s.port}`);
@@ -43,7 +44,7 @@ describe.skipIf(win)("a server that is started", () => {
 
   test("not ready before that line: a slow load is waited for", async () => {
     const d = dir();
-    const s = await startServer({ binary: fakeBinary(d), model: "m", window: 1024, layers: 0, alias: "a", pidFile: join(d, "server.json"), env: { ...process.env, FAKE_LLAMA: "slow" } });
+    const s = await startServer({ binary: fakeBinary(d), model: "m", window: 1024, layers: 0, alias: "a", pidFile: join(d, "server.json"), env: ChildEnv.scrubbed().with({ FAKE_LLAMA: "slow" }) });
     if ("error" in s) throw new Error(s.error);
     expect(await (await fetch(`${s.url}/v1/models`)).json()).toMatchObject({ data: [{ id: "a" }] });
     await s.stop();
@@ -51,14 +52,14 @@ describe.skipIf(win)("a server that is started", () => {
 
   test("one that stops before it listens says the last thing it said that was an error, and leaves nothing behind", async () => {
     const d = dir();
-    const s = await startServer({ binary: fakeBinary(d), model: "m", window: 1024, layers: 99, alias: "a", pidFile: join(d, "server.json"), env: { ...process.env, FAKE_LLAMA: "fail" } });
+    const s = await startServer({ binary: fakeBinary(d), model: "m", window: 1024, layers: 99, alias: "a", pidFile: join(d, "server.json"), env: ChildEnv.scrubbed().with({ FAKE_LLAMA: "fail" }) });
     expect(s).toEqual({ error: "The model did not start: srv load_model: error: failed to load model, out of memory" });
     expect(existsSync(join(d, "server.json"))).toBe(false);
   });
 
   test("one that never listens is given up on after the time allowed, and stopped", async () => {
     const d = dir();
-    const s = await startServer({ binary: fakeBinary(d), model: "m", window: 1024, layers: 0, alias: "a", pidFile: join(d, "server.json"), loadMs: 600, env: { ...process.env, FAKE_LLAMA: "hang" } });
+    const s = await startServer({ binary: fakeBinary(d), model: "m", window: 1024, layers: 0, alias: "a", pidFile: join(d, "server.json"), loadMs: 600, env: ChildEnv.scrubbed().with({ FAKE_LLAMA: "hang" }) });
     expect(s).toEqual({ error: "The model took too long to load." });
     expect(existsSync(join(d, "server.json"))).toBe(false);
   });

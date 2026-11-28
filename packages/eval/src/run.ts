@@ -201,7 +201,7 @@ export async function runTask(task: Task, opts: RunOptions): Promise<TaskResult>
     if (!setup.ok) { killProcesses(leftovers(dir)); rmSync(dir, { recursive: true, force: true }); return { ...about(task), task: task.id, model, passed: false, reason: "setup failed", error: setup.output.trim().split("\n").at(-1)?.slice(0, 300) ?? "", ...none }; }
   }
   const before = protectedHashes(dir, task.protect);
-  const config = agentConfig(task, dir, opts.media);
+  const config = agentConfig(task, dir, opts.media, secret);
   const prompt = taskPrompt(dir, task);
   const started = Date.now();
   const [program, ...base] = task.runner ? [process.execPath, join(FIXTURES, task.runner)] : opts.command;

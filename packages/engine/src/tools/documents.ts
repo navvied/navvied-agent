@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../process-start.ts";
 import { inflateRawSync } from "node:zlib";
 import { pdfText } from "./pdf.ts";
 

@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { McpClient, NotSent, type Tool, type Wire } from "./mcp.ts";
 import type { Pin } from "./pin.ts";
 
-/** A child program as the host sees it. The real one is made from `Bun.spawn`; tests make their own. */
 export interface Child {
   write(data: string): void;
   /** Lines of standard output. */

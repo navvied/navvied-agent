@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../process-start.ts";
 import { win32 } from "node:path";
 import type { Setting } from "./policy.ts";
 import { shellFor, type Shell } from "../platform.ts";

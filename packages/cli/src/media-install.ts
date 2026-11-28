@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
+import { spawn } from "@navvied/engine";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { childEnv, killTree, secretNames, usesProcessGroups } from "@navvied/engine";
+import { killTree, usesProcessGroups } from "@navvied/engine";
 import { ArchiveError, extractArchive } from "./archive.ts";
 import { download } from "./download.ts";
 import { IMAGE_SETTINGS, MEDIA_SETUPS, type Piece, type Setup, type SystemKey } from "./media-pins.ts";
@@ -45,7 +45,7 @@ export function isFetched(dir: string, pieces: readonly Piece[]): boolean {
 export function tryProgram(argv: readonly string[], ms: number): Promise<boolean> {
   return new Promise((resolve) => {
     const [bin, ...args] = argv;
-    const child = spawn(bin!, args, { cwd: dirname(bin!), env: childEnv(process.env, { drop: secretNames() }), stdio: "ignore", windowsHide: true, detached: usesProcessGroups() });
+    const child = spawn(bin!, args, { cwd: dirname(bin!), stdio: "ignore", windowsHide: true, detached: usesProcessGroups() });
     const clock = setTimeout(() => { killTree(child); }, ms);
     child.on("error", () => { clearTimeout(clock); resolve(false); });
     child.on("close", (code) => { clearTimeout(clock); resolve(code === 0); });

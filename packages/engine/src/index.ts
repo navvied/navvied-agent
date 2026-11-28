@@ -28,7 +28,8 @@ export { killTree, launch, shellFor, usesProcessGroups, type Shell } from "./pla
 export { dockerBackend, localBackend, removeContainers, sshBackend, type Backend } from "./backend.ts";
 export { DEFAULT_SETTING as DEFAULT_SANDBOX, Sandbox, abilityOf as sandboxAbility, type Ability as SandboxAbility, type Setting as SandboxSetting } from "./sandbox/index.ts";
 export { runConfined as runSandboxHelper, useSandboxHelper } from "./sandbox/index.ts";
-export { childEnv, secretNames, type EnvPolicy } from "./child-env.ts";
+export { secretNames, type EnvPolicy } from "./child-env.ts";
+export { ChildEnv, bunSpawn, bunSpawnSync, execFile, spawn, spawnSync, type ChildProcess } from "./process-start.ts";
 export { Jobs, stopAllJobs, type JobStatus, type JobView } from "./jobs.ts";
 export { SMALL_WINDOW } from "./engine.ts";
 export { McpAuthError, McpClient, McpHttpClient, type McpServerConfig } from "./mcp.ts";

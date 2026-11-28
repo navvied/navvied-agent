@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildEnv, type ChildProcess } from "../process-start.ts";
 import { rmSync } from "node:fs";
 import { killTree, usesProcessGroups } from "../platform.ts";
 
@@ -45,11 +45,11 @@ export class CodeSession {
   #child: ChildProcess | undefined;
   #held = "";
   #starts = 0;
-  constructor(private readonly o: { python: string; dir: string; cwd: string; env: Record<string, string> }) {}
+  constructor(private readonly o: { python: string; dir: string; cwd: string; env: ChildEnv }) {}
   get dir(): string { return this.o.dir; }
 
   #start(): ChildProcess {
-    const child = spawn(this.o.python, ["-u", "-c", RUNNER], { cwd: this.o.cwd, env: { ...this.o.env, NAVVIED_CODE_DIR: this.o.dir, PYTHONDONTWRITEBYTECODE: "1", PYTHONUTF8: "1" }, detached: usesProcessGroups(), windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(this.o.python, ["-u", "-c", RUNNER], { cwd: this.o.cwd, env: this.o.env.with({ NAVVIED_CODE_DIR: this.o.dir, PYTHONDONTWRITEBYTECODE: "1", PYTHONUTF8: "1" }), detached: usesProcessGroups(), windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     child.stdin!.on("error", () => undefined);
     child.stderr!.on("data", () => undefined);
     child.once("close", () => { if (this.#child === child) this.#child = undefined; });

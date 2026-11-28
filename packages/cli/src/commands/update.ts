@@ -1,3 +1,4 @@
+import { bunSpawn } from "@navvied/engine";
 import { chmodSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { VERSION } from "../help.ts";
@@ -114,7 +115,7 @@ export function progressLine(received: number, total: number, seconds: number, w
 
 async function versionOf(exe: string): Promise<string | undefined> {
   try {
-    const p = Bun.spawn([exe, "--version"], { stdout: "pipe", stderr: "ignore" });
+    const p = bunSpawn([exe, "--version"], { stdout: "pipe", stderr: "ignore" });
     const text = await new Response(p.stdout).text();
     return /\d+\.\d+\.\d+/.exec(text)?.[0];
   } catch { return undefined; }

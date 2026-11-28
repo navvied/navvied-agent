@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "../process-start.ts";
 import { readFileSync, readlinkSync } from "node:fs";
 
 const attempt = <T>(f: () => T): T | undefined => { try { return f(); } catch { return undefined; } };

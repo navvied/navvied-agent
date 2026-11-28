@@ -5,7 +5,7 @@
  */
 import { StepClock } from "./step-clock.ts";
 import type { ChildProcess } from "node:child_process";
-import { spawn } from "node:child_process";
+import { ChildEnv, spawn } from "@navvied/engine";
 import { LineSplitter, RecentIds, type Command, type Effort, type EngineEvent, type ModelInfo, type PermMode, type PromptCommand } from "@navvied/protocol";
 import { killTree, launch, usesProcessGroups, type AgentEngine } from "@navvied/engine";
 import { CodexTranslator, friendlyFailure } from "./codex-translate.ts";
@@ -21,6 +21,7 @@ export interface CodexEngineOptions {
   /** Continue this thread instead of starting a new one. */
   sessionId?: string;
   env?: Record<string, string>;
+  signIn?: readonly string[];
   /** The models a person can switch to; `id` is what the program is given after -m. */
   models?: ModelInfo[];
   /** The reasoning effort levels the program accepts. */
@@ -155,7 +156,7 @@ export class CodexEngine implements AgentEngine {
     let child: ChildProcess;
     try {
       const [program, ...args] = launch(argv);
-      child = spawn(program!, args, { cwd: this.#o.cwd, env: { ...process.env, ...this.#o.env }, detached: usesProcessGroups(), windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+      child = spawn(program!, args, { cwd: this.#o.cwd, env: ChildEnv.scrubbed(process.env, this.#o.signIn ? { keep: this.#o.signIn } : {}).with(this.#o.env), detached: usesProcessGroups(), windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     } catch (e) {
       this.#emit({ ev: "error", msg: `Could not start "${this.#o.command}": ${e instanceof Error ? e.message : String(e)}` });
       this.#finish("error");

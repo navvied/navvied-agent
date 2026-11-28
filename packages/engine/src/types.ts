@@ -1,3 +1,4 @@
+import type { ChildEnv } from "./process-start.ts";
 import type { FileState } from "./tools/file-state.ts";
 import type { ShellState } from "./tools/shell-state.ts";
 import type { Backend } from "./backend.ts";
@@ -209,8 +210,7 @@ export interface ToolContext {
   allowPrivateNetwork: boolean;
   /** Commands that keep running after the turn that started them. */
   jobs: Jobs;
-  /** What a command starts with: this program's environment without the keys it uses itself (see child-env.ts). */
-  env?: NodeJS.ProcessEnv;
+  env?: ChildEnv;
   /** Where Bash runs its commands (on this computer when it is not set). */
   backend?: Backend;
   /** Confines the commands that run on this computer (see sandbox/). Not set: they run as they are. */

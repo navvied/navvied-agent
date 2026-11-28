@@ -1,3 +1,4 @@
+import { ChildEnv, bunSpawnSync } from "./process-start.ts";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -11,9 +12,9 @@ const EXACT = ["-c", "core.autocrlf=false", "-c", "core.safecrlf=false"];
 
 export const spawnGit: Git = (cwd, args, opts = {}) => {
   try {
-    const p = Bun.spawnSync(["git", ...EXACT, ...args], {
+    const p = bunSpawnSync(["git", ...EXACT, ...args], {
       cwd,
-      env: { ...gitEnv(), GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C", ...opts.env },
+      env: ChildEnv.scrubbed(gitEnv()).with({ GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C", ...opts.env }),
       stdin: opts.input !== undefined ? new TextEncoder().encode(opts.input) : undefined,
       stdout: "pipe",
       stderr: "pipe",

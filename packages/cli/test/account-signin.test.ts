@@ -46,7 +46,7 @@ function computer(o: { claude?: boolean; codex?: boolean; login?: boolean; cloud
   const io = fakeIO({ env: { HOME: home }, system: sys }).io;
   const a = accounts({
     io, inCloud: () => !!o.cloud, account: () => undefined, tell: (e) => told.push(e),
-    models: { save: (name, entry) => { saved.set(name, entry); }, remove: (name) => { removed.push(name); } },
+    models: { save: (name, entry) => { saved.set(name, entry); }, remove: (name) => { removed.push(name); }, entries: () => ({ models: {} }) },
     session: { paths: () => ({ account: join(home, "account.json"), models: join(home, "models.json") }), server: () => "https://example.test", label: () => "x", changed: () => { told.push({ ev: "notice", msg: "models changed" }); }, wait: async (ms) => { await new Promise((r) => setTimeout(r, Math.min(ms, 2))); } },
   });
   return { state, saved, removed, told, sys, send: (cmd: object) => a.command(cmd as never), of: (ev: string) => told.filter((e) => e.ev === ev) as Record<string, unknown>[] };

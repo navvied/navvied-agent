@@ -23,7 +23,7 @@ const answers = new McpAnswers(
   }),
   new Elicitor({ ask: async () => undefined, attended: () => false, secret: () => undefined }),
 );
-const config = { command: process.execPath, args: [join(dirname(import.meta.path), "mcp-asks.ts")], ...(task === "mcp-sample-code" ? { sampling: "allow" as const } : {}) };
+const config = { command: process.execPath, args: [join(dirname(import.meta.path), "mcp-asks.ts")], env: { BENCH_SECRET: process.env.BENCH_SECRET ?? "" }, ...(task === "mcp-sample-code" ? { sampling: "allow" as const } : {}) };
 const client = await McpClient.start("lab", config, undefined, answers.handlers("lab", config));
 const none = new AbortController().signal;
 try {

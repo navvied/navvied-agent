@@ -3,6 +3,7 @@
  * and a program on standard input all attach here: each gets what the engine says, and each can send it commands.
  * The session lives in this process, so a client that comes back with the last number it saw receives what it missed.
  */
+import { bunSpawn } from "@navvied/engine";
 import { EventEncoder, parseCommand, type Command, type EngineEvent, type HistoryItem, type PermMode, type ComputerPermissionId, type ComputerState, type ScheduleInfo, type SearchHit, type SessionInfo, type SessionKind } from "@navvied/protocol";
 import { hideInItems, hideSecrets, historyOf, MediaShelf, secretsIn, type ComputerHelper } from "@navvied/engine";
 import { pageCommand } from "../page-commands.ts";
@@ -389,7 +390,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
   const wired = hubOptions.computer ? undefined : computerWire({
     io, changed: () => { void tellComputer(); for (const l of lanes.values()) tellTools(l); },
     unavailable: () => (runsInCloud(main.options, io.env) ? "Computer use is not available in a cloud session." : undefined),
-    open: (url) => { try { Bun.spawn(["/usr/bin/open", url]); } catch { /* nothing opens it */ } },
+    open: (url) => { try { bunSpawn(["/usr/bin/open", url]); } catch { /* nothing opens it */ } },
     ...(hubOptions.computerPlatform ? { platform: hubOptions.computerPlatform } : {}),
   });
   // Scheduled tasks: kept in the computer's own file, listed to every window, and (where asked) run while this hub is up.
@@ -855,7 +856,7 @@ export function createHub(options: Options, io: IO, hubOptions: HubOptions = {})
     inCloud: () => runsInCloud(main.options, io.env),
     account: signedIn,
     tell: (e) => say(main, e),
-    models: { save: (name, entry) => { saveModel(configPath(io.env, main.options.config), name, entry); }, remove: (name) => { removeModel(configPath(io.env, main.options.config), name); } },
+    models: { save: (name, entry) => { saveModel(configPath(io.env, main.options.config), name, entry); }, remove: (name) => { removeModel(configPath(io.env, main.options.config), name); }, entries: () => { const path = configPath(io.env, main.options.config), file = loadConfig(path, io.env); const value = file.ok ? file.value : null; return { models: value?.models ?? {}, inUse: main.options.model ?? value?.default }; } },
     session: {
       paths: () => ({ account: accountPath(io.env, options.config), models: hostedModelsPath(io.env), ...(hubOptions.onSignedIn ? { onSignedIn: hubOptions.onSignedIn } : {}), ...(hubOptions.onSignOut ? { onSignOut: hubOptions.onSignOut } : {}) }),
       server: () => io.env.NAVVIED_SERVER ?? DEFAULT_SERVER,

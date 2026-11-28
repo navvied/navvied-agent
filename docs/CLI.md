@@ -53,6 +53,8 @@ A program entry can list the models it can be told to use. `id` is what the prog
 "assistant": { "command": "agent-cli", "models": [{ "id": "default", "name": "Let it choose" }, { "id": "large", "name": "Large" }], "efforts": ["low", "high"] }
 ```
 
+**What a program is given.** A program navvied starts gets your environment without the keys in it: no variable whose name says it is a secret (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `CREDENTIAL`), and no other variable that holds the same value. This is true of commands, hooks, the browser, the local model server and the programs you are signed in to alike. The two programs navvied knows, found by the name of the program file, also get the key and token variables of their own sign-in, under the names their makers give them; any other program gets none of them. Every signed-in program gets whatever its entry sets under `"env"`; when navvied asks one of the two for its sign-in status or signs it in, it uses the `"env"` of one entry, the one in use or else the first for that program, never a mix of several; anything else it needs, a cloud account's keys for example, goes there. Commands keep what `terminal.env` names.
+
 A conversation held through a program (one you are signed in to) has the same five modes as any other, and each means the same: Ask asks before changes and commands, Edits edits files and asks before commands, Plan changes nothing, Auto asks only when something cannot be undone, and Bypass never asks. navvied decides, not the program: it checks every tool before it runs, with your permission rules and the same risk check as its own engine, and where a mode asks, the question comes to you as the usual card (Allow, Allow and do not ask again, Edit, Deny). Plan and Bypass are the program's own read-only mode and its mode with no questions. If navvied cannot be asked, nothing runs: before it starts a program it runs its own guard once, the way the program will, and if that does not start and answer on this computer it says why and runs nothing. If the guard stops working after that, the program's own default mode refuses what needs permission in Ask, Edits and Auto (nobody can be asked), Plan stays read only, and only Bypass, which turns the program's own questions off because you asked for that, would run a tool unchecked.
 
 ## Connected programs (MCP)
@@ -62,6 +64,8 @@ Programs that give the agent more tools are listed under `"mcp"` in the configur
 ```json
 "mcp": { "notes": { "command": "notes-server", "args": ["--folder", "~/notes"], "env": { "NOTES_TOKEN": "..." } } }
 ```
+
+A connected program starts from a short list of your variables (`PATH`, `HOME`, `SHELL`, `TERM`, the user, language, time zone and temporary-folder variables, the `XDG_` folders, proxy and certificate settings, and on Windows the system folders), not from your whole environment. A proxy address is handed over without its user name and password; where a program needs those, name the whole address in its `"env"`. Whatever else it needs goes in its `"env"`, as above.
 
 Programs run with your own permissions. Add only programs you trust.
 

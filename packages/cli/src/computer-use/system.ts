@@ -1,9 +1,9 @@
+import { ChildEnv, bunSpawn } from "@navvied/engine";
 import type { Child, Probe, Spawn } from "./host.ts";
 import type { Run } from "./install.ts";
 
-/** The real programs behind the host's seams: `Bun.spawn` for children and for the short commands the host runs. */
 export const spawnChild: Spawn = (cmd, args, env) => {
-  const p = Bun.spawn([cmd, ...args], { env, stdin: "pipe", stdout: "pipe", stderr: "ignore" });
+  const p = bunSpawn([cmd, ...args], { env: ChildEnv.scrubbed(env), stdin: "pipe", stdout: "pipe", stderr: "ignore" });
   const lines: ((l: string) => void)[] = [];
   void (async () => {
     let rest = "";
@@ -24,12 +24,12 @@ export const spawnChild: Spawn = (cmd, args, env) => {
 
 export const run: Run = async (cmd, args) => {
   try {
-    const p = Bun.spawn([cmd, ...args], { stdout: "pipe", stderr: "pipe" });
+    const p = bunSpawn([cmd, ...args], { stdout: "pipe", stderr: "pipe" });
     const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
     return { code, out, err };
   } catch (e) { return { code: 127, out: "", err: e instanceof Error ? e.message : String(e) }; }
 };
 
 export const probeStatus: Probe = async (cmd, args, env) => {
-  try { return (await Bun.spawn([cmd, ...args], { env, stdout: "ignore", stderr: "ignore" }).exited) === 0; } catch { return false; }
+  try { return (await bunSpawn([cmd, ...args], { env: ChildEnv.scrubbed(env), stdout: "ignore", stderr: "ignore" }).exited) === 0; } catch { return false; }
 };

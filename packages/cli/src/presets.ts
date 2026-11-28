@@ -31,6 +31,23 @@ export function programEntry(id: string, path: string, readable: boolean, chosen
     : { name: "claude", entry: { command: path, window: 200_000, ...(model.id === "default" ? {} : { model: model.id }), models: CLAUDE_MODELS, efforts: ["low", "medium", "high", "xhigh", "max"] } };
 }
 
+export type ProgramMaker = "claude" | "codex";
+
+export const PROGRAM_SIGN_IN: Readonly<Record<ProgramMaker, readonly string[]>> = {
+  claude: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_IDENTITY_TOKEN", "ANTHROPIC_IDENTITY_TOKEN_FILE"],
+  codex: ["CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "OPENAI_API_KEY", "OPENAI_IDENTITY_TOKEN_FILE", "OPENAI_IDENTITY_TOKEN_SOURCE"],
+};
+
+export const programMaker = (command: string): ProgramMaker | undefined => {
+  const name = command.split(/[\\/]/).at(-1)!.replace(/\.(exe|cmd|bat|ps1)$/i, "").toLowerCase();
+  return name === "claude" || name === "codex" ? name : undefined;
+};
+
+export const signInVariables = (command: string): readonly string[] => {
+  const maker = programMaker(command);
+  return maker ? PROGRAM_SIGN_IN[maker] : [];
+};
+
 /** The programs a person can sign in to and use with their plan, for a page that shows what is installed. */
 export const SIGN_IN_PROGRAMS: readonly { id: string; label: string; command: string }[] = [
   { id: "claude", label: "Claude, with your subscription", command: "claude" },

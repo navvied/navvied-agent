@@ -13,7 +13,12 @@ function follow(k: Kit, id: string) {
     last = e;
     for (const w of waiting.splice(0)) w(e);
   });
-  return { last: (): Setup | undefined => last, next: (): Promise<Setup> => new Promise((resolve) => { waiting.push(resolve); }), stop };
+  const ask = (cmd: object): Promise<Setup> => {
+    const answer = new Promise<Setup>((resolve) => { waiting.push(resolve); });
+    k.link.send(cmd);
+    return answer;
+  };
+  return { last: (): Setup | undefined => last, ask, stop };
 }
 
 function stepRows(steps: SetupStep[], percent: number | undefined, dim: (text: string) => string): { label: string }[] {
@@ -23,8 +28,7 @@ function stepRows(steps: SetupStep[], percent: number | undefined, dim: (text: s
 export async function toolSetup(k: Kit, e: Pick<ToolEntry, "id" | "title" | "about">): Promise<void> {
   const run = follow(k, e.id);
   try {
-    k.link.send({ cmd: "tool.setup", id: e.id });
-    let state = await run.next();
+    let state = await run.ask({ cmd: "tool.setup", id: e.id });
     for (;;) {
       if (state.state === "unavailable") { k.note.push(state.error ?? "This cannot be set up here."); return; }
       if (state.state === "done") { k.note.push(`${e.title} is ready.`); return; }
@@ -37,9 +41,7 @@ export async function toolSetup(k: Kit, e: Pick<ToolEntry, "id" | "title" | "abo
           : [e.about, "", ...steps.map((s, i) => `  ${i + 1}  ${s.name}`)];
         const picked = await k.choose(failed ? e.title : "Needs setup", e.title, failed ? [{ label: "Try again" }, { label: "Not now" }] : [{ label: "Start setup" }, { label: "Not now" }], { body });
         if (picked !== 0) { if (!failed) k.link.send({ cmd: "tool.setup.cancel", id: e.id }); return; }
-        const answered = run.next();
-        k.link.send(failed ? { cmd: "tool.setup", id: e.id } : { cmd: "tool.setup.approve", id: e.id });
-        state = await answered;
+        state = await run.ask(failed ? { cmd: "tool.setup", id: e.id } : { cmd: "tool.setup.approve", id: e.id });
         continue;
       }
       const ended = (): boolean => ["done", "failed", "unavailable", "idle"].includes(run.last()!.state);

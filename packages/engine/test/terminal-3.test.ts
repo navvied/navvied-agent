@@ -1,8 +1,9 @@
+import { ChildEnv } from "../src/process-start.ts";
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Jobs, childEnv, defaultTools, secretNames, stopAllJobs } from "../src/index.ts";
+import { Jobs, defaultTools, secretNames, stopAllJobs } from "../src/index.ts";
 import { answers } from "../src/pty.ts";
 import { registerSecrets } from "../src/redact.ts";
 import type { Tool, ToolContext } from "../src/types.ts";
@@ -80,7 +81,7 @@ describe("what a command inherits", () => {
     registerSecrets(["configured-key-0123456789"]);
     process.env.INNOCENT_NAME = "configured-key-0123456789";
     try {
-      const env = childEnv(process.env, { drop: secretNames(), keep: ["NAVVIED_TEST_KEPT_TOKEN"] });
+      const env = ChildEnv.scrubbed(process.env, { keep: ["NAVVIED_TEST_KEPT_TOKEN"] });
       const jobs = new Jobs(() => undefined, Date.now, { env: () => env });
       const c = ctx(jobs, { env });
       const probe = (name: string) => `if [ -z "\${${name}+x}" ]; then echo ${name}=unset; else echo ${name}=set; fi`;

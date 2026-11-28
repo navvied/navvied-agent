@@ -1,3 +1,4 @@
+import { ChildEnv } from "../src/process-start.ts";
 import { afterAll, describe, expect, test } from "bun:test";
 import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
@@ -93,8 +94,9 @@ describe.skipIf(!posix)("the folder and the exports stay for the next command", 
   });
 
   test("an export stays, an unset goes, and only what a command changed is written down: never the rest of the environment", async () => {
-    const { ctx, shell, done } = rig();
+    const { ctx: plain, shell, done } = rig();
     process.env.NAVVIED_TEST_SECRET = "do-not-write-me-down";
+    const ctx = { ...plain, env: ChildEnv.forNavvied() };
     try {
       expect(await bash.run({ command: "export GREETING=hello; export WHO='big world'" }, ctx)).toBe("(no output)");
       expect(await bash.run({ command: 'echo "$GREETING $WHO $NAVVIED_TEST_SECRET"' }, ctx)).toBe("hello big world [hidden]");

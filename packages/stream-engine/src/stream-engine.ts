@@ -3,6 +3,7 @@
  * agent the user has already signed in to with their subscription. The login belongs to that program; this adapter never
  * sees or stores a token. It speaks the navvied protocol to the front-end and the agent's JSON-line stream to the process.
  */
+import { ChildEnv, bunSpawn } from "@navvied/engine";
 import { StepClock } from "./step-clock.ts";
 import { LineSplitter, RecentIds, type Command, type Effort, type EngineEvent, type ModelInfo, type PermMode, type PromptCommand } from "@navvied/protocol";
 import { ALLOW, ALLOW_ALWAYS, ApprovalBroker, DENY, EDIT, approvalChange, approvalOptions, Outside, fromOutsideName, hardBlock, judge, launch, secretsNow, withOrigin, type AgentEngine, type Rules } from "@navvied/engine";
@@ -33,12 +34,13 @@ export interface StreamEngineOptions {
   /** The person's permission rules, which the hook's questions are judged by (with the mode). */
   rules?: Rules;
   env?: Record<string, string>;
+  signIn?: readonly string[];
   /** How long to wait for the agent to stop after a cancel before killing it (ms, default 5000). */
   cancelGraceMs?: number;
   heartbeatMs?: number;
 }
 
-type Child = ReturnType<typeof Bun.spawn>;
+type Child = Bun.Subprocess<"pipe", "pipe", "pipe">;
 
 /** The call the engine makes of its own guard before it starts a program, to see that the guard starts and answers on this computer. */
 export const GUARD_PROBE = "navvied-guard-probe";
@@ -219,6 +221,8 @@ export class StreamEngine implements AgentEngine {
     this.#killTimer = setTimeout(() => { try { this.#child?.kill("SIGKILL"); } catch { /* gone */ } }, this.#o.cancelGraceMs ?? 5000);
   }
 
+  #handed(): ChildEnv { return ChildEnv.scrubbed(process.env, this.#o.signIn ? { keep: this.#o.signIn } : {}).with(this.#o.env); }
+
   #start(): boolean {
     const argv = buildArgv({
       command: this.#o.command, ...(this.#o.args ? { args: this.#o.args } : {}), ...(this.#model ? { model: this.#model } : {}),
@@ -228,7 +232,7 @@ export class StreamEngine implements AgentEngine {
     });
     let child: Child;
     try {
-      child = Bun.spawn(launch(argv), { cwd: this.#o.cwd, env: { ...process.env, ...this.#o.env, ...(this.#o.guard ? this.#ask.listen() : {}) }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+      child = bunSpawn(launch(argv), { cwd: this.#o.cwd, env: this.#handed().with(this.#o.guard ? this.#ask.listen() : {}), stdin: "pipe", stdout: "pipe", stderr: "pipe" });
     } catch (e) {
       this.#emit({ ev: "error", msg: `Could not start "${this.#o.command}": ${e instanceof Error ? e.message : String(e)}` });
       this.#emit({ ev: "done", stop: "error" });
@@ -252,9 +256,9 @@ export class StreamEngine implements AgentEngine {
    */
   async #checkGuard(): Promise<string | undefined> {
     const shell = process.platform === "win32" ? (Bun.which("bash") ? ["bash", "-c"] : ["cmd", "/d", "/s", "/c"]) : ["sh", "-c"];
-    let child: ReturnType<typeof Bun.spawn>;
+    let child: Bun.Subprocess<Uint8Array, "pipe", "pipe">;
     try {
-      child = Bun.spawn([...shell, this.#o.guard!], { cwd: this.#o.cwd, env: { ...process.env, ...this.#o.env, ...this.#ask.listen() }, stdin: new TextEncoder().encode(JSON.stringify({ tool_name: GUARD_PROBE, tool_input: {}, cwd: this.#o.cwd })), stdout: "pipe", stderr: "pipe" });
+      child = bunSpawn([...shell, this.#o.guard!], { cwd: this.#o.cwd, env: this.#handed().with(this.#ask.listen()), stdin: new TextEncoder().encode(JSON.stringify({ tool_name: GUARD_PROBE, tool_input: {}, cwd: this.#o.cwd })), stdout: "pipe", stderr: "pipe" });
     } catch (e) { return e instanceof Error ? e.message : String(e); }
     const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } }, 20_000);
     const [out, err, code] = await Promise.all([new Response(child.stdout as ReadableStream).text(), new Response(child.stderr as ReadableStream).text(), child.exited]);

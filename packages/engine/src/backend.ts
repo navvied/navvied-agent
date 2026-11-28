@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./process-start.ts";
 import { createHash } from "node:crypto";
 import { relative, sep } from "node:path";
 import { shellFor } from "./platform.ts";

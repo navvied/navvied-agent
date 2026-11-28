@@ -14,7 +14,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { ChildEnv, spawn, spawnSync } from "./process-start.ts";
 import { gunzipSync } from "node:zlib";
 import { forbidden, scanCommand } from "./command-scan.ts";
 import { isZip, unzipTo } from "./zip-unpack.ts";
@@ -361,7 +361,7 @@ function clone(address: string, into: string): Promise<string | undefined> {
   const url = at > 0 ? address.slice(0, at) : address, ref = at > 0 ? address.slice(at + 1) : "";
   if (url.startsWith("-") || ref.startsWith("-")) return Promise.resolve("that is not an address");
   return new Promise((done) => {
-    const child = spawn("git", ["clone", "--quiet", "--depth", "1", "--no-tags", ...(ref ? ["--branch", ref] : []), "--", url, into], { env: { ...gitEnv(), GIT_TERMINAL_PROMPT: "0", GIT_ALLOW_PROTOCOL: "https:ssh:git:file" }, stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+    const child = spawn("git", ["clone", "--quiet", "--depth", "1", "--no-tags", ...(ref ? ["--branch", ref] : []), "--", url, into], { env: ChildEnv.scrubbed(gitEnv()).with({ GIT_TERMINAL_PROMPT: "0", GIT_ALLOW_PROTOCOL: "https:ssh:git:file" }), stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
     let err = "";
     child.stderr?.on("data", (d: Buffer) => { err = (err + d).slice(-500); });
     const timer = setTimeout(() => child.kill(), 120_000);

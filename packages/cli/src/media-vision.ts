@@ -1,6 +1,6 @@
-import { execFile } from "node:child_process";
+import { execFile } from "@navvied/engine";
 import { existsSync } from "node:fs";
-import { ChatCompletionsProvider, ProviderError, childEnv, secretNames, type ModelReply, type ModelRequest, type Provider, type StreamHandlers } from "@navvied/engine";
+import { ChatCompletionsProvider, ProviderError, type ModelReply, type ModelRequest, type Provider, type StreamHandlers } from "@navvied/engine";
 import { reapOrphan, startServer, type RunningServer } from "./llama-server.ts";
 import type { LocalVisionConfig } from "./media-config.ts";
 
@@ -37,7 +37,7 @@ export class LocalVision implements Provider {
   async #chat(): Promise<ChatCompletionsProvider> {
     this.#up ??= (async () => {
       await reapOrphan(this.#o.pidFile, asked).catch(() => undefined);
-      const server = await (this.#o.start ?? startServer)({ binary: this.#c.server, model: this.#c.model, mmproj: this.#c.mmproj, window: WINDOW, layers: 0, alias: ALIAS, pidFile: this.#o.pidFile, env: childEnv(process.env, { drop: secretNames() }) });
+      const server = await (this.#o.start ?? startServer)({ binary: this.#c.server, model: this.#c.model, mmproj: this.#c.mmproj, window: WINDOW, layers: 0, alias: ALIAS, pidFile: this.#o.pidFile });
       if ("error" in server) return server;
       void server.exited.then(() => { this.#up = undefined; });
       return { server, chat: new ChatCompletionsProvider({ baseUrl: `${server.url}/v1`, model: ALIAS, reasoning: "none" }) };

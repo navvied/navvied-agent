@@ -120,7 +120,7 @@ describe("the sandbox on Windows, with a faked computer", () => {
     expect(launch.line).toContain("no sandbox");
   });
 
-  const ran = (status: number | null, stdout = "", stderr = "", started: string[][] = []): typeof spawnSync => ((cmd: string, args: string[]) => { started.push([cmd, ...args]); return { status, stdout, stderr }; }) as unknown as typeof spawnSync;
+  const ran = (status: number | null, stdout = "", stderr = "", started: string[][] = []): Parameters<typeof windowsAbility>[1] => ((cmd: string, args: string[]) => { started.push([cmd, ...args]); return { status, stdout, stderr }; }) as unknown as Parameters<typeof windowsAbility>[1];
   const gitBash: Shell = { name: "bash", argv: (c) => ["C:\\Program Files\\Git\\bin\\bash.exe", "-c", c] };
   const SEEN = "navvied-sandbox-probe\r\n";
 
@@ -181,7 +181,7 @@ describe("the helper's calls into the system (runs everywhere: the system is a s
     let said = "";
     const code = await runConfined(["--", "x"], (t) => { said += t; }, async () => { throw new Error("the system library did not load\nat somewhere"); });
     expect([code, said]).toEqual([1, "sandbox: the system library did not load\n"]);
-    const ran = (() => ({ status: code, stdout: "", stderr: said })) as unknown as typeof spawnSync;
+    const ran = (() => ({ status: code, stdout: "", stderr: said })) as unknown as Parameters<typeof windowsAbility>[1] & {};
     expect(windowsAbility(helper, ran).why).toBe("the system library did not load");
   });
 });

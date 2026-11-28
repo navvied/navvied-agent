@@ -1,5 +1,4 @@
-import { spawn } from "node:child_process";
-import { childEnv, secretNames } from "../child-env.ts";
+import { spawn } from "../process-start.ts";
 import { killTree, usesProcessGroups } from "../platform.ts";
 import { MediaError } from "./types.ts";
 
@@ -14,7 +13,7 @@ const name = (bin: string): string => bin.split(/[\\/]/).pop()!.replace(/\.exe$/
 export function run(argv: readonly string[], o: { cwd: string; ms: number; signal: AbortSignal; stdin?: string }): Promise<Ran> {
   return new Promise((resolve, reject) => {
     const [bin, ...args] = argv;
-    const child = spawn(bin!, args, { cwd: o.cwd, env: childEnv(process.env, { drop: secretNames() }), stdio: ["pipe", "pipe", "pipe"], windowsHide: true, detached: usesProcessGroups() });
+    const child = spawn(bin!, args, { cwd: o.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, detached: usesProcessGroups() });
     const out: Buffer[] = [], err: Buffer[] = [];
     let bytes = 0, why = "";
     const stop = (reason: string): void => { why ||= reason; killTree(child); };

@@ -65,10 +65,10 @@ export function mediaEnv(media: Record<string, unknown> | undefined): Record<str
  * server itself, runs each hook, from this file, and stops the servers when the run ends. `NAVVIED_CONFIG` points at it, so the person's own configuration is
  * never read or written. For other agents to ask, their address is the port the setup left in the workspace `where`, and their path. Nothing is written for a task with none of them.
  */
-export function agentConfig(task: Task, where?: string, real?: Record<string, unknown>): { env: Record<string, string>; remove(): void } {
+export function agentConfig(task: Task, where?: string, real?: Record<string, unknown>, handed: Record<string, string> = {}): { env: Record<string, string>; remove(): void } {
   if (!task.mcp && !task.hooks && !task.media?.length && !task.a2a && !task.embeddings) return { env: {}, remove: () => undefined };
   const dir = mkdtempSync(join(tmpdir(), "navvied-eval-config-"));
-  const mcp = task.mcp ? Object.fromEntries(Object.entries(task.mcp).map(([name, s]) => [name, { command: process.execPath, args: [join(FIXTURES, s.fixture)], ...(s.sampling ? { sampling: s.sampling } : {}), ...(s.elicitation ? { elicitation: s.elicitation } : {}) }])) : undefined;
+  const mcp = task.mcp ? Object.fromEntries(Object.entries(task.mcp).map(([name, s]) => [name, { command: process.execPath, args: [join(FIXTURES, s.fixture)], env: handed, ...(s.sampling ? { sampling: s.sampling } : {}), ...(s.elicitation ? { elicitation: s.elicitation } : {}) }])) : undefined;
   const hooks = Object.fromEntries(Object.entries(task.hooks ?? {}).map(([event, list]) => [event, list.map((h) => ({ ...(h.matcher ? { matcher: h.matcher } : {}), command: `"${process.execPath.replaceAll("\\", "/")}" "${join(FIXTURES, h.fixture).replaceAll("\\", "/")}"` }))]));
   const program = (name: string): string => join(FIXTURES, "media", name);
   const engines = { stt: { bin: program("whisper-cli"), model: program("model.bin") }, tts: { bin: program("piper"), model: program("model.bin") }, image: { bin: program("sd"), model: program("model.bin") } };

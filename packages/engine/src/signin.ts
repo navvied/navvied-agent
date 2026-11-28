@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./process-start.ts";
 import { chmodSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { SIGN_IN_PROVIDERS } from "./signin-program.ts";
 

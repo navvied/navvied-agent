@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildEnv, type ChildProcess } from "@navvied/engine";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -16,7 +16,7 @@ export interface ServerInput {
   /** How long loading may take before it is given up, in milliseconds (a large model takes minutes). */
   loadMs?: number;
   platform?: NodeJS.Platform;
-  env?: Record<string, string | undefined>;
+  env?: ChildEnv;
   /** Where a note of the process is kept so that one left by a crash can be found. */
   pidFile: string;
 }
@@ -44,7 +44,7 @@ const alive = (pid: number): boolean => { try { process.kill(pid, 0); return tru
 export async function startServer(i: ServerInput): Promise<RunningServer | { error: string }> {
   // Port 0: the server binds a port itself and says which one on its listening line, so none is asked for first and handed over after something else could have taken it.
   const port = 0;
-  const child: ChildProcess = spawn(i.binary, argsOf(i, port), { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, env: { ...(i.env ?? process.env) } as NodeJS.ProcessEnv });
+  const child: ChildProcess = spawn(i.binary, argsOf(i, port), { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, ...(i.env ? { env: i.env } : {}) });
   const failedToStart = new Promise<void>((resolve) => { child.once("error", () => resolve()); });
   if (!child.pid) { await failedToStart; return { error: "The program could not be started." }; }
   const tail: string[] = [];

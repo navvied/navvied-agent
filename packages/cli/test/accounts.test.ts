@@ -1,3 +1,4 @@
+import { entryEnvOf } from "../src/programs.ts";
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -36,14 +37,14 @@ const fakeAccount = { server: "https://example.test", token: "t-secret", email: 
 describe("what the accounts say", () => {
   test("nothing installed: the navvied account as it is, the two programs as not installed, and no program is run", async () => {
     const sys = system();
-    const items = await readAccounts(fakeIO({ system: sys }).io, undefined);
+    const items = await readAccounts(fakeIO({ system: sys }).io, undefined, { models: {} });
     expect(items).toEqual([{ id: "navvied", signedIn: false }, { id: "claude-code", installed: false }, { id: "codex", installed: false }]);
     expect(sys.ran).toEqual([]);
   });
 
   test("installed and signed in: what each program itself says, and only its version and its status are asked", async () => {
     const sys = system({ claude: true, codex: true, claudeSigned: true, codexSigned: true });
-    const items = await readAccounts(fakeIO({ system: sys }).io, fakeAccount);
+    const items = await readAccounts(fakeIO({ system: sys }).io, fakeAccount, { models: {} });
     expect(items).toEqual([
       { id: "navvied", signedIn: true, email: "owner@example.com" },
       { id: "claude-code", installed: true, version: "2.1.320", signedIn: true, email: "me@example.com", plan: "max" },
@@ -54,14 +55,14 @@ describe("what the accounts say", () => {
   });
 
   test("installed and not signed in: no email and no plan, whatever the program printed", async () => {
-    const items = await readAccounts(fakeIO({ system: system({ claude: true, codex: true }) }).io, undefined);
+    const items = await readAccounts(fakeIO({ system: system({ claude: true, codex: true }) }).io, undefined, { models: {} });
     expect(items[1]).toEqual({ id: "claude-code", installed: true, version: "2.1.320", signedIn: false });
     expect(items[2]).toEqual({ id: "codex", installed: true, version: "0.9.1", signedIn: false });
   });
 
   test("a program that does not answer is installed, with no version, and not signed in", async () => {
     const sys = fakeSystem({ installed: { claude: CLAUDE } });
-    expect(await readAccounts(fakeIO({ system: sys }).io, undefined)).toEqual([{ id: "navvied", signedIn: false }, { id: "claude-code", installed: true, signedIn: false }, { id: "codex", installed: false }]);
+    expect(await readAccounts(fakeIO({ system: sys }).io, undefined, { models: {} })).toEqual([{ id: "navvied", signedIn: false }, { id: "claude-code", installed: true, signedIn: false }, { id: "codex", installed: false }]);
   });
 });
 
@@ -77,7 +78,7 @@ describe("what a page may send", () => {
 function page(sys: ReturnType<typeof fakeSystem>, o: { cloud?: boolean } = {}) {
   const told: EngineEvent[] = [];
   const io = fakeIO({ system: sys }).io;
-  const a = accounts({ io, inCloud: () => !!o.cloud, account: () => undefined, tell: (e) => told.push(e), models: { save: () => undefined, remove: () => undefined }, session: { paths: () => ({ account: "/nowhere/account.json", models: "/nowhere/models.json" }), server: () => "https://example.test", label: () => "My computer", changed: () => undefined } });
+  const a = accounts({ io, inCloud: () => !!o.cloud, account: () => undefined, tell: (e) => told.push(e), models: { save: () => undefined, remove: () => undefined, entries: () => ({ models: {} }) }, session: { paths: () => ({ account: "/nowhere/account.json", models: "/nowhere/models.json" }), server: () => "https://example.test", label: () => "My computer", changed: () => undefined } });
   return { told, send: (cmd: object) => a.command(cmd as never), of: (ev: string) => told.filter((e) => e.ev === ev) as Record<string, unknown>[] };
 }
 
@@ -169,5 +170,29 @@ describe("through the hub", () => {
     hub.command(JSON.stringify({ cmd: "accounts" }), () => undefined);
     await until(() => got.some((e) => e.ev === "accounts"));
     expect(got.find((e) => e.ev === "accounts")!.items).toEqual([{ id: "navvied", signedIn: true, email: "owner@example.com" }, { id: "claude-code", installed: false }, { id: "codex", installed: true, version: "0.9.1", signedIn: true }]);
+  });
+});
+
+describe("asking a program about its sign-in", () => {
+  test("it sees its own sign-in variables and what its entry sets under env, from the entries of that program only", async () => {
+    const calls: { argv: string[]; keep?: readonly string[]; env?: Readonly<Record<string, string>> }[] = [];
+    const sys = { ...system({ claude: true, codex: true }), run: async (argv: string[], options?: { keep?: readonly string[]; env?: Readonly<Record<string, string>> }) => { calls.push({ argv, ...options }); return { code: 0, output: "{}" }; } };
+    await readAccounts(fakeIO({ system: sys }).io, undefined, { models: { mine: { command: "/bin/claude", env: { CLOUD_ACCOUNT_KEY: "from-the-entry" } }, other: { command: "agent-cli", env: { OTHER_KEY: "not-for-them" } } } });
+    const asked = (program: string) => calls.find((c) => c.argv[0]!.includes(program) && c.argv.includes("status"))!;
+    expect(asked("claude").env).toEqual({ CLOUD_ACCOUNT_KEY: "from-the-entry" });
+    expect(asked("claude").keep).toContain("ANTHROPIC_API_KEY");
+    expect(asked("codex").env).toEqual({});
+    expect(asked("codex").keep).not.toContain("ANTHROPIC_API_KEY");
+  });
+});
+
+describe("two entries of one program", () => {
+  const models = { work: { command: "/bin/claude", env: { CLAUDE_CONFIG_DIR: "/work", ANTHROPIC_API_KEY: "work-key" } }, home: { command: "/bin/claude", env: { CLAUDE_CONFIG_DIR: "/home" } }, api: { baseUrl: "http://127.0.0.1:1/v1", model: "x" } };
+
+  test("are never mixed: the one in use is asked, whole; with none of them in use, the first", () => {
+    expect(entryEnvOf({ models, inUse: "home" }, "claude-code")).toEqual({ CLAUDE_CONFIG_DIR: "/home" });
+    expect(entryEnvOf({ models, inUse: "work" }, "claude-code")).toEqual({ CLAUDE_CONFIG_DIR: "/work", ANTHROPIC_API_KEY: "work-key" });
+    for (const inUse of [undefined, "api", "gone"]) expect(entryEnvOf({ models, inUse }, "claude-code"), String(inUse)).toEqual({ CLAUDE_CONFIG_DIR: "/work", ANTHROPIC_API_KEY: "work-key" });
+    expect(entryEnvOf({ models, inUse: "home" }, "codex")).toEqual({});
   });
 });

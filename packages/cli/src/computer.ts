@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "@navvied/engine";
 import { hostname } from "node:os";
 import { newSecret, toBase64Url } from "@navvied/protocol";
 import type { Account } from "./account.ts";

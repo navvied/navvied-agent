@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "../process-start.ts";
 import { randomUUID } from "node:crypto";
 
 export const ENDS_WITH_MARK = "NAVVIED_ENDS_WITH";

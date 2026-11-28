@@ -6,9 +6,9 @@
  *  - by JSON on standard output (exit 0): `decision` (`block`, `ask`, `allow`), `reason`, `updatedInput`, `additionalContext`.
  * A hook can only lower what the mode allows (block, or ask the person). `allow` changes nothing: the mode and the rules still decide.
  */
-import { spawn } from "node:child_process";
+import { ChildEnv, spawn } from "./process-start.ts";
 import type { HookDecision } from "@navvied/protocol";
-import { childEnv, secretNames, type EnvPolicy } from "./child-env.ts";
+import { secretNames, type EnvPolicy } from "./child-env.ts";
 import { killTree, shellFor, usesProcessGroups } from "./platform.ts";
 
 export const HOOK_EVENTS = ["PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SessionStart", "SessionEnd", "PreCompact", "Notification"] as const;
@@ -69,12 +69,12 @@ const ANSWER_MAX = 100_000;
 const CONTEXT_MAX = 8_000;
 const TIMEOUT_MAX_S = 600;
 
-function runCommand(hook: HookCommand, input: unknown, cwd: string, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<Outcome> {
+function runCommand(hook: HookCommand, input: unknown, cwd: string, env: ChildEnv, signal: AbortSignal): Promise<Outcome> {
   const timeoutMs = Math.min(hook.timeout ?? 30, TIMEOUT_MAX_S) * 1000;
   return new Promise((done) => {
     const [cmd, ...args] = shellFor().argv(hook.command);
     let child;
-    try { child = spawn(cmd!, args, { cwd, detached: usesProcessGroups(), windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: { ...env, NAVVIED_HOOK: "1", NAVVIED_PROJECT_DIR: cwd, ...(hook.root ? { NAVVIED_PLUGIN_ROOT: hook.root } : {}) } }); }
+    try { child = spawn(cmd!, args, { cwd, detached: usesProcessGroups(), windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: env.with({ NAVVIED_HOOK: "1", NAVVIED_PROJECT_DIR: cwd, ...(hook.root ? { NAVVIED_PLUGIN_ROOT: hook.root } : {}) }) }); }
     catch (e) { return done({ code: null, stderr: e instanceof Error ? e.message : String(e), stdout: "", timedOut: false }); }
     let stderr = "", stdout = "", timedOut = false, settled = false;
     const finish = (code: number | null): void => {
@@ -134,7 +134,7 @@ export function commandHooks(config: HookConfig, cwd: string, session: () => str
     const said: HookSaid[] = [];
     const context: string[] = [];
     let ask: string | undefined, updatedInput: Record<string, unknown> | undefined;
-    const base = childEnv(process.env, env);
+    const base = ChildEnv.scrubbed(process.env, env);
     const toolInput = (): Record<string, unknown> | undefined => (isObject(rest.input) ? { ...rest.input, ...updatedInput } : undefined);
     for (const hook of config[event] ?? []) {
       if (subject !== undefined && !matches(hook, subject)) continue;

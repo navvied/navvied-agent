@@ -43,7 +43,7 @@ function page(s: ReturnType<typeof server>, o: { cloud?: boolean; signedIn?: boo
   const told: EngineEvent[] = [];
   const io = fakeIO({ fetch: s.fetchFn }).io;
   const a = accounts({
-    io, inCloud: () => !!o.cloud, account: () => readAccount(paths.account), tell: (e) => told.push(e), models: { save: () => undefined, remove: () => undefined },
+    io, inCloud: () => !!o.cloud, account: () => readAccount(paths.account), tell: (e) => told.push(e), models: { save: () => undefined, remove: () => undefined, entries: () => ({ models: {} }) },
     session: { paths: () => paths, server: () => "https://example.test", label: () => "My computer", changed: () => { events.push("models"); }, wait: async () => undefined },
   });
   if (o.signedIn) writeSigned(paths.account);
@@ -90,7 +90,7 @@ describe("signing in to the navvied account by a link", () => {
   test("stopping the wait says stopped and keeps nothing; asking again replaces the one that waits", async () => {
     const s = server({ answers: ["waiting"] });
     const p = page(s);
-    const waiting = accounts({ io: fakeIO({ fetch: s.fetchFn }).io, inCloud: () => false, account: () => undefined, tell: (e) => p.told.push(e), models: { save: () => undefined, remove: () => undefined }, session: { paths: () => p.paths, server: () => "https://example.test", label: () => "x", changed: () => undefined, wait: async () => undefined } });
+    const waiting = accounts({ io: fakeIO({ fetch: s.fetchFn }).io, inCloud: () => false, account: () => undefined, tell: (e) => p.told.push(e), models: { save: () => undefined, remove: () => undefined, entries: () => ({ models: {} }) }, session: { paths: () => p.paths, server: () => "https://example.test", label: () => "x", changed: () => undefined, wait: async () => undefined } });
     waiting.command({ cmd: "account.login" } as never);
     await until(() => p.of("account.login").length === 1);
     waiting.command({ cmd: "account.login.cancel" } as never);

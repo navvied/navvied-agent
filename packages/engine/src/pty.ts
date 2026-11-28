@@ -1,3 +1,4 @@
+import { bunSpawn, type ChildEnv } from "./process-start.ts";
 import { GUARD_STDIO, releaseFds } from "./sandbox/handshake.ts";
 
 /**
@@ -25,13 +26,13 @@ export function answers(output: string, cols = COLS, rows = ROWS): string {
   return found.sort((a, b) => a.at - b.at).map((f) => f.reply).join("");
 }
 
-export function spawnPty(argv: string[], o: { cwd: string; env: NodeJS.ProcessEnv; onData: (text: string) => void; onExit: (code: number | null) => void; /** Confined with a guard that waits to be released (`Launch.guarded`). */ guarded?: boolean }): Pty | undefined {
+export function spawnPty(argv: string[], o: { cwd: string; env: ChildEnv; onData: (text: string) => void; onExit: (code: number | null) => void; /** Confined with a guard that waits to be released (`Launch.guarded`). */ guarded?: boolean }): Pty | undefined {
   if (process.platform === "win32" || typeof Bun === "undefined") return undefined;
   const decoder = new TextDecoder();
   try {
-    const child = Bun.spawn(argv, {
+    const child = bunSpawn(argv, {
       cwd: o.cwd,
-      env: o.env as Record<string, string>,
+      env: o.env,
       // The terminal is the command's standard input and output; the two descriptors after them are the guard's.
       ...(o.guarded ? { stdio: [undefined, undefined, undefined, ...GUARD_STDIO] as never } : {}),
       terminal: {

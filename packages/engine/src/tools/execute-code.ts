@@ -2,7 +2,8 @@ import { untrusted } from "./untrusted.ts";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isSecretName, redact, secretsNow } from "../redact.ts";
+import { isSecretName, redact } from "../redact.ts";
+import { ChildEnv } from "../process-start.ts";
 import type { Tool } from "../types.ts";
 import { serveCalls } from "./code-rpc.ts";
 import { CodeSession } from "./code-session.ts";
@@ -18,11 +19,7 @@ export const CODE_LIMITS: CodeLimits = { seconds: 300, calls: 50, stdout: 20_000
 const MOST_HELD = 5_000_000;
 const FENCE = /^\s*```(?:python3?|py)?[^\S\n]*\n([\s\S]*?)\n?```\s*$/;
 
-/** The variables a script is given: the program's own, without any whose name or value is a secret. */
-function scrubbed(env: NodeJS.ProcessEnv): Record<string, string> {
-  const known = new Set(secretsNow(env));
-  return Object.fromEntries(Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined && !isSecretName(e[0]) && !known.has(e[1])));
-}
+const scriptVariables = (): ChildEnv => ChildEnv.scrubbed(process.env, { drop: Object.keys(process.env).filter(isSecretName) });
 
 export function executeCodeTool(limits: CodeLimits = CODE_LIMITS): Tool {
   return {
@@ -45,7 +42,7 @@ export function executeCodeTool(limits: CodeLimits = CODE_LIMITS): Tool {
       const make = (): CodeSession => {
         const dir = mkdtempSync(join(tmpdir(), "navvied-code-"));
         writeFileSync(join(dir, "navvied_tools.py"), STUBS);
-        return new CodeSession({ python, dir, cwd: ctx.cwd, env: { ...scrubbed(process.env), ...QUIET_ENV, PYTHONUNBUFFERED: "1", PYTHONDONTWRITEBYTECODE: "1" } });
+        return new CodeSession({ python, dir, cwd: ctx.cwd, env: scriptVariables().with({ ...QUIET_ENV, PYTHONUNBUFFERED: "1", PYTHONDONTWRITEBYTECODE: "1" }) });
       };
       const session = ctx.keep ? ctx.keep(EXECUTE_CODE_TOOL, make) : make();
       const calls = await serveCalls(ctx.call, limits.calls);

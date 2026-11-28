@@ -23,3 +23,4 @@ packages/stream-engine/src/codex-translate.ts
 packages/stream-engine/src/index.ts
 packages/stream-engine/test/codex-engine.test.ts
 packages/stream-engine/test/codex-translate.test.ts
+packages/stream-engine/test/program-env.test.ts

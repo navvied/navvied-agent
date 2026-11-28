@@ -5,42 +5,32 @@ import type { Account } from "./account.ts";
 import type { IO } from "./io.ts";
 import type { ModelEntry } from "./config.ts";
 import { ACCOUNT_PROGRAMS, programEntry } from "./presets.ts";
-import { ProgramSignIn, installPlan, programLoginReadable, programStatus, programVersion } from "./programs.ts";
+import { ProgramSignIn, entryEnvOf, type ProgramEntries, installPlan, programLoginReadable, programStatus, programVersion } from "./programs.ts";
 
 export interface AccountsDeps {
   io: IO;
-  /** Whether this session is Navvied Cloud: nothing here is done there. */
   inCloud(): boolean;
-  /** The navvied account this computer is signed in to, if any. */
   account(): Account | undefined;
-  /** Tells every window. */
   tell(e: EngineEvent): void;
-  /** The models of the configuration file: what a sign-in writes, and what signing out takes away. */
-  models: { save(name: string, entry: ModelEntry): void; remove(name: string): void };
-  /** Where the account is kept, which server it is on, what this computer is called there, and what changed for the models once it is signed in or out. */
-  session: { paths(): AccountPaths; server(): string; label(): string; changed(): void; /** How long to wait between two asks (a test makes it short). */ wait?: (ms: number, signal: AbortSignal) => Promise<void> };
+  models: { save(name: string, entry: ModelEntry): void; remove(name: string): void; entries(): ProgramEntries };
+  session: { paths(): AccountPaths; server(): string; label(): string; changed(): void; wait?: (ms: number, signal: AbortSignal) => Promise<void> };
 }
 
 const REFUSED = "The programs of this computer are used only on a computer, never in Navvied Cloud.";
 
-/**
- * The accounts a person has, as the screens show them: the navvied account, and the programs they sign in to with a plan (the list in presets). A program is asked
- * its own version and its own sign-in status; nothing is signed in, nothing is opened, and no saved login is read.
- */
-export async function readAccounts(io: IO, account: Account | undefined): Promise<AccountInfo[]> {
+export async function readAccounts(io: IO, account: Account | undefined, entries: ProgramEntries): Promise<AccountInfo[]> {
   const program = async ({ id, command }: { id: string; command: string }): Promise<AccountInfo> => {
     const path = io.system.which(command);
     if (!path) return { id, installed: false };
-    const [version, status] = await Promise.all([programVersion(io.system, path), programStatus(id, io.system, path)]);
+    const [version, status] = await Promise.all([programVersion(io.system, path), programStatus(id, io.system, path, entryEnvOf(entries, id))]);
     return { id, installed: true, ...(version ? { version } : {}), signedIn: status.loggedIn, ...(status.loggedIn && status.account ? { email: status.account } : {}), ...(status.loggedIn && status.plan ? { plan: status.plan } : {}) };
   };
   return [{ id: "navvied", signedIn: !!account, ...(account ? { email: account.email } : {}) }, ...(await Promise.all(ACCOUNT_PROGRAMS.map(program)))];
 }
 
-/** What the commands of the accounts page do. */
 export function accounts(d: AccountsDeps): { command(cmd: Command): boolean } {
   const installing = new Set<string>();
-  const tellAll = async (): Promise<void> => { d.tell({ ev: "accounts", items: await readAccounts(d.io, d.account()) }); };
+  const tellAll = async (): Promise<void> => { d.tell({ ev: "accounts", items: await readAccounts(d.io, d.account(), d.models.entries()) }); };
 
   const install = async (id: string): Promise<void> => {
     if (installing.has(id)) return;
@@ -62,14 +52,13 @@ export function accounts(d: AccountsDeps): { command(cmd: Command): boolean } {
   const SIGNIN_MS = 10 * 60_000;
   const failed = (id: string, error: string): void => { d.tell({ ev: "account.signin", id, state: "failed", error }); };
 
-  /** The program's own browser sign-in, as the setup runs it: its address (and code) are said, then the program is asked until it reports a login, which is kept as the setup keeps it. */
   const signin = async (id: string, device: boolean): Promise<void> => {
     const program = ACCOUNT_PROGRAMS.find((p) => p.id === id);
     if (!program) { failed(id, "That program is not known."); return; }
     const path = d.io.system.which(program.command);
     if (!path) { failed(id, "That program is not installed on this computer."); return; }
     signins.get(id)?.stop();
-    const run = new ProgramSignIn(id, d.io.system, path, { device });
+    const run = new ProgramSignIn(id, d.io.system, path, { device }, entryEnvOf(d.models.entries(), id));
     signins.set(id, run);
     const mine = (): boolean => signins.get(id) === run;
     const never = new AbortController();

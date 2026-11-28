@@ -156,7 +156,7 @@ if (import.meta.main) {
   const solution = solver(task);
   if (!solution) { console.error(`unknown task ${task}`); process.exit(2); }
   const depth = task.startsWith("mcp-");
-  const client = await McpClient.start(depth ? "ops" : "records", { command: process.execPath, args: [join(dirname(import.meta.path), depth ? (task === "mcp-deferred-archive" ? "mcp-depth-many.ts" : "mcp-depth.ts") : "mcp-records.ts")] });
+  const client = await McpClient.start(depth ? "ops" : "records", { command: process.execPath, env: { BENCH_SECRET: process.env.BENCH_SECRET ?? "" }, args: [join(dirname(import.meta.path), depth ? (task === "mcp-deferred-archive" ? "mcp-depth-many.ts" : "mcp-depth.ts") : "mcp-records.ts")] });
   const none = new AbortController().signal;
   try {
     await drive(solution, async (step) => {

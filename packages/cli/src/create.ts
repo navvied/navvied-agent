@@ -18,7 +18,7 @@ import type { IO } from "./io.ts";
 import { memoryPathsFor } from "./memory-ui.ts";
 import { meaningFor, notesByMeaning, vectorsFor } from "./meaning.ts";
 import { DEFAULT_SERVER, catalogOf, readAccount } from "./account.ts";
-import { INSTRUCTION_FILE_NAMES, PROVIDERS, knownEffort } from "./presets.ts";
+import { INSTRUCTION_FILE_NAMES, PROVIDERS, knownEffort, signInVariables } from "./presets.ts";
 import { adcCredentials } from "./adc.ts";
 import { LiveProvider } from "./live-provider.ts";
 import { savedSecrets } from "./providers.ts";
@@ -209,7 +209,7 @@ export function createEngine(options: Options, io: IO, say: (e: EngineEvent) => 
   const { cli, provider } = model.value;
   const shown = file.value?.models[model.value.name]?.display?.name;
   const brain: Brain = { label: cli ? (cli.adapter === "codex" ? "the model of the user's ChatGPT plan" : "the model of the program the user is signed in to") : `"${shown ?? provider?.model ?? model.value.name}"`, ...(cli ? { program: true, ownTools: TOOL_NAMES() } : { tools: TOOL_NAMES(), small: model.value.small }), ...(kind === "chat" ? { chat: true } : {}) };
-  const program = cli && { ...common, ...(rulesFor(file.value?.permissions, cwd, io.env) ? { rules: rulesFor(file.value?.permissions, cwd, io.env)! } : {}), entry: { id: model.value.name, name: shown ?? model.value.name }, persona: `${soulFor(brain, loadInstructions(cwd, dirname(path), memoryText(memory), INSTRUCTION_FILE_NAMES))}${extras.earlier ? `\n\n${extras.earlier}` : ""}`, ...(options.session ? { sessionId: options.session } : {}), guard: guardCommandFor(path, cwd), command: cli.command, args: cli.args, env: cli.env, ...(cli.model ? { model: cli.model } : {}), ...(cli.models?.length ? { models: cli.models.map((m) => ({ id: m.id, name: m.name, ...(m.badge ? { badge: m.badge } : {}), ...(m.blurb ? { blurb: m.blurb } : {}) })) } : {}), ...(model.value.efforts ? { efforts: model.value.efforts } : {}) };
+  const program = cli && { ...common, ...(rulesFor(file.value?.permissions, cwd, io.env) ? { rules: rulesFor(file.value?.permissions, cwd, io.env)! } : {}), entry: { id: model.value.name, name: shown ?? model.value.name }, persona: `${soulFor(brain, loadInstructions(cwd, dirname(path), memoryText(memory), INSTRUCTION_FILE_NAMES))}${extras.earlier ? `\n\n${extras.earlier}` : ""}`, ...(options.session ? { sessionId: options.session } : {}), guard: guardCommandFor(path, cwd), command: cli.command, args: cli.args, env: cli.env, signIn: signInVariables(cli.command), ...(cli.model ? { model: cli.model } : {}), ...(cli.models?.length ? { models: cli.models.map((m) => ({ id: m.id, name: m.name, ...(m.badge ? { badge: m.badge } : {}), ...(m.blurb ? { blurb: m.blurb } : {}) })) } : {}), ...(model.value.efforts ? { efforts: model.value.efforts } : {}) };
   // What a command the model runs and a hook may inherit: the same, less every secret.
   const scrub = { drop: secretNames(io.env), keep: [...(file.value?.terminal?.env ?? []), ...(io.env.NAVVIED_TERMINAL_ENV?.split(",").map((n) => n.trim()).filter(Boolean) ?? [])] };
   const pluginState = new PluginState(pluginStatePath(io.env));

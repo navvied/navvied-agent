@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { ChildEnv, spawn } from "@navvied/engine";
 import { saidOf, scanPrompt } from "@navvied/engine";
 import { selfArgv } from "./create.ts";
 import { UNATTENDED, dueAt, type Job, type ScheduleStore } from "./schedules.ts";
@@ -24,7 +24,7 @@ export function runJob(job: Job, env: Record<string, string | undefined>, where:
     };
     const found = scanPrompt(job.prompt);
     if (found.length) { text = `Not started: the prompt has ${found.join(" and ")}.`; finish(null); return; }
-    const child = spawn(cmd!, args, { cwd: job.cwd, env: { ...process.env, ...env, [UNATTENDED]: "1" } as Record<string, string>, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const child = spawn(cmd!, args, { cwd: job.cwd, env: ChildEnv.forNavvied().with({ ...env, [UNATTENDED]: "1" }), stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     const timer = setTimeout(() => { text += "\n[stopped: it took longer than 30 minutes]"; child.kill(); }, LONGEST_MS);
     const stop = (): void => { cancelled = true; text += "\n[stopped: it was cancelled]"; child.kill(); };
     if (signal?.aborted) stop(); else signal?.addEventListener("abort", stop, { once: true });

@@ -1,3 +1,4 @@
+import { bunSpawnSync } from "@navvied/engine";
 import { mkdirSync } from "node:fs";
 import type { Options } from "../args.ts";
 import { configPath, loadConfig, resolveModel, sessionsDir } from "../config.ts";
@@ -30,7 +31,7 @@ export async function doctorCommand(options: Options, io: IO): Promise<number> {
     if (model.value.api !== "ollama" && /:11434(\/|$)/.test(p.baseUrl)) line(false, "memory", "Ollama keeps only 4096 tokens of a conversation through this address, and drops the rest without saying so. Open navvied, type /model, and choose the model again.");
   }
 
-  const git = Bun.spawnSync(["git", "--version"], { stdout: "pipe", stderr: "pipe" });
+  const git = bunSpawnSync(["git", "--version"], { stdout: "pipe", stderr: "pipe" });
   line(git.exitCode === 0 ? true : "note", "git", git.exitCode === 0 ? git.stdout.toString().trim() : "not found: checkpoints need git");
 
   try { mkdirSync(sessionsDir(io.env), { recursive: true }); line(true, "storage", sessionsDir(io.env)); }
